@@ -1,8 +1,11 @@
 import AppKit
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// `--render-previews <dir> [--sprite <sheet.png>]`: renders the main UI with made-up sample data to PNGs, for checking
-/// the design without clicking through it and for the README screenshots (`scripts/screenshots.sh`).
+/// `--render-previews <dir> [--sprite <sheet.png>]`: renders the main UI with made-up sample data to PNGs, plus an
+/// animated `pet.gif` of Ghost reacting to an agent, for checking the design without clicking through it and for the
+/// README (`scripts/screenshots.sh`).
 /// Nothing here reads your sessions, alerts or chats.
 @MainActor
 enum PreviewRenderer {
@@ -41,16 +44,41 @@ enum PreviewRenderer {
                               body: "npm test -- login --runInBand",
                               actions: [.init(title: "Allow", style: .primary) {}, .init(title: "Deny", style: .destructive) {},
                                         .init(title: "Open chat") {}])
-        render(PetScene(atlas: atlas, row: .waiting, frame: 2, bubbles: [done, approval]), to: dir, "pet")
-
         let water = ReminderScheduler.Kind.water
         let reminder = Bubble(id: "reminder", symbol: water.symbol, tint: .cyan, title: water.title,
                               subtitle: "Your agent is still working, good moment for it.", body: water.body,
                               actions: [.init(title: "Done", style: .primary) {}, .init(title: "Snooze 10 min") {}])
         render(PetScene(atlas: atlas, row: .drinking, frame: 3, bubbles: [reminder]), to: dir, "reminder")
+
+        // Ghost works, finishes, asks before running a command, then takes a water break; then it loops.
+        var shots: [(row: AtlasRow, frame: Int, bubbles: [Bubble], delay: Double)] = []
+        func play(_ row: AtlasRow, loops: Int = 1, _ bubbles: [Bubble], holdLast: Double = 0) {
+            for _ in 0..<loops {
+                for (i, d) in row.durations.enumerated() { shots.append((row, i, bubbles, d)) }
+            }
+            if holdLast > 0, let last = shots.indices.last { shots[last].delay += holdLast }
+        }
+        play(.running, loops: 2, [])
+        play(.jumping, [done])
+        play(.review, loops: 2, [done])
+        play(.waiting, loops: 4, [done, approval])
+        play(.drinking, [reminder], holdLast: 1.2)
+        let canvas = PetScene(atlas: atlas, row: .waiting, frame: 0, bubbles: [done, approval]).fittingSize
+        let frames = shots.compactMap { shot in
+            snapshot(PetScene(atlas: atlas, row: shot.row, frame: shot.frame, bubbles: shot.bubbles, canvas: canvas, solid: true),
+                     wait: 0.02).flatMap { downscale($0, width: 640) }.map { ($0, shot.delay) }
+        }
+        writeGIF(frames, to: dir.appendingPathComponent("pet.gif"))
     }
 
     private static func render(_ view: some View, to dir: URL, _ name: String) {
+        guard let rep = snapshot(view) else { return }
+        let file = dir.appendingPathComponent("\(name).png")
+        try? rep.representation(using: .png, properties: [:])?.write(to: file)
+        print("wrote \(file.path)")
+    }
+
+    private static func snapshot(_ view: some View, wait: TimeInterval = 0.5) -> NSBitmapImageRep? {
         let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
         let window = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: .darkAqua)
@@ -59,12 +87,34 @@ enum PreviewRenderer {
         window.setContentSize(size)
         host.frame = CGRect(origin: .zero, size: size)
         host.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+        RunLoop.main.run(until: Date().addingTimeInterval(wait))
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
         host.cacheDisplay(in: host.bounds, to: rep)
-        let file = dir.appendingPathComponent("\(name).png")
-        try? rep.representation(using: .png, properties: [:])?.write(to: file)
-        print("wrote \(file.path)")
+        return rep
+    }
+
+    /// Retina snapshots make a GIF several times larger than it needs to be.
+    private static func downscale(_ rep: NSBitmapImageRep, width: Int) -> CGImage? {
+        guard let image = rep.cgImage else { return nil }
+        let height = Int((Double(image.height) * Double(width) / Double(image.width)).rounded())
+        guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return ctx.makeImage()
+    }
+
+    private static func writeGIF(_ frames: [(CGImage, Double)], to file: URL) {
+        guard let dest = CGImageDestinationCreateWithURL(file as CFURL, UTType.gif.identifier as CFString, frames.count, nil)
+        else { return }
+        CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+        for (image, delay) in frames {
+            CGImageDestinationAddImage(dest, image, [kCGImagePropertyGIFDictionary: [
+                kCGImagePropertyGIFDelayTime: delay, kCGImagePropertyGIFUnclampedDelayTime: delay,
+            ]] as CFDictionary)
+        }
+        if CGImageDestinationFinalize(dest) { print("wrote \(file.path) (\(frames.count) frames)") }
     }
 
     private static var sampleSessions: [AgentSession] {
@@ -120,14 +170,22 @@ private struct PetScene: View {
     let atlas: Atlas?
     let row: AtlasRow
     let frame: Int
+    /// A fixed size keeps the pet in place while bubbles come and go (GIF frames).
+    var canvas: CGSize?
+    /// A flat backdrop; gradients band badly in a GIF's 256 colours.
+    var solid = false
     private let store = BubbleStore()
 
-    init(atlas: Atlas?, row: AtlasRow, frame: Int, bubbles: [Bubble]) {
+    init(atlas: Atlas?, row: AtlasRow, frame: Int, bubbles: [Bubble], canvas: CGSize? = nil, solid: Bool = false) {
         self.atlas = atlas
         self.row = row
         self.frame = frame
+        self.canvas = canvas
+        self.solid = solid
         bubbles.forEach(store.show)
     }
+
+    @MainActor var fittingSize: CGSize { NSHostingView(rootView: self.environment(\.colorScheme, .dark)).fittingSize }
 
     var body: some View {
         let size = CGSize(width: Atlas.cell.width * 0.9, height: Atlas.cell.height * 0.9)
@@ -144,7 +202,14 @@ private struct PetScene: View {
             .frame(width: size.width, height: size.height)
         }
         .padding(28)
-        .background(LinearGradient(colors: [Color(red: 0.16, green: 0.2, blue: 0.3), Color(red: 0.09, green: 0.1, blue: 0.16)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing))
+        .frame(width: canvas?.width, height: canvas?.height, alignment: .bottomTrailing)
+        .background {
+            if solid {
+                Color(red: 0.12, green: 0.14, blue: 0.21)
+            } else {
+                LinearGradient(colors: [Color(red: 0.16, green: 0.2, blue: 0.3), Color(red: 0.09, green: 0.1, blue: 0.16)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+        }
     }
 }

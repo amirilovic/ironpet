@@ -4,7 +4,7 @@
 
 A desktop pet for macOS that keeps an eye on your coding agents and does small tasks for you. Ghost, a chibi direwolf in a Night's Watch cloak, floats above your windows, reacts to what Cursor and Claude Code are doing, and opens a chat where you can type, dictate or show him your screen.
 
-<p align="center"><img src="docs/screenshots/pet.png" width="560" alt="Ghost next to two speech bubbles: a Claude Code session that finished, and a command waiting for Allow or Deny"></p>
+<p align="center"><img src="docs/screenshots/pet.gif" width="560" alt="Ghost works while an agent runs, cheers when it finishes, asks before running a command, then drinks water with a break reminder"></p>
 
 ## What it does
 
