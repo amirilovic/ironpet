@@ -1,0 +1,565 @@
+#!/usr/bin/env python3
+"""End-to-end checks for ironpet against real agent runs.
+
+Relaunches /Applications/IronPet.app with --test-mode, drives it through its /test/* endpoints (the same
+code paths as clicking in the UI), checks results on disk and in iTerm, then relaunches it normally.
+Usage: python3 scripts/e2e.py [scenario ...]
+With no arguments, runs every scenario except those in OPT_IN, which need extra setup (see below).
+"""
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+
+HOME = os.path.expanduser("~")
+APP = "/Applications/IronPet.app"
+WS = "/tmp/ironpet-e2e-ws"
+results = []
+
+
+def token():
+    return open(f"{HOME}/.ironpet/token").read().strip()
+
+
+def call(method, path, body=None, timeout=10):
+    port = open(f"{HOME}/.ironpet/port").read().strip()
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data, method=method,
+                                 headers={"X-Ironpet-Token": token(), "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+        return json.loads(raw) if raw else {}
+
+
+def osa(script):
+    return subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=30).stdout.strip()
+
+
+def wait_for(predicate, timeout, interval=0.5):
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = predicate()
+        if last:
+            return last
+        time.sleep(interval)
+    return last
+
+
+def chat():
+    return call("GET", "/test/chat")
+
+
+def record(name, ok, detail=""):
+    results.append((name, ok, detail))
+    print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
+
+
+def relaunch(test_mode):
+    subprocess.run(["pkill", "-f", "IronPet.app/Contents/MacOS/IronPet"])
+    time.sleep(1.5)
+    port_file = f"{HOME}/.ironpet/port"
+    if os.path.exists(port_file):
+        os.remove(port_file)
+    args = ["open", "-n", APP] + (["--args", "--test-mode"] if test_mode else [])
+    subprocess.run(args, check=True)
+    wait_for(lambda: os.path.exists(port_file), 15)
+    time.sleep(1.5)
+
+
+def run_chat(prompt, backend="cursor", auto=False, workspace=WS):
+    call("POST", "/test/chat", {"newChat": True, "backend": backend, "workspace": workspace, "auto": auto, "prompt": prompt})
+
+
+def wait_approval_or_end(timeout=180):
+    return wait_for(lambda: (lambda c: c if c["approvals"] or c["state"] in ("done", "failed") else None)(chat()), timeout)
+
+
+def wait_end(timeout=180):
+    return wait_for(lambda: (lambda c: c if c["state"] in ("done", "failed") and not c["approvals"] else None)(chat()), timeout)
+
+
+def fresh_workspace():
+    shutil.rmtree(WS, ignore_errors=True)
+    os.makedirs(WS)
+
+
+# Scenarios -------------------------------------------------------------------------------------
+
+def approval_flow(name, backend, prompt, allow, expect_title, check_file, should_exist):
+    fresh_workspace()
+    run_chat(prompt, backend=backend)
+    c = wait_approval_or_end()
+    if not c or not c["approvals"]:
+        return record(name, False, f"no approval card appeared (state={c and c['state']}, items={c and c['items'][-3:]})")
+    title = c["approvals"][0]["title"]
+    call("POST", "/test/approve", {"allow": allow})
+    # Further approvals may follow (e.g. a retry); deny anything after the one under test.
+    end = wait_for(lambda: (lambda c: c if (c["state"] in ("done", "failed") and not c["approvals"]) or c["approvals"] else None)(chat()), 180)
+    while end and end["approvals"]:
+        call("POST", "/test/approve", {"allow": False})
+        end = wait_end()
+    exists = os.path.exists(os.path.join(WS, check_file))
+    ok = expect_title.lower() in title.lower() and exists == should_exist and end and end["state"] == "done"
+    record(name, ok, f"card='{title}' decision={'allow' if allow else 'deny'} file_exists={exists} state={end and end['state']}")
+
+
+def scenario_cursor():
+    approval_flow("Cursor: edit card, Allow reaches agent", "cursor",
+                  "Create a file named allow.txt in the current folder containing the word hi. Use your file editing tool, not the shell.",
+                  True, "allow.txt", "allow.txt", True)
+    approval_flow("Cursor: shell card, Deny reaches agent", "cursor",
+                  "Run exactly this shell command: touch denied.txt . If it is denied, do not retry or use any other tool; just say it was denied.",
+                  False, "command", "denied.txt", False)
+
+
+def scenario_claude():
+    approval_flow("Claude Code backend: shell card, Allow reaches agent", "claude",
+                  "Run the shell command: touch claude-allowed.txt . Then reply OK.",
+                  True, "command", "claude-allowed.txt", True)
+    approval_flow("Claude Code backend: edit card, Deny reaches agent", "claude",
+                  "Use your Write tool to create claude-denied.txt containing hi. If it is denied, do not retry; just say so.",
+                  False, "claude-denied.txt", "claude-denied.txt", False)
+
+
+def scenario_auto():
+    fresh_workspace()
+    os.makedirs(os.path.join(WS, "junk"))
+    run_chat("Run these two shell commands one at a time: first `touch auto-ok.txt`, then `rm -rf ./junk`. "
+             "If a command is denied, do not retry; just say so.", auto=True)
+    c = wait_approval_or_end()
+    title = c["approvals"][0]["title"] if c and c["approvals"] else ""
+    if title:
+        call("POST", "/test/approve", {"allow": False})
+    end = wait_end()
+    ok = ("destructive" in title.lower() and os.path.exists(os.path.join(WS, "auto-ok.txt"))
+          and os.path.isdir(os.path.join(WS, "junk")))
+    record("Auto mode: safe command runs, destructive one still asks", ok,
+           f"card='{title}' auto-ok.txt={os.path.exists(os.path.join(WS, 'auto-ok.txt'))} junk_kept={os.path.isdir(os.path.join(WS, 'junk'))} state={end and end['state']}")
+
+
+def scenario_picker():
+    osa('tell application "Finder" to activate')
+    time.sleep(1)
+    c = call("POST", "/test/show-chat", {"newChat": True})
+    shown = c["needsWorkspace"]
+    call("POST", "/test/chat", {"prompt": "Reply with the single word OK."})
+    blocked = chat()
+    blocked_ok = blocked["needsWorkspace"] and not blocked["items"] and blocked["state"] == "idle"
+    call("POST", "/test/chat", {"noProject": True, "prompt": "Reply with the single word OK. Do not use any tools."})
+    end = wait_end(120)
+    general_ok = end and end["state"] == "done" and end["workspace"].endswith("/.ironpet/scratch")
+    record("Folder picker outside a coding app", shown and blocked_ok and general_ok,
+           f"picker_shown={shown} send_blocked={blocked_ok} no_project_run={end and end['state']}")
+
+
+def scenario_iterm_claude():
+    fresh_workspace()
+    session_id = osa(f'''
+        tell application "iTerm2"
+          set w to (create window with default profile)
+          tell current session of w
+            write text "cd {WS} && claude --permission-mode default 'Run the shell command: touch iterm-claude.txt'"
+            return id
+          end tell
+        end tell''')
+    if not session_id:
+        return record("Claude Code in iTerm: needs input", False, "could not open iTerm window (Automation permission?)")
+    # Default permission mode: the user's auto mode would approve `touch` without asking.
+    found = None
+    deadline = time.time() + 90
+    while time.time() < deadline and not found:
+        events = call("GET", "/test/attention")["events"]
+        found = next((e for e in events if e["status"] == "Needs input" and session_id in e["iterm"]), None)
+        time.sleep(1)
+    record("Claude Code in iTerm: pet sees 'needs input'", bool(found),
+           f"session={found and found['session']}" if found else "no Needs input event within 90s")
+    if found:
+        osa('tell application "Finder" to activate')
+        time.sleep(1)
+        call("POST", "/test/open-session", {"session": found["session"]})
+        front = wait_for(lambda: (lambda f: f if "iTerm" in f else None)(
+            osa('tell application "System Events" to get name of first process whose frontmost is true')), 4) \
+            or osa('tell application "System Events" to get name of first process whose frontmost is true')
+        current = osa('tell application "iTerm2" to tell current session of current window to return id')
+        record("Jump from notification/session to the exact iTerm tab", current == session_id and "iTerm" in front,
+               f"frontmost={front} current_session_matches={current == session_id}")
+    tty = osa(f'''tell application "iTerm2"
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                if id of s is "{session_id}" then return tty of s
+              end repeat
+            end repeat
+          end repeat
+        end tell''')
+    if tty:
+        subprocess.run(["pkill", "-t", tty.replace("/dev/", "")])
+        time.sleep(1)
+    osa(f'''tell application "iTerm2"
+          repeat with w in windows
+            if id of current session of w is "{session_id}" then close w
+          end repeat
+        end tell''')
+
+
+def scenario_capture():
+    osa('tell application "Finder" to activate')
+    time.sleep(1)
+    before = len(chat()["attachments"])
+    r = call("POST", "/test/capture", {"region": False})
+    if not r.get("permission"):
+        return record("Screen capture of the front window", False, "SKIPPED: ironpet has no Screen Recording permission yet")
+    c = wait_for(lambda: (lambda c: c if len(c["attachments"]) > before else None)(chat()), 15)
+    path = c["attachments"][-1] if c else ""
+    size = os.path.getsize(path) if path and os.path.exists(path) else 0
+    record("Screen capture of the front window", size > 10_000, f"file={path} bytes={size}")
+
+
+def status_sessions():
+    return call("GET", "/status").get("sessions", [])
+
+
+def scenario_summaries():
+    fresh_workspace()
+    name = os.path.basename(WS)
+    env = {k: v for k, v in os.environ.items() if k != "IRONPET_RUN_ID"}
+    subprocess.run(["cursor-agent", "-p", "--trust", "--force", "--output-format", "text",
+                    "Create a file notes.md containing the word hi using your file editing tool. Then reply exactly: Created the notes file."],
+                   cwd=WS, env=env, capture_output=True, timeout=180)
+    s = wait_for(lambda: next((s for s in status_sessions()
+                               if s["source"] == "cursor" and s["workspace"] == name and s["status"] == "Done" and s["summary"]), None), 20)
+    record("Summary for a watched Cursor run", bool(s and "notes.md" in s["summary"]), f"summary='{s and s['summary']}'")
+
+    subprocess.run(["claude", "-p", "--permission-mode", "acceptEdits",
+                    "Create a file notes2.md containing the word hi. Then reply exactly: Wrote the second notes file."],
+                   cwd=WS, env=env, capture_output=True, timeout=180)
+    s = wait_for(lambda: next((s for s in status_sessions()
+                               if s["source"] == "claude" and s["workspace"] == name and s["status"] == "Done" and s["summary"]), None), 20)
+    ok = bool(s and "notes2.md" in s["summary"] and "second notes file" in s["summary"].lower())
+    record("Summary for a watched Claude Code run", ok, f"summary='{s and s['summary']}'")
+
+
+def scenario_notification_approval():
+    fresh_workspace()
+    run_chat("Run exactly this shell command: touch from-notification.txt . Then reply OK.")
+    c = wait_approval_or_end()
+    if not c or not c["approvals"]:
+        return record("Allow from the notification button", False, "no approval appeared")
+    r = call("POST", "/test/notification-action", {"allow": True})
+    end = wait_end()
+    exists = os.path.exists(os.path.join(WS, "from-notification.txt"))
+    record("Allow from the notification button", r.get("ok") and exists and end["state"] == "done",
+           f"card='{r.get('title')}' file_exists={exists} state={end and end['state']}")
+
+
+def pr(number, ci, review=None):
+    return {"number": number, "title": f"PR {number}", "url": f"https://test.example/o/r/pull/{number}", "isDraft": False,
+            "repository": {"nameWithOwner": "o/r"}, "reviewDecision": review,
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": ci}}}]}}
+
+
+def requested(number):
+    return {"number": number, "title": f"Review {number}", "url": f"https://test.example/o/r/pull/{number}",
+            "repository": {"nameWithOwner": "o/r"}, "author": {"login": "someone"}}
+
+
+def scenario_github():
+    host = f"test-{int(time.time())}.example"
+    def data(prs, reqs):
+        return {"viewer": {"pullRequests": {"nodes": prs}}, "search": {"nodes": reqs}}
+    before = len(call("GET", "/test/signals")["notified"])
+    seeded = call("POST", "/test/github-apply", {"host": host, "data": data([pr(1, "PENDING"), pr(2, "FAILURE")], [requested(10)])})
+    ids = {s["id"] for s in seeded["signals"]}
+    seed_ok = f"gh:{host}|o/r#2:ciFailed" in ids and len(seeded["notified"]) == before
+    after = call("POST", "/test/github-apply", {"host": host, "data": data(
+        [pr(1, "FAILURE", "APPROVED"), pr(2, "SUCCESS")], [requested(10), requested(11)])})
+    new = set(after["notified"][before:])
+    expected = {f"gh:{host}|o/r#1:ciFailed", f"gh:{host}|o/r#1:approved", f"gh:{host}|o/r#2:ciPassed", f"gh:{host}|o/r#11:reviewRequested"}
+    ids = {s["id"] for s in after["signals"]}
+    ok = seed_ok and new == expected and f"gh:{host}|o/r#2:ciFailed" not in ids
+    record("GitHub: first poll silent, then CI/review changes alert", ok,
+           f"seed_silent={seed_ok} notified={sorted(n.split(':')[-1] for n in new)}")
+
+    real_before = len(call("GET", "/test/signals")["notified"])
+    call("POST", "/test/github-poll")
+    time.sleep(12)
+    real_after = call("GET", "/test/signals")
+    record("GitHub: real poll of your accounts runs without a notification flood",
+           len(real_after["notified"]) - real_before <= 3,
+           f"new_notifications={len(real_after['notified']) - real_before} open_alerts={len(real_after['signals'])}")
+
+
+def scenario_mcp():
+    """Uses the Langfuse MCP (signed in); the write is denied, so nothing is created."""
+    fresh_workspace()
+    run_chat("Use the langfuse MCP tool getHealth and report its status in one sentence. Do not use any other tools.")
+    c = wait_approval_or_end(180)
+    asked = [a["title"] for a in c["approvals"]]
+    for _ in asked:
+        call("POST", "/test/approve", {"allow": False})
+    c = wait_end(120)
+    reply = " ".join(i["text"] for i in c["items"] if i["kind"] == "assistant").lower()
+    record("MCP: read-only tool runs without asking", not asked and "ok" in reply, f"cards={asked} reply='{reply[:80]}'")
+
+    fresh_workspace()
+    run_chat("Use the langfuse MCP tool createScoreConfig to create a score config named ironpet-e2e-test with dataType BOOLEAN. "
+             "If it is denied, do not retry; just say so.")
+    c = wait_approval_or_end(180)
+    title = c["approvals"][0]["title"] if c and c["approvals"] else ""
+    if title:
+        call("POST", "/test/approve", {"allow": False})
+    c = wait_end(120)
+    record("MCP: write tool asks first and Deny blocks it", "createScoreConfig" in title and "langfuse" in title.lower(),
+           f"card='{title}' state={c and c['state']}")
+
+
+def scenario_sentry_mcp():
+    """A chat in a brand-new folder can use the Sentry MCP signed in elsewhere (shared sign-in), read-only, no card."""
+    fresh_workspace()
+    run_chat("Call the Sentry MCP whoami tool and reply with just my Sentry user name or email, "
+             "or NOT AVAILABLE if the tool is missing.")
+    c = wait_approval_or_end(180)
+    cards = [a["title"] for a in c["approvals"]]
+    for _ in cards:
+        call("POST", "/test/approve", {"allow": False})
+    c = wait_end(120)
+    reply = " ".join(i["text"] for i in c["items"] if i["kind"] == "assistant")
+    record("Sentry MCP works in a new folder without asking", not cards and "@" in reply and "NOT AVAILABLE" not in reply,
+           f"cards={cards} reply='{reply[:80]}'")
+
+
+# Native UI (welcome window, Settings) -----------------------------------------------------------
+# Driven through macOS accessibility (System Events), so the terminal needs Accessibility permission.
+# These scenarios edit config.json and the hook files for real; the user's copies are restored afterwards.
+
+CONFIG = f"{HOME}/.ironpet/config.json"
+HOOK_FILES = {"cursor": f"{HOME}/.cursor/hooks.json", "claude": f"{HOME}/.claude/settings.json"}
+DEFAULTS_DOMAIN = "dev.ironpet.app"
+
+
+class PreservedUserState:
+    """Snapshots config.json, both hook files and the setup flag; puts them back on exit."""
+
+    def __enter__(self):
+        self.files = {}
+        for path in [CONFIG, *HOOK_FILES.values()]:
+            self.files[path] = open(path, "rb").read() if os.path.exists(path) else None
+        flag = subprocess.run(["defaults", "read", DEFAULTS_DOMAIN, "setupCompleted"], capture_output=True, text=True)
+        self.setup_completed = flag.stdout.strip() if flag.returncode == 0 else None
+        return self
+
+    def __exit__(self, *exc):
+        subprocess.run(["pkill", "-f", "IronPet.app/Contents/MacOS/IronPet"])
+        time.sleep(1.5)
+        for path, data in self.files.items():
+            if data is None:
+                if os.path.exists(path):
+                    os.remove(path)
+            else:
+                with open(path, "wb") as f:
+                    f.write(data)
+        if self.setup_completed is None:
+            subprocess.run(["defaults", "delete", DEFAULTS_DOMAIN, "setupCompleted"], capture_output=True)
+        else:
+            subprocess.run(["defaults", "write", DEFAULTS_DOMAIN, "setupCompleted", "-bool",
+                            "true" if self.setup_completed == "1" else "false"])
+        relaunch(test_mode=True)
+        return False
+
+
+def ax(window, action, role, name, prefix=False, by_id=False):
+    """Finds the first element in `window` with this AX role and name (name prefix, or accessibility identifier with
+    by_id) and acts on it. action: "click" | "value" | "focus" | "exists". Returns the AppleScript result as text,
+    or "missing". Brings ironpet to the front and retries, since windows behind another app's Space are invisible."""
+    if by_id:
+        match = f'value of attribute "AXIdentifier" of e is "{name}"'
+    else:
+        match = f'name of e starts with "{name}"' if prefix else f'name of e is "{name}"'
+    act = {"click": 'click e\n return "ok"', "value": "return (value of e) as text",
+           "focus": 'set focused of e to true\n return "ok"', "exists": 'return "ok"'}[action]
+    script = f"""
+    tell application "System Events" to tell process "IronPet"
+      if not (exists window "{window}") then return "missing"
+      set allItems to entire contents of window "{window}"
+      repeat with i from 1 to count of allItems
+        set e to item i of allItems
+        try
+          if role of e is "{role}" and {match} then
+            {act}
+          end if
+        end try
+      end repeat
+    end tell
+    return "missing"
+    """
+    result = "missing"
+    for _ in range(3):
+        activate_app()
+        result = osa(script)
+        if result not in ("missing", ""):
+            return result
+        time.sleep(0.5)
+    return result
+
+
+def activate_app():
+    """Windows in another Space (e.g. behind a full-screen app) are invisible to accessibility."""
+    osa('tell application "System Events" to set frontmost of process "IronPet" to true')
+    time.sleep(0.3)
+
+
+def window_open(title):
+    activate_app()
+    return title in osa('tell application "System Events" to tell process "IronPet" to get name of every window')
+
+
+def keystroke(key, *modifiers, to_app=True):
+    """Types into ironpet (brought to the front first), or into whatever is frontmost with to_app=False."""
+    if to_app:
+        activate_app()
+    using = f' using {{{", ".join(m + " down" for m in modifiers)}}}' if modifiers else ""
+    osa(f'tell application "System Events" to keystroke "{key}"{using}')
+
+
+def read_config():
+    return json.load(open(CONFIG)) if os.path.exists(CONFIG) else {}
+
+
+def hooks_installed(agent):
+    path = HOOK_FILES[agent]
+    return os.path.exists(path) and "/.ironpet/bin/ironpet-hook" in open(path).read()
+
+
+def scenario_setup():
+    with PreservedUserState():
+        subprocess.run(["pkill", "-f", "IronPet.app/Contents/MacOS/IronPet"])
+        time.sleep(1.5)
+        os.remove(CONFIG) if os.path.exists(CONFIG) else None
+        subprocess.run(["defaults", "delete", DEFAULTS_DOMAIN, "setupCompleted"], capture_output=True)
+        before = {agent: open(path).read() if os.path.exists(path) else None for agent, path in HOOK_FILES.items()}
+        relaunch(test_mode=True)
+
+        shown = wait_for(lambda: window_open("Welcome to ironpet"), 10)
+        unchanged = all((open(p).read() if os.path.exists(p) else None) == before[a] for a, p in HOOK_FILES.items())
+        record("Setup: welcome window on first launch, nothing written yet", bool(shown) and not os.path.exists(CONFIG) and unchanged,
+               f"window={bool(shown)} config_exists={os.path.exists(CONFIG)} hook_files_unchanged={unchanged}")
+        if not shown:
+            return
+
+        ax("Welcome to ironpet", "focus", "AXTextField", "Name")
+        keystroke("a", "command")
+        keystroke("Testy")
+        if ax("Welcome to ironpet", "value", "AXCheckBox", "Cursor", prefix=True) != "1":
+            ax("Welcome to ironpet", "click", "AXCheckBox", "Cursor", prefix=True)
+        if ax("Welcome to ironpet", "value", "AXCheckBox", "Claude Code", prefix=True) == "1":
+            ax("Welcome to ironpet", "click", "AXCheckBox", "Claude Code", prefix=True)
+        ax("Welcome to ironpet", "click", "AXButton", "setup.start", by_id=True)
+
+        config = wait_for(lambda: read_config() or None, 5) or {}
+        integrations = config.get("integrations", {})
+        ok = (config.get("pet", {}).get("name") == "Testy" and integrations.get("cursorHooks") is True
+              and integrations.get("claudeHooks") is False and hooks_installed("cursor") and not hooks_installed("claude")
+              and not window_open("Welcome to ironpet"))
+        record("Setup: Start applies choices (name, Cursor hooks on, Claude hooks off)", ok,
+               f"name={config.get('pet', {}).get('name')} integrations={integrations} "
+               f"cursor_hooks={hooks_installed('cursor')} claude_hooks={hooks_installed('claude')}")
+
+        # A chat through a backend without hooks must refuse to start rather than run ungated.
+        fresh_workspace()
+        run_chat("Reply with OK.", backend="claude")
+        c = wait_for(lambda: (lambda c: c if c["state"] in ("done", "failed") else None)(chat()), 10) or {}
+        errors = [i["text"] for i in c.get("items", []) if i["kind"] == "error"]
+        record("Setup: chat refuses to run without its backend's hooks",
+               c.get("state") == "failed" and any("Claude Code hooks" in e for e in errors) and not any(i["kind"] == "user" for i in c.get("items", [])),
+               f"state={c.get('state')} errors={errors[-1:]}")
+        call("POST", "/test/chat", {"newChat": True, "backend": "cursor", "prompt": ""})
+
+        relaunch(test_mode=True)
+        record("Setup: not shown again on the next launch", not wait_for(lambda: window_open("Welcome to ironpet"), 4))
+
+
+def open_settings():
+    activate_app()
+    osa('tell application "System Events" to tell process "IronPet" to click menu item "Settings…" of menu 1 of menu bar item 2 of menu bar 1')
+    return wait_for(lambda: window_open("ironpet Settings"), 5)
+
+
+def scenario_settings():
+    with PreservedUserState():
+        if not open_settings():
+            return record("Settings: window opens from the app menu", False)
+        record("Settings: window opens from the app menu", True)
+        win = "ironpet Settings"
+
+        # Agent hooks toggle installs/removes only that agent's hooks.
+        start = hooks_installed("claude")
+        ax(win, "click", "AXCheckBox", "Watch Claude Code")
+        flipped = wait_for(lambda: hooks_installed("claude") != start, 5)
+        record("Settings: Watch Claude Code toggles its hooks and config",
+               bool(flipped) and read_config().get("integrations", {}).get("claudeHooks") == (not start),
+               f"before={start} after={hooks_installed('claude')}")
+        ax(win, "click", "AXCheckBox", "Watch Claude Code")
+        wait_for(lambda: hooks_installed("claude") == start, 5)
+
+        # Record a new chat shortcut, then press it.
+        ax(win, "click", "AXButton", "Open chat")
+        time.sleep(0.5)
+        keystroke("j", "control", "option", "command")
+        saved = wait_for(lambda: read_config().get("hotkeys", {}).get("chat") == "ctrl+opt+cmd+j", 5)
+        record("Settings: recording a shortcut saves it", bool(saved), f"chat={read_config().get('hotkeys', {}).get('chat')}")
+        osa('tell application "System Events" to tell process "IronPet" to click button 1 of window "ironpet Settings"')  # close
+        time.sleep(0.5)
+        osa('tell application "Finder" to activate')
+        time.sleep(0.5)
+        keystroke("j", "control", "option", "command", to_app=False)
+        opened = wait_for(lambda: chat()["visible"], 5)
+        record("Settings: the new shortcut opens the chat", bool(opened))
+
+        # Reminders tab writes to config.json.
+        open_settings()
+        osa(f'tell application "System Events" to tell process "IronPet" to click radio button 2 of tab group 1 of group 1 of window "{win}"')
+        time.sleep(0.5)
+        was = read_config().get("reminders", {}).get("paused", False)
+        ax(win, "click", "AXCheckBox", "Pause all reminders")
+        paused = wait_for(lambda: read_config().get("reminders", {}).get("paused") == (not was), 5)
+        record("Settings: Pause all reminders saves to config.json", bool(paused))
+
+        # Hand edits to config.json show up in the window.
+        cfg = read_config()
+        cfg.setdefault("pet", {})["name"] = "Handy"
+        json.dump(cfg, open(CONFIG, "w"))
+        osa(f'tell application "System Events" to tell process "IronPet" to click radio button 1 of tab group 1 of group 1 of window "{win}"')
+        shown = wait_for(lambda: ax(win, "value", "AXTextField", "Name") == "Handy", 6)
+        record("Settings: hand edits to config.json appear in the window", bool(shown))
+
+
+SCENARIOS = {"cursor": scenario_cursor, "claude": scenario_claude, "auto": scenario_auto, "picker": scenario_picker,
+             "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
+             "notification": scenario_notification_approval, "github": scenario_github, "mcp": scenario_mcp,
+             "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings}
+
+# Need MCP servers signed in with cursor-agent: "mcp" a Langfuse MCP (its write is denied, so nothing is created),
+# "sentry" a Sentry MCP. Run them by name, e.g. `python3 scripts/e2e.py mcp sentry`.
+OPT_IN = {"mcp", "sentry"}
+
+if __name__ == "__main__":
+    unknown = [name for name in sys.argv[1:] if name not in SCENARIOS]
+    if unknown:
+        sys.exit(f"Unknown scenario(s): {', '.join(unknown)}. Choose from: {', '.join(SCENARIOS)}")
+    chosen = sys.argv[1:] or [name for name in SCENARIOS if name not in OPT_IN]
+    relaunch(test_mode=True)
+    try:
+        for name in chosen:
+            try:
+                SCENARIOS[name]()
+            except Exception as error:  # keep going so one broken scenario doesn't hide the rest
+                record(name, False, f"error: {error}")
+    finally:
+        relaunch(test_mode=False)
+    passed = sum(1 for _, ok, _ in results if ok)
+    print(f"\n{passed}/{len(results)} checks passed")
+    sys.exit(0 if passed == len(results) else 1)

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+
+      - name: Build
+        run: swift build
+
+      - name: Unit tests
+        run: swift test
+
+      - name: Bundle the app (ad-hoc signed, includes the generated sprite sheet)
+        run: |
+          ./scripts/bundle.sh
+          test -f build/IronPet.app/Contents/Resources/spritesheet.png
+          codesign --verify --verbose build/IronPet.app
+
+      - name: Check scripts
+        run: |
+          for script in scripts/*.sh; do bash -n "$script"; done
+          python3 -m py_compile scripts/e2e.py
