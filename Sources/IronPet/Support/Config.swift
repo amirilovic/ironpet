@@ -130,6 +130,13 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    /// For `--render-previews`: uses `config` in memory only, never saves it, and stops watching the file.
+    func usePreview(_ config: Config) {
+        timer?.invalidate()
+        self.config = config
+        error = nil
+    }
+
     func update(_ change: (inout Config) -> Void) {
         var next = config
         change(&next)

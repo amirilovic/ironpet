@@ -20,7 +20,7 @@ The [README](README.md) covers features and configuration, [SPEC.md](SPEC.md) th
 swift build               # debug build
 swift test                # unit tests: config parsing, shortcuts, hook install/uninstall
 ./scripts/install.sh      # release build, install, restart
-.build/debug/IronPet --render-chat-preview build/chat.png   # render the chat UI to PNGs
+./scripts/screenshots.sh  # render the README screenshots from sample data
 ```
 
 Check your change in the installed app, not just with `swift build`. Things like global hotkeys, Screen Recording and notifications only behave properly from `/Applications/IronPet.app`, signed with the `ironpet-dev` identity that `install.sh` creates.

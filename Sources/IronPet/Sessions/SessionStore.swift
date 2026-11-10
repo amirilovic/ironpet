@@ -53,6 +53,11 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    /// Sample sessions for `--render-previews`.
+    func loadPreview(_ preview: [AgentSession]) {
+        sessions = Dictionary(uniqueKeysWithValues: preview.map { ($0.id, $0) })
+    }
+
     func acknowledge(_ id: String) {
         guard var session = sessions[id] else { return }
         guard session.status == .done || session.status == .failed else { return }

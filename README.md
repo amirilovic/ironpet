@@ -4,6 +4,8 @@
 
 A desktop pet for macOS that keeps an eye on your coding agents and does small tasks for you. Ghost, a chibi direwolf in a Night's Watch cloak, floats above your windows, reacts to what Cursor and Claude Code are doing, and opens a chat where you can type, dictate or show him your screen.
 
+<p align="center"><img src="docs/screenshots/pet.gif" width="560" alt="Ghost works while an agent runs, cheers when it finishes, asks before running a command, then drinks water with a break reminder"></p>
+
 ## What it does
 
 - **Watches your agents.** Cursor (IDE and CLI) and Claude Code sessions report to the pet through hooks. Ghost shows the most urgent state (needs input, failed, done, working) with a count badge, tells you in a speech bubble next to him, with a one-line summary of what the agent did ("Edited 3 files · Fixed the flaky login test."), and clicking a session jumps to its iTerm tab or Cursor window.
@@ -14,6 +16,13 @@ A desktop pet for macOS that keeps an eye on your coding agents and does small t
 - **Remembers.** Chats are saved and can be reopened. Ghost keeps editable markdown notes about you and each project and reads them at the start of every chat.
 - **Break reminders.** Drink water (45 min), stretch (60 min) and rest your eyes (20 min), counted only while you're at the keyboard; stepping away for 5 minutes resets them. While an agent is working they can come a little early, so you take the break while you'd be waiting anyway. Ghost drinks or stretches along with you. His bubble has **Done** and **Snooze 10 min**; toggle or pause them under right-click → Reminders.
 - **Model and backend picker**, per-project folder detection, resizable chat window, launch at login.
+
+| | |
+| --- | --- |
+| <img src="docs/screenshots/agents.png" alt="The agents panel listing sessions that need input, are working, failed and are done"> | <img src="docs/screenshots/chat-approval.png" alt="The chat waiting for Allow or Deny before running a command"> |
+| **Agents:** every Cursor and Claude Code session, most urgent first | **Approvals:** edits and commands wait for you |
+| <img src="docs/screenshots/alerts.png" alt="The alerts tab with a failed CI run, a review request and an approval"> | <img src="docs/screenshots/reminder.png" alt="Ghost drinking water next to a break reminder"> |
+| **Alerts:** CI, reviews and Sentry, with Ask Ghost | **Breaks:** Ghost drinks along with you |
 
 ## Requirements
 
@@ -130,7 +139,7 @@ swift build                          # debug build
 swift test                           # unit tests
 ./scripts/install.sh                 # release build, install, restart
 python3 scripts/e2e.py               # end-to-end tests against real agent runs
-.build/debug/IronPet --render-chat-preview build/chat.png   # render the chat UI to PNGs
+./scripts/screenshots.sh             # render the README screenshots from sample data
 ```
 
 `scripts/e2e.py` relaunches the installed app with `--test-mode`, drives real cursor-agent and Claude Code turns through test-only endpoints (Allow/Deny in chat and from notifications, folder picker, Auto mode, iTerm jump, screen capture, agent summaries, GitHub alert rules), checks the results on disk and in iTerm, then relaunches the app normally. Run a subset with e.g. `python3 scripts/e2e.py cursor claude`.
