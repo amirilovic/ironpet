@@ -156,21 +156,30 @@ final class ChatSession: ObservableObject {
         if !items.isEmpty { newChat() }
     }
 
-    /// Sample conversation for `--render-chat-preview`.
-    func loadPreview(running: Bool) {
+    /// Sample conversations for `--render-previews`.
+    enum Preview { case done, approval }
+
+    func loadPreview(_ preview: Preview) {
+        workspace = URL(fileURLWithPath: "/Users/you/code/demo-app")
+        needsWorkspace = false
         items = [
-            Item(kind: .user("why is the build failing?")),
-            Item(kind: .tool("Ran `swift build`", ok: false)),
-            Item(kind: .tool("Read SessionStore.swift", ok: true)),
-            Item(kind: .assistant("The build fails because `sweep()` uses a `where` clause that only applies to `.needsInput`. I can fix it — want me to?")),
+            Item(kind: .user("why is the login test flaky?")),
+            Item(kind: .tool("Ran `npm test -- login`", ok: false)),
+            Item(kind: .tool("Read src/auth/session.ts", ok: true)),
+            Item(kind: .assistant("`refreshToken()` resolves after the test checks the session, so it fails whenever the mock server is slow. Awaiting it in `login()` fixes it. Want me to make the change?")),
             Item(kind: .user("yes please")),
         ]
-        if running {
+        switch preview {
+        case .approval:
+            items.append(Item(kind: .tool("Edited src/auth/session.ts", ok: true)))
             state = .running
-            activity = "Editing SessionStore.swift"
-            runStartedAt = Date().addingTimeInterval(-12)
-        } else {
-            items.append(Item(kind: .assistant("Done! The sweep now checks both statuses.")))
+            activity = "Waiting for you"
+            runStartedAt = Date().addingTimeInterval(-9)
+            approvals = [Approval(title: "Run this command?", detail: "npm test -- login --runInBand", responders: [])]
+        case .done:
+            items.append(Item(kind: .tool("Edited src/auth/session.ts", ok: true)))
+            items.append(Item(kind: .tool("Ran `npm test -- login`", ok: true)))
+            items.append(Item(kind: .assistant("Done! `login()` now waits for the token refresh, and the test passed 20 runs in a row.")))
             state = .done
             lastRunDuration = 14
         }
