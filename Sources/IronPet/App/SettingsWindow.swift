@@ -268,10 +268,13 @@ private struct RemindersSettings: View {
             }
             Section("Reminders") {
                 ForEach(ReminderScheduler.Kind.allCases, id: \.self) { kind in
-                    HStack {
-                        Toggle(kind.name, isOn: binding(kind.configPath.appending(path: \.enabled)))
-                        Spacer()
-                        minutes(binding(kind.configPath.appending(path: \.minutes)), range: 1...240)
+                    LabeledContent(kind.name) {
+                        HStack(spacing: 12) {
+                            minutes(binding(kind.configPath.appending(path: \.minutes)), range: 1...240)
+                            Toggle(kind.name, isOn: binding(kind.configPath.appending(path: \.enabled)))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                        }
                     }
                 }
             }
