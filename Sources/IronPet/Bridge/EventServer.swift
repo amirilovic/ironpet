@@ -94,7 +94,8 @@ final class EventServer {
         let origin = SessionOrigin(
             workspace: request.header("x-ironpet-cwd").flatMap { $0.isEmpty ? nil : $0 },
             termProgram: request.header("x-ironpet-term-program"),
-            itermSessionID: request.header("x-ironpet-iterm-session")
+            itermSessionID: request.header("x-ironpet-iterm-session"),
+            pid: request.header("x-ironpet-pid").flatMap { Int32($0) }
         )
         let runID = request.header("x-ironpet-run-id").flatMap { $0.isEmpty ? nil : $0 }
         onEvent(HookEvent(source: source, name: name, payload: payload, origin: origin, runID: runID))

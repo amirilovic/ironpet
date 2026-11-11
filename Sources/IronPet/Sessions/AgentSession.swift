@@ -43,6 +43,10 @@ struct SessionOrigin {
     var workspace: String?
     var termProgram: String?
     var itermSessionID: String?
+    /// The agent's process id as the hook saw it.
+    var pid: Int32?
+    /// Bundle id of the app that started the agent, resolved from `pid` when the first event arrived.
+    var ownerBundleID: String?
 }
 
 struct AgentSession: Identifiable {

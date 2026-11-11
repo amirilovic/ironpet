@@ -36,6 +36,11 @@ final class SessionStore: ObservableObject {
         if session.origin.workspace == nil { session.origin.workspace = event.origin.workspace }
         if let term = event.origin.termProgram, !term.isEmpty { session.origin.termProgram = term }
         if let iterm = event.origin.itermSessionID, !iterm.isEmpty { session.origin.itermSessionID = iterm }
+        if session.origin.ownerBundleID == nil, let pid = event.origin.pid {
+            // Resolve now: the agent's process can exit before the user clicks the button.
+            session.origin.pid = pid
+            session.origin.ownerBundleID = ProcessTree.owningBundleID(pid: pid)
+        }
         session.updatedAt = Date()
 
         switch event.source {
