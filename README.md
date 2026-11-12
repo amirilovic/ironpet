@@ -8,7 +8,7 @@ A desktop pet for macOS that keeps an eye on your coding agents and does small t
 
 ## What it does
 
-- **Watches your agents.** Cursor (IDE and CLI) and Claude Code sessions report to the pet through hooks. Ghost shows the most urgent state (needs input, failed, done, working) with a count badge, tells you in a speech bubble next to him, with a one-line summary of what the agent did ("Edited 3 files · Fixed the flaky login test."), and clicking a session jumps to its iTerm tab or Cursor window.
+- **Watches your agents.** Cursor (IDE and CLI) and Claude Code sessions report to the pet through hooks. Ghost shows the most urgent state (needs input, failed, done, working) with a count badge, tells you in a speech bubble next to him, with a one-line summary of what the agent did ("Edited 3 files · Fixed the flaky login test."), and clicking a session jumps to its iTerm tab, or opens its folder in the app that started the agent (or one you pick in Settings).
 - **PR, CI and Sentry alerts** (opt-in). With GitHub alerts on, Ghost polls every GitHub host `gh` is logged in to: your PRs' CI failing or passing, approvals, changes requested, and new review requests. With Sentry configured, new and escalating issues too. Each alert has **Open** and **Ask Ghost**, which starts a chat to investigate it.
 - **Quick chat.** <kbd>⌥⌘G</kbd> or a click on Ghost opens a chat that runs headless [cursor-agent](https://cursor.com/cli) or [Claude Code](https://docs.anthropic.com/claude-code) in your current project. Every file edit and shell command waits for **Allow / Deny** (in the chat, or right in Ghost's bubble when the chat is closed); a per-chat **Auto** switch lets it run on its own, but destructive commands (`rm -rf`, `git push --force`, `git reset --hard`, dropping tables) still ask.
 - **Voice.** Hold <kbd>fn</kbd> with [Wispr Flow](https://wisprflow.ai) while the chat is open; the dictation is sent automatically.
@@ -110,11 +110,14 @@ Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rena
     "idleResetMinutes": 5,
     "snoozeMinutes": 10
   },
-  "integrations": { "githubAlerts": false, "shareMCPSignIns": false }
+  "integrations": { "githubAlerts": false, "shareMCPSignIns": false },
+  "openIn": "auto",
+  "editors": [{ "name": "My IDE", "bundleId": "com.x.ide", "urlTemplate": "myide://open?path={cwd}" }]
 }
 ```
 
 - **Shortcuts** combine `cmd`, `opt`, `ctrl` and `shift` with a letter, digit, `space`, an arrow, or `f1`–`f12`. Each needs at least one of `cmd`, `opt` or `ctrl` (function keys can stand alone). An empty string turns a shortcut off.
+- **Open sessions in** (`openIn`) is `"auto"`, which opens the app that started the agent (found by walking the agent's parent processes), or the bundle id of a fixed app such as `"dev.zed.Zed"`. The picker offers Cursor, VS Code, Zed, Band, Windsurf, Xcode and Finder when installed, plus your `editors` entries. In `urlTemplate`, `{cwd}` becomes the percent-encoded session folder; without a template the folder is opened with the app.
 - If the file doesn't parse, ironpet uses the defaults and shows the error at the bottom of Settings. Saving from Settings then first copies your file to `config.invalid.json`.
 
 ## Your data

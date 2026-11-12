@@ -46,7 +46,18 @@ struct Config: Codable, Equatable {
         var shareMCPSignIns = false
     }
 
+    /// An extra app for the "Open sessions in" picker. Without `urlTemplate` the folder is opened with the app;
+    /// `{cwd}` in a template becomes the percent-encoded folder path.
+    struct Editor: Codable, Equatable {
+        var name: String
+        var bundleId: String
+        var urlTemplate: String?
+    }
+
     var pet = Pet()
+    /// `"auto"` (the app that started the agent) or the bundle id of a fixed app.
+    var openIn = "auto"
+    var editors: [Editor] = []
     var hotkeys = Hotkeys()
     var reminders = Reminders()
     var integrations = Integrations()
@@ -83,6 +94,9 @@ struct Config: Codable, Equatable {
         for path in [\Reminders.water, \Reminders.stretch, \Reminders.eyes] {
             c.reminders[keyPath: path].minutes = max(1, c.reminders[keyPath: path].minutes)
         }
+        c.openIn = c.openIn.trimmingCharacters(in: .whitespacesAndNewlines)
+        if c.openIn.isEmpty { c.openIn = Config().openIn }
+        c.editors = c.editors.filter { !$0.name.isEmpty && !$0.bundleId.isEmpty }
         c.reminders.idleResetMinutes = max(1, c.reminders.idleResetMinutes)
         c.reminders.snoozeMinutes = max(1, c.reminders.snoozeMinutes)
         return c

@@ -30,7 +30,7 @@ final class Announcer {
 
     func session(_ session: AgentSession) {
         let id = session.id
-        let open = Bubble.Action(title: session.isInIterm ? "Open in iTerm" : "Open in Cursor", style: .primary) { [weak self] in
+        let open = Bubble.Action(title: Editors.label(for: session), style: .primary) { [weak self] in
             self?.openSession(id)
         }
         let body = session.status == .needsInput ? (session.detail ?? session.prompt) : (session.summary ?? session.prompt)

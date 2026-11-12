@@ -258,7 +258,7 @@ private struct SessionRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(perform: onJump)
-        .help(session.isInIterm ? "Open in iTerm" : "Open in Cursor")
+        .help(Editors.label(for: session))
         .animation(.easeOut(duration: 0.12), value: hovering)
     }
 
@@ -267,7 +267,7 @@ private struct SessionRow: View {
             if session.status == .done || session.status == .failed {
                 IconButton(symbol: "xmark", help: "Dismiss", action: onDismiss)
             }
-            IconButton(symbol: "arrow.up.forward.app", help: session.isInIterm ? "Open in iTerm" : "Open in Cursor",
+            IconButton(symbol: "arrow.up.forward.app", help: Editors.label(for: session),
                        action: onJump)
         }
     }

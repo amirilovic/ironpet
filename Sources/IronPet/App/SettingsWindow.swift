@@ -143,6 +143,16 @@ private struct GeneralSettings: View {
                                                                       set: { model.alsoSystemNotifications = $0 }))
             }
             Section {
+                Picker("Open sessions in", selection: Binding(get: { store.config.openIn },
+                                                              set: { value in store.update { $0.openIn = value } })) {
+                    Text("Auto (the app that started the agent)").tag(Editors.auto)
+                    ForEach(openChoices, id: \.bundleID) { Text($0.name).tag($0.bundleID) }
+                }
+            } footer: {
+                Text("Where the Open button on a session takes you. Add more apps under \"editors\" in ~/.ironpet/config.json.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
                 Toggle("Watch Cursor", isOn: Binding(get: { store.config.integrations.cursorHooks },
                                                      set: { on in store.update { $0.integrations.cursorHooks = on } }))
                 Toggle("Watch Claude Code", isOn: Binding(get: { store.config.integrations.claudeHooks },
@@ -155,6 +165,16 @@ private struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Installed editors, plus the saved choice when that app is gone, so the picker never shows a blank.
+    private var openChoices: [OpenTarget] {
+        var choices = Editors.installed()
+        let saved = store.config.openIn
+        if saved != Editors.auto, !choices.contains(where: { $0.bundleID == saved }) {
+            choices.append(OpenTarget(name: Editors.appName(saved) ?? saved, bundleID: saved))
+        }
+        return choices
     }
 
     private func saveName() {
