@@ -4,7 +4,7 @@ import AppKit
 /// Requires Screen Recording permission; without it macOS returns only the wallpaper.
 enum ScreenCapture {
     static let directory = Paths.root.appendingPathComponent("screenshots")
-    private static let keep = 30
+    static let keep = 30
 
     static var hasPermission: Bool { CGPreflightScreenCaptureAccess() }
 
@@ -46,7 +46,7 @@ enum ScreenCapture {
         }
     }
 
-    private static func prune() {
+    static func prune(in directory: URL = directory, keep: Int = keep) {
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
         for old in files.filter({ $0.pathExtension == "png" }).sorted(by: { $0.path > $1.path }).dropFirst(keep) {
             try? FileManager.default.removeItem(at: old)

@@ -8,7 +8,10 @@ final class ChatPanel: NSPanel {
     private static let sizeKey = "chatPanelSize"
     static let minimumSize = CGSize(width: 360, height: 320)
 
+    private let session: ChatSession
+
     init(session: ChatSession) {
+        self.session = session
         // A titled window with a hidden title bar: native resizing from every edge and corner.
         super.init(contentRect: CGRect(x: 0, y: 0, width: 440, height: 560),
                    styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
@@ -42,6 +45,19 @@ final class ChatPanel: NSPanel {
     }
 
     override var canBecomeKey: Bool { true }
+
+    /// Intercepts ⌘V only when the pasteboard holds an image and no text; text paste stays with the field.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .command, event.charactersIgnoringModifiers == "v", ImageIntake.decide(.general) != .text {
+            let saved = ImageIntake.importPaste(.general)
+            if !saved.isEmpty {
+                saved.forEach(session.attach)
+                return true
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 
     override func cancelOperation(_ sender: Any?) { close() }
 

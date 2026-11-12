@@ -24,6 +24,16 @@ struct ChatView: View {
                minHeight: ChatPanel.minimumSize.height, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { inputFocused = true }
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            for provider in providers {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, ImageIntake.isImageFile(url) else { return }
+                    let saved = ImageIntake.save([url])
+                    DispatchQueue.main.async { saved.forEach(session.attach) }
+                }
+            }
+            return true
+        }
     }
 
     // MARK: Header
