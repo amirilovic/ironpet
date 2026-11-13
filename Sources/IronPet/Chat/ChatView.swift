@@ -94,24 +94,25 @@ struct ChatView: View {
                 .help("Send the message as soon as you stop talking (hold fn to talk)")
             }
             HStack(spacing: 8) {
-                Button("Memory folder") {
-                    NSWorkspace.shared.open(Memory.directory)
-                    showSettings = false
-                }
-                .help("Open the notes Ghost keeps about you and your projects")
-                Spacer()
-                historyMenu
-                Button("New chat") {
+                Button {
                     session.newChat()
                     showSettings = false
-                }
+                } label: { Label("New chat", systemImage: "square.and.pencil") }
                 .buttonStyle(.borderedProminent)
+                historyMenu
+                Button {
+                    NSWorkspace.shared.open(Memory.directory)
+                    showSettings = false
+                } label: { Label("Memory folder", systemImage: "brain") }
+                .help("Open the notes Ghost keeps about you and your projects")
             }
             .controlSize(.small)
+            .fixedSize()
+            .frame(maxWidth: .infinity)
             .padding(.top, 2)
         }
         .padding(12)
-        .frame(width: 320)
+        .frame(width: 360)
     }
 
     private var projectMenu: some View {
@@ -140,9 +141,10 @@ struct ChatView: View {
                 }
             }
         } label: {
-            Text("Previous chats")
+            Label("Previous chats", systemImage: "clock.arrow.circlepath")
         }
         .menuStyle(.button)
+        .menuIndicator(.hidden)
         .fixedSize()
     }
 
