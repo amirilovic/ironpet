@@ -16,7 +16,6 @@ struct ChatView: View {
             } else {
                 transcript
             }
-            StatusBar(session: session)
             composer
         }
         .frame(minWidth: ChatPanel.minimumSize.width, maxWidth: .infinity,
@@ -205,8 +204,8 @@ struct ChatView: View {
                     ForEach(groupedItems, id: \.id) { group in
                         groupView(group).id(group.id)
                     }
-                    if session.isRunning, session.approvals.isEmpty, !lastIsAssistant {
-                        TypingIndicator().id("typing")
+                    if session.isRunning, session.approvals.isEmpty {
+                        TypingIndicator(started: session.runStartedAt).id("typing")
                     }
                     ForEach(session.approvals) { approval in approvalCard(approval).id(approval.id) }
                     Color.clear.frame(height: 1).id("bottom")
@@ -221,11 +220,6 @@ struct ChatView: View {
 
     private var scrollKey: String {
         "\(session.items.count)-\(session.approvals.count)-\(session.isRunning)-\(lastAssistantLength)"
-    }
-
-    private var lastIsAssistant: Bool {
-        if case .assistant = session.items.last?.kind { return true }
-        return false
     }
 
     private var lastAssistantLength: Int {
@@ -633,77 +627,40 @@ private struct ToolSteps: View {
     }
 }
 
+/// Shown while the agent works: the pet, animated dots and how long this turn has been running.
 private struct TypingIndicator: View {
+    let started: Date?
+
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             PetAvatar(size: 24)
             TimelineView(.animation(minimumInterval: 0.15)) { context in
                 let phase = Int(context.date.timeIntervalSinceReferenceDate * 3) % 3
-                HStack(spacing: 4) {
-                    ForEach(0..<3) { i in
-                        Circle()
-                            .fill(Color.secondary)
-                            .frame(width: 6, height: 6)
-                            .opacity(i == phase ? 1 : 0.35)
+                HStack(spacing: 8) {
+                    HStack(spacing: 4) {
+                        ForEach(0..<3) { i in
+                            Circle()
+                                .fill(Color.secondary)
+                                .frame(width: 6, height: 6)
+                                .opacity(i == phase ? 1 : 0.35)
+                        }
+                    }
+                    if let started {
+                        Text(Self.format(context.date.timeIntervalSince(started)))
+                            .font(.system(size: 11, weight: .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 11)
-                .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                .padding(.vertical, 8)
+                .background(Color.primary.opacity(0.08), in: Capsule())
             }
         }
-    }
-}
-
-/// Always-visible line above the input: what Ghost is doing, waiting on, or how the last turn went.
-private struct StatusBar: View {
-    @ObservedObject var session: ChatSession
-
-    var body: some View {
-        Group {
-            if !session.approvals.isEmpty {
-                row(color: .orange) {
-                    Image(systemName: "hand.raised.fill")
-                    Text("Waiting for your approval")
-                }
-            } else if session.isRunning, let started = session.runStartedAt {
-                row(color: .accentColor) {
-                    ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
-                    Text(LocalizedStringKey((session.activity ?? "Thinking") + "…")).lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 8)
-                    TimelineView(.periodic(from: started, by: 1)) { context in
-                        Text(Self.format(context.date.timeIntervalSince(started))).monospacedDigit()
-                    }
-                    if session.autoMode { Text("AUTO").font(.system(size: 9, weight: .bold)).padding(.horizontal, 4)
-                        .background(Color.accentColor.opacity(0.2), in: Capsule()) }
-                }
-            } else if session.state == .done {
-                row(color: .green) {
-                    Image(systemName: "checkmark.circle.fill")
-                    Text("Done" + (session.lastRunDuration.map { " in \(Self.format($0))" } ?? ""))
-                }
-            } else if session.state == .failed {
-                row(color: .red) {
-                    Image(systemName: "exclamationmark.circle.fill")
-                    Text("Failed" + (session.lastRunDuration.map { " after \(Self.format($0))" } ?? ""))
-                }
-            }
-        }
-        .animation(.easeInOut(duration: 0.15), value: session.state)
-    }
-
-    private func row<Content: View>(color: Color, @ViewBuilder _ content: () -> Content) -> some View {
-        HStack(spacing: 6) { content() }
-            .font(.system(size: 11.5, weight: .medium))
-            .foregroundStyle(color)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(color.opacity(0.1))
     }
 
     static func format(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds.rounded())
+        let s = Int(seconds)
         return s < 60 ? "\(s)s" : "\(s / 60)m \(s % 60)s"
     }
 }
