@@ -34,7 +34,9 @@ final class ChatSession: ObservableObject {
     }
 
     @Published var items: [Item] = []
-    @Published var input = ""
+    @Published var input = "" {
+        didSet { if persists { UserDefaults.standard.set(input, forKey: Self.draftKey) } }
+    }
     @Published var workspace: URL?
     /// Set when the chat opened outside a coding app; the user picks a folder before sending.
     @Published private(set) var needsWorkspace = false
@@ -46,7 +48,9 @@ final class ChatSession: ObservableObject {
     @Published private(set) var state: State = .idle
     @Published private(set) var approvals: [Approval] = []
     @Published private(set) var history: [ChatThread] = ThreadStore.recent()
-    @Published var attachments: [URL] = []
+    @Published var attachments: [URL] = [] {
+        didSet { if persists { UserDefaults.standard.set(attachments.map(\.path), forKey: Self.attachmentsKey) } }
+    }
     /// What the agent is doing right now, e.g. "Running `npm test`".
     @Published private(set) var activity: String?
     @Published private(set) var runStartedAt: Date?
@@ -73,7 +77,14 @@ final class ChatSession: ObservableObject {
     var onApprovalResolved: ((UUID) -> Void)?
     var isVisible = false
 
-    private var threadID: String?
+    private var threadID: String? {
+        didSet { if persists { UserDefaults.standard.set(threadID, forKey: Self.threadKey) } }
+    }
+    /// False for preview sessions, so rendering screenshots neither reads nor overwrites the real chat.
+    private let persists: Bool
+    private static let threadKey = "chatThread"
+    private static let draftKey = "chatDraft"
+    private static let attachmentsKey = "chatAttachments"
     private var runner: CLIBackend?
     private var toolItems: [String: UUID] = [:]
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
@@ -92,7 +103,10 @@ final class ChatSession: ObservableObject {
 
     static let scratchWorkspace = Paths.root.appendingPathComponent("scratch")
 
-    init() {
+    /// `restore` reopens the chat that was open when the app last quit: its thread, folder and backend,
+    /// plus the unsent draft and attachments. Auto mode is not restored; it stays per chat and off by default.
+    init(restore: Bool = true) {
+        persists = restore
         recents = (UserDefaults.standard.stringArray(forKey: "recentWorkspaces") ?? [])
             .map(URL.init(fileURLWithPath:))
             .filter { FileManager.default.fileExists(atPath: $0.path) && $0 != Self.scratchWorkspace }
@@ -100,6 +114,24 @@ final class ChatSession: ObservableObject {
         model = UserDefaults.standard.string(forKey: "chatModel.\(backend.rawValue)")
             ?? (backend == .cursor ? UserDefaults.standard.string(forKey: "chatModel") : nil)
         Task { cursorModels = await ModelCatalog.refresh() }
+        if restore { restoreLastChat() }
+    }
+
+    private func restoreLastChat() {
+        let defaults = UserDefaults.standard
+        if let id = defaults.string(forKey: Self.threadKey), let thread = ThreadStore.load(id) {
+            apply(thread.restoredAfterQuit())
+        }
+        input = defaults.string(forKey: Self.draftKey) ?? ""
+        attachments = (defaults.stringArray(forKey: Self.attachmentsKey) ?? [])
+            .map(URL.init(fileURLWithPath:))
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    /// Writes the open thread to disk, e.g. when the app quits mid-run.
+    func persistForRelaunch() {
+        guard persists else { return }
+        saveThread()
     }
 
     var mood: PetMood? {
@@ -200,6 +232,10 @@ final class ChatSession: ObservableObject {
 
     func open(_ thread: ChatThread) {
         stop()
+        apply(thread)
+    }
+
+    private func apply(_ thread: ChatThread) {
         let kind = thread.backend ?? .cursor
         if kind != backend {
             backend = kind
@@ -420,6 +456,8 @@ final class ChatSession: ObservableObject {
         switch event {
         case .session(let id):
             threadID = id
+            // Saved now, not only when the turn ends, so quitting mid-run keeps the question.
+            saveThread()
         case .assistant(let text):
             activity = "Writing"
             if case .assistant(let previous) = items.last?.kind {
