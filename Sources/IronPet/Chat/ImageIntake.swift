@@ -77,3 +77,44 @@ enum ImageIntake {
         return CGImageDestinationFinalize(dest) ? file : nil
     }
 }
+
+/// Files attached with the + button or dropped on the chat. Images become PNG copies like a screenshot;
+/// any other file is copied under `screenshots/attachments/`, which the agent can already read
+/// (that folder is passed with `--add-dir`), so attaching never widens what the agent can see.
+enum FileIntake {
+    static let directory = ScreenCapture.directory.appendingPathComponent("attachments")
+    static let keepFolders = 40
+
+    static func attach(_ urls: [URL], into directory: URL = directory) -> [URL] {
+        urls.flatMap { url -> [URL] in
+            if ImageIntake.isImageFile(url) { return ImageIntake.save([url]) }
+            return copy(url, into: directory).map { [$0] } ?? []
+        }
+    }
+
+    static func copy(_ file: URL, into directory: URL = directory) -> URL? {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory), !isDirectory.boolValue else { return nil }
+        // One folder per attachment keeps the original file name, which the agent sees in the prompt.
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let folder = directory.appendingPathComponent("\(stamp)-\(UUID().uuidString.prefix(6))")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let target = folder.appendingPathComponent(file.lastPathComponent)
+            try FileManager.default.copyItem(at: file, to: target)
+            prune(directory)
+            return target
+        } catch {
+            NSLog("ironpet: could not attach \(file.path): \(error)")
+            return nil
+        }
+    }
+
+    /// Folder names start with a timestamp, so sorting by name is oldest first.
+    static func prune(_ directory: URL = directory, keep: Int = keepFolders) {
+        let folders = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        for old in folders.sorted(by: { $0.path > $1.path }).dropFirst(keep) {
+            try? FileManager.default.removeItem(at: old)
+        }
+    }
+}
