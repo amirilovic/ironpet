@@ -21,7 +21,7 @@ enum PreviewRenderer {
         let atlas = Atlas.loadDefault(sprite: sprite)
         let name = config.pet.name
 
-        for (file, preview) in [("chat", ChatSession.Preview.done), ("chat-approval", .approval)] {
+        for (file, preview) in [("chat", ChatSession.Preview.done), ("chat-approval", .approval), ("chat-markdown", .markdown)] {
             let session = ChatSession(restore: false)
             session.loadPreview(preview)
             render(ChatView(session: session, close: {}).frame(width: 520, height: 640).panel(), to: dir, file)

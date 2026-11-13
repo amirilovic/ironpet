@@ -196,11 +196,44 @@ final class ChatSession: ObservableObject {
     }
 
     /// Sample conversations for `--render-previews`.
-    enum Preview { case done, approval }
+    enum Preview { case done, approval, markdown }
 
     func loadPreview(_ preview: Preview) {
         workspace = URL(fileURLWithPath: "/Users/you/code/demo-app")
         needsWorkspace = false
+        if preview == .markdown {
+            items = [
+                Item(kind: .user("how does login refresh the token?")),
+                Item(kind: .assistant("""
+                    ## Token refresh
+
+                    `login()` stores the session, then **refreshes the token** before it expires:
+
+                    1. Read the expiry from the session
+                    2. Schedule `refreshToken()` 60 s early
+                       - retries twice on a network error
+                    3. Replace the stored token
+
+                    | Step | File |
+                    |------|------|
+                    | Login | `src/auth/login.ts` |
+                    | Refresh | `src/auth/session.ts` |
+
+                    ```ts
+                    await refreshToken(session)
+                    ```
+
+                    > The test was flaky because step 2 was not awaited.
+
+                    ```mermaid
+                    graph LR
+                      A[login] --> B[store session] --> C[refresh token]
+                    ```
+                    """)),
+            ]
+            state = .done
+            return
+        }
         items = [
             Item(kind: .user("why is the login test flaky?")),
             Item(kind: .tool("Ran `npm test -- login`", ok: false)),
@@ -221,6 +254,8 @@ final class ChatSession: ObservableObject {
             items.append(Item(kind: .assistant("Done! `login()` now waits for the token refresh, and the test passed 20 runs in a row.")))
             state = .done
             lastRunDuration = 14
+        case .markdown:
+            break
         }
     }
 
