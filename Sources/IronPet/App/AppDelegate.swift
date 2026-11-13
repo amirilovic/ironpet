@@ -222,6 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        chat.persistForRelaunch()
         try? FileManager.default.removeItem(at: Paths.portFile)
     }
 

@@ -11,6 +11,21 @@ struct ChatThread: Codable, Identifiable {
     var backend: BackendKind?
 }
 
+extension ChatThread {
+    /// A thread reopened after the app quit: steps that were still running when it quit can't finish
+    /// any more, so they show as failed instead of spinning forever.
+    func restoredAfterQuit() -> ChatThread {
+        var thread = self
+        thread.items = items.map { item in
+            guard case .tool(let summary, ok: nil) = item.kind else { return item }
+            var item = item
+            item.kind = .tool(summary, ok: false)
+            return item
+        }
+        return thread
+    }
+}
+
 /// Persists threads as JSON files in `~/.ironpet/threads/`.
 enum ThreadStore {
     static let directory = Paths.root.appendingPathComponent("threads")
