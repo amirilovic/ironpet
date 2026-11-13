@@ -632,11 +632,12 @@ private struct TypingIndicator: View {
     let started: Date?
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             PetAvatar(size: 24)
             TimelineView(.animation(minimumInterval: 0.15)) { context in
                 let phase = Int(context.date.timeIntervalSinceReferenceDate * 3) % 3
-                HStack(spacing: 6) {
+                // Same layout as a finished reply: the bubble, then the elapsed time where its timestamp goes.
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 4) {
                         ForEach(0..<3) { i in
                             Circle()
