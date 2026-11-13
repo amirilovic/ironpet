@@ -68,50 +68,44 @@ struct ChatView: View {
             .popover(isPresented: $showSettings, arrowEdge: .bottom) { settingsPopover }
     }
 
+    /// Laid out like System Settings: grouped cards, label on the left, value or control on the right.
     private var settingsPopover: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
-                settingsRow("Project") { projectMenu }
-                settingsRow("Agent") { backendMenu }
-                settingsRow("Model") { modelMenu }
-                settingsRow("Auto") {
-                    Toggle("Run without asking", isOn: $session.autoMode)
+        VStack(spacing: 10) {
+            SettingsCard {
+                SettingsRow("Project") { projectMenu }
+                SettingsRow("Agent") { backendMenu }
+                SettingsRow("Model", last: true) { modelMenu }
+            }
+            SettingsCard {
+                SettingsRow("Auto") {
+                    Toggle("", isOn: $session.autoMode)
+                        .labelsHidden()
                         .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .font(.system(size: 12))
+                        .controlSize(.small)
                         .tint(.orange)
-                        .help("Let the agent edit and run commands without asking (destructive commands still ask)")
                 }
-                settingsRow("Dictation") {
-                    Toggle("Send when I stop talking", isOn: $session.sendAfterDictation)
+                .help("Let the agent edit and run commands without asking (destructive commands still ask)")
+                SettingsRow("Send after dictation", last: true) {
+                    Toggle("", isOn: $session.sendAfterDictation)
+                        .labelsHidden()
                         .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .font(.system(size: 12))
+                        .controlSize(.small)
+                }
+                .help("Send the message as soon as you stop talking (hold fn to talk)")
+            }
+            SettingsCard {
+                SettingsRow("Previous chats") { historyMenu }
+                SettingsRow("New chat", last: true) {
+                    Button("Start") {
+                        session.newChat()
+                        showSettings = false
+                    }
+                    .controlSize(.small)
                 }
             }
-            .padding(14)
-            Hairline()
-            HStack(spacing: 8) {
-                Button {
-                    session.newChat()
-                    showSettings = false
-                } label: { Label("New chat", systemImage: "square.and.pencil") }
-                historyMenu
-                Spacer()
-            }
-            .buttonStyle(.borderless)
-            .font(.system(size: 12))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
         }
-        .frame(width: 300)
-    }
-
-    private func settingsRow<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
-        GridRow {
-            Text(title).font(.system(size: 12)).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
-            content()
-        }
+        .padding(12)
+        .frame(width: 320)
     }
 
     private var projectMenu: some View {
@@ -123,11 +117,9 @@ struct ChatView: View {
             Button("No project (general question)", action: session.useNoProject)
             Button("Choose folder…", action: chooseFolder)
         } label: {
-            Label(session.needsWorkspace ? "Choose a project" : session.workspaceLabel, systemImage: "folder")
+            Text(session.needsWorkspace ? "Choose…" : session.workspaceLabel)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .font(.system(size: 12))
+        .settingsValueMenu()
         .disabled(session.isRunning)
         .help("Folder the agent works in. Switching starts a new chat.")
     }
@@ -138,16 +130,17 @@ struct ChatView: View {
             ForEach(session.history) { thread in
                 Button("\(thread.title) — \(URL(fileURLWithPath: thread.workspace).lastPathComponent)") {
                     session.open(thread)
+                    showSettings = false
                 }
             }
             Divider()
             Button("Open memory folder") { NSWorkspace.shared.open(Memory.directory) }
         } label: {
-            Label("Previous chats", systemImage: "clock.arrow.circlepath")
+            Text("Open…")
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .controlSize(.small)
         .fixedSize()
-        .help("Previous chats")
     }
 
     private func iconButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
@@ -418,11 +411,9 @@ struct ChatView: View {
                 }
             }
         } label: {
-            Label(session.backend.displayName, systemImage: "terminal")
+            Text(session.backend.displayName)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .font(.system(size: 12))
+        .settingsValueMenu()
         .disabled(session.isRunning)
         .help("Agent that runs your request. Switching starts a new chat.")
     }
@@ -450,11 +441,9 @@ struct ChatView: View {
                 }
             }
         } label: {
-            Label(session.modelName, systemImage: "cpu")
+            Text(session.modelName)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .font(.system(size: 12))
+        .settingsValueMenu()
         .disabled(session.isRunning)
         .help("Model used for the next message")
     }
@@ -798,5 +787,49 @@ private struct PickerRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+private struct SettingsCard<Content: View>: View {
+    @ViewBuilder let content: Content
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.08)))
+    }
+}
+
+private struct SettingsRow<Content: View>: View {
+    let title: String
+    let last: Bool
+    let content: Content
+
+    init(_ title: String, last: Bool = false, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.last = last
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(title).font(.system(size: 13))
+                Spacer(minLength: 12)
+                content
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 36)
+            if !last { Hairline().padding(.horizontal, 12) }
+        }
+    }
+}
+
+private extension View {
+    /// A menu that reads as the row's value: secondary text with a small chevron, aligned right.
+    func settingsValueMenu() -> some View {
+        self.menuStyle(.borderlessButton)
+            .fixedSize()
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
     }
 }
