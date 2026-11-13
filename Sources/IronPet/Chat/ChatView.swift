@@ -383,7 +383,7 @@ struct ChatView: View {
                     .padding(.horizontal, 4)
                     .padding(.vertical, 5)
                 if session.isRunning {
-                    sendButton("stop.fill", color: .red, help: "Stop", action: session.stop)
+                    sendButton("stop.fill", color: .red, help: "Stop (Esc)", action: session.stop)
                 } else {
                     sendButton("arrow.up", color: .accentColor, help: "Send (Enter)", action: session.send)
                         .disabled(session.input.trimmingCharacters(in: .whitespaces).isEmpty && session.attachments.isEmpty)

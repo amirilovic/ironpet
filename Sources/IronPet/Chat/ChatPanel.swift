@@ -59,7 +59,10 @@ final class ChatPanel: NSPanel {
         return super.performKeyEquivalent(with: event)
     }
 
-    override func cancelOperation(_ sender: Any?) { close() }
+    /// Esc stops a running turn first, like the stop button; only an idle chat closes.
+    override func cancelOperation(_ sender: Any?) {
+        if session.isRunning { session.stop() } else { close() }
+    }
 
     override func close() {
         super.close()
