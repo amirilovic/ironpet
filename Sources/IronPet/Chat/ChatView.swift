@@ -44,7 +44,13 @@ struct ChatView: View {
             PetAvatar(size: 30)
             Text(ConfigStore.shared.config.pet.name).font(.system(size: 13, weight: .semibold))
             Spacer()
-            autoToggle
+            if session.autoMode {
+                // The switch lives in settings; this stays so it is always obvious the agent runs unattended.
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .help("Auto is on: the agent edits and runs commands without asking")
+            }
             HStack(spacing: 2) {
                 settingsButton
                 iconButton("xmark", help: "Close (Esc)", action: close)
@@ -68,6 +74,14 @@ struct ChatView: View {
                 settingsRow("Project") { projectMenu }
                 settingsRow("Agent") { backendMenu }
                 settingsRow("Model") { modelMenu }
+                settingsRow("Auto") {
+                    Toggle("Run without asking", isOn: $session.autoMode)
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .font(.system(size: 12))
+                        .tint(.orange)
+                        .help("Let the agent edit and run commands without asking (destructive commands still ask)")
+                }
                 settingsRow("Dictation") {
                     Toggle("Send when I stop talking", isOn: $session.sendAfterDictation)
                         .toggleStyle(.switch)
@@ -116,28 +130,6 @@ struct ChatView: View {
         .font(.system(size: 12))
         .disabled(session.isRunning)
         .help("Folder the agent works in. Switching starts a new chat.")
-    }
-
-    /// A pill instead of a switch: reads as a mode, and turns orange so it is obvious the agent runs unattended.
-    private var autoToggle: some View {
-        Button { session.autoMode.toggle() } label: {
-            HStack(spacing: 4) {
-                Image(systemName: session.autoMode ? "bolt.fill" : "bolt")
-                Text("Auto")
-            }
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(session.autoMode ? Color.orange : Color.secondary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background(session.autoMode ? Color.orange.opacity(0.16) : Color.primary.opacity(0.06), in: Capsule())
-            .overlay(Capsule().strokeBorder(session.autoMode ? Color.orange.opacity(0.45) : Color.clear))
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Auto")
-        .accessibilityValue(session.autoMode ? "on" : "off")
-        .help("Let the agent edit and run commands without asking (destructive commands still ask)")
-        .animation(.easeInOut(duration: 0.15), value: session.autoMode)
     }
 
     private var historyMenu: some View {
