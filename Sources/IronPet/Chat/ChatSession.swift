@@ -41,7 +41,9 @@ final class ChatSession: ObservableObject {
     /// Set when the chat opened outside a coding app; the user picks a folder before sending.
     @Published private(set) var needsWorkspace = false
     @Published private(set) var recents: [URL] = []
-    @Published var autoMode = false
+    @Published var autoMode = false {
+        didSet { if persists { UserDefaults.standard.set(autoMode, forKey: Self.autoKey) } }
+    }
     @Published var sendAfterDictation = UserDefaults.standard.object(forKey: "sendAfterDictation") as? Bool ?? true {
         didSet { UserDefaults.standard.set(sendAfterDictation, forKey: "sendAfterDictation") }
     }
@@ -85,6 +87,7 @@ final class ChatSession: ObservableObject {
     private static let threadKey = "chatThread"
     private static let draftKey = "chatDraft"
     private static let attachmentsKey = "chatAttachments"
+    private static let autoKey = "chatAutoMode"
     private var runner: CLIBackend?
     private var toolItems: [String: UUID] = [:]
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
@@ -104,7 +107,8 @@ final class ChatSession: ObservableObject {
     static let scratchWorkspace = Paths.root.appendingPathComponent("scratch")
 
     /// `restore` reopens the chat that was open when the app last quit: its thread, folder and backend,
-    /// plus the unsent draft and attachments. Auto mode is not restored; it stays per chat and off by default.
+    /// plus the unsent draft and attachments. Auto mode comes back only for that same chat; a new chat or
+    /// one opened from history still starts with Auto off.
     init(restore: Bool = true) {
         persists = restore
         recents = (UserDefaults.standard.stringArray(forKey: "recentWorkspaces") ?? [])
@@ -121,6 +125,7 @@ final class ChatSession: ObservableObject {
         let defaults = UserDefaults.standard
         if let id = defaults.string(forKey: Self.threadKey), let thread = ThreadStore.load(id) {
             apply(thread.restoredAfterQuit())
+            autoMode = defaults.bool(forKey: Self.autoKey)
         }
         input = defaults.string(forKey: Self.draftKey) ?? ""
         attachments = (defaults.stringArray(forKey: Self.attachmentsKey) ?? [])
