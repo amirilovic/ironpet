@@ -93,16 +93,22 @@ struct ChatView: View {
                 }
                 .help("Send the message as soon as you stop talking (hold fn to talk)")
             }
-            SettingsCard {
-                SettingsRow("Previous chats") { historyMenu }
-                SettingsRow("New chat", last: true) {
-                    Button("Start") {
-                        session.newChat()
-                        showSettings = false
-                    }
-                    .controlSize(.small)
+            HStack(spacing: 8) {
+                Button("Memory folder") {
+                    NSWorkspace.shared.open(Memory.directory)
+                    showSettings = false
                 }
+                .help("Open the notes Ghost keeps about you and your projects")
+                Spacer()
+                historyMenu
+                Button("New chat") {
+                    session.newChat()
+                    showSettings = false
+                }
+                .buttonStyle(.borderedProminent)
             }
+            .controlSize(.small)
+            .padding(.top, 2)
         }
         .padding(12)
         .frame(width: 320)
@@ -133,13 +139,10 @@ struct ChatView: View {
                     showSettings = false
                 }
             }
-            Divider()
-            Button("Open memory folder") { NSWorkspace.shared.open(Memory.directory) }
         } label: {
-            Text("Open…")
+            Text("Previous chats")
         }
         .menuStyle(.button)
-        .controlSize(.small)
         .fixedSize()
     }
 
