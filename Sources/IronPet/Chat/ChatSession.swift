@@ -301,10 +301,18 @@ final class ChatSession: ObservableObject {
         let runner = backend.make()
         self.runner = runner
         var request = prompt
-        if !shots.isEmpty {
-            request = "Screenshot\(shots.count > 1 ? "s" : "") of my screen (open and look at \(shots.count > 1 ? "them" : "it") first): "
-                + shots.map(\.path).joined(separator: ", ") + "\n\n" + prompt
+        let images = shots.filter(ImageIntake.isImageFile)
+        let files = shots.filter { !ImageIntake.isImageFile($0) }
+        var context: [String] = []
+        if !images.isEmpty {
+            context.append("Screenshot\(images.count > 1 ? "s" : "") of my screen (open and look at \(images.count > 1 ? "them" : "it") first): "
+                + images.map(\.path).joined(separator: ", "))
         }
+        if !files.isEmpty {
+            context.append("Attached file\(files.count > 1 ? "s" : "") (read \(files.count > 1 ? "them" : "it") first): "
+                + files.map(\.path).joined(separator: ", "))
+        }
+        if !context.isEmpty { request = context.joined(separator: "\n") + "\n\n" + prompt }
         let fullPrompt = threadID == nil ? Memory.preamble(for: workspace) + "\n" + request : request
         do {
             try runner.start(RunRequest(prompt: fullPrompt, workspace: workspace, resume: threadID, auto: autoMode, model: model)) {
