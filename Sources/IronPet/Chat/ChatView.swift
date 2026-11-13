@@ -7,8 +7,14 @@ struct ChatView: View {
     let close: () -> Void
     @FocusState private var inputFocused: Bool
     @State private var showSettings = false
+    /// `--render-previews` only: draw the settings popover's content on its own, since a popover can't render offscreen.
+    var settingsOnly = false
 
     var body: some View {
+        if settingsOnly { settingsPopover } else { chat }
+    }
+
+    private var chat: some View {
         VStack(spacing: 0) {
             header
             Hairline()
