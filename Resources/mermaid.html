@@ -29,9 +29,10 @@
       diagram.innerHTML = "";
       error.textContent = "Mermaid could not render this diagram: " + (e && e.message ? e.message : e);
     }
-    requestAnimationFrame(() => {
+    // setTimeout, not requestAnimationFrame: rAF never fires while the view is off screen.
+    setTimeout(() => {
       window.webkit.messageHandlers.size.postMessage({ h: Math.ceil(document.body.scrollHeight) });
-    });
+    }, 0);
   }
 </script>
 </body>

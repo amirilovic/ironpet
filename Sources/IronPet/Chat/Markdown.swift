@@ -408,7 +408,7 @@ private struct MermaidWebView: NSViewRepresentable {
             if let shown, shown.code == code, shown.dark == dark { return }
             shown = (code, dark)
             let source = (try? String(data: JSONEncoder().encode(code), encoding: .utf8)) ?? "\"\""
-            view.evaluateJavaScript("renderDiagram(\(source), \(dark))")
+            view.evaluateJavaScript("void renderDiagram(\(source), \(dark))")
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
