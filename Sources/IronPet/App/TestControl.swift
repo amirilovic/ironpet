@@ -9,6 +9,8 @@ final class TestControl {
 
     struct Actions {
         let showChat: () -> Void
+        /// The chat panel's frame in top-left screen coordinates, for `screencapture -R`.
+        let chatFrame: () -> CGRect
         let openSession: (String) -> Void
         let capture: (Bool) -> Void
         /// The handler a notification's Allow / Deny button calls.
@@ -37,7 +39,10 @@ final class TestControl {
         case ("GET", "/test/chat"):
             break
         case ("POST", "/test/show-chat"):
-            if body["newChat"] as? Bool == true { chat.newChat() }
+            if body["newChat"] as? Bool == true {
+                chat.newChat()
+                chat.input = ""
+            }
             actions.showChat()
         case ("POST", "/test/chat"):
             actions.showChat()
@@ -71,6 +76,28 @@ final class TestControl {
         case ("POST", "/test/github-poll"):
             actions.github.poll()
             return Self.encode(["ok": true])
+        case ("POST", "/test/voice/start"):
+            // Records from a WAV file instead of the microphone, through the same states and UI.
+            guard ConfigStore.shared.config.voice.enabled else { return Self.encode(["ok": false, "error": "voice notes are off"]) }
+            guard let path = body["file"] as? String, FileManager.default.fileExists(atPath: path) else {
+                return Self.encode(["ok": false, "error": "file is missing"])
+            }
+            actions.showChat()
+            if body["newChat"] as? Bool == true {
+                chat.newChat()
+                chat.input = ""
+            }
+            if let auto = body["autoSend"] as? Bool { chat.sendAfterDictation = auto }
+            if let workspace = body["workspace"] as? String { chat.use(URL(fileURLWithPath: workspace)) }
+            chat.voice.start(.file(URL(fileURLWithPath: path)))
+        case ("POST", "/test/voice/stop"):
+            chat.voice.stop()
+        case ("POST", "/test/stop"):
+            chat.stop()
+        case ("POST", "/test/voice/cancel"):
+            chat.voice.cancel()
+        case ("POST", "/test/voice/retry"):
+            chat.retryVoice()
         case ("GET", "/test/signals"):
             return signalsSnapshot()
         default:
@@ -118,6 +145,10 @@ final class TestControl {
             "needsWorkspace": chat.needsWorkspace,
             "backend": chat.backend.rawValue,
             "attachments": chat.attachments.map(\.path),
+            "input": chat.input,
+            "frame": { let f = actions.chatFrame(); return [f.minX, f.minY, f.width, f.height] }(),
+            "voice": chat.voice.phase.rawValue,
+            "voiceRetry": chat.voiceRetryItem != nil,
         ])
     }
 

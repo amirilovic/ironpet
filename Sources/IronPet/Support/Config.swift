@@ -18,6 +18,18 @@ struct Config: Codable, Equatable {
         var chat = "cmd+opt+g"
         var captureWindow = "cmd+opt+shift+g"
         var captureRegion = "cmd+opt+ctrl+g"
+        /// Hold to record a voice note, release to transcribe it. Only registered while voice notes are on.
+        var voice = "cmd+opt+v"
+    }
+
+    /// Voice notes: record the mic and send the audio to an OpenAI-compatible transcription server. The API key is
+    /// not here; it lives in the Keychain (`VoiceKey`).
+    struct Voice: Codable, Equatable {
+        /// Off by default: turning it on is what lets audio leave the Mac.
+        var enabled = false
+        /// The server's base URL; `/audio/transcriptions` is added to it.
+        var baseUrl = "http://localhost:8000/v1"
+        var model = "mlx-community/parakeet-tdt-0.6b-v3"
     }
 
     struct Reminders: Codable, Equatable {
@@ -61,6 +73,7 @@ struct Config: Codable, Equatable {
     var hotkeys = Hotkeys()
     var reminders = Reminders()
     var integrations = Integrations()
+    var voice = Voice()
 
     static let file = Paths.root.appendingPathComponent("config.json")
 
@@ -99,6 +112,8 @@ struct Config: Codable, Equatable {
         c.editors = c.editors.filter { !$0.name.isEmpty && !$0.bundleId.isEmpty }
         c.reminders.idleResetMinutes = max(1, c.reminders.idleResetMinutes)
         c.reminders.snoozeMinutes = max(1, c.reminders.snoozeMinutes)
+        c.voice.baseUrl = c.voice.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        c.voice.model = c.voice.model.trimmingCharacters(in: .whitespacesAndNewlines)
         return c
     }
 

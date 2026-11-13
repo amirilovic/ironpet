@@ -11,7 +11,7 @@ Please use GitHub's **Report a vulnerability** button on the repository's Securi
 - **Local HTTP server.** The app listens on `127.0.0.1` only (port written to `~/.ironpet/port`). Every request has to carry the random 256-bit token in `~/.ironpet/token` (mode `0600`), or it gets a 403. The `/test/*` endpoints exist only when the app is started with `--test-mode`.
 - **Hooks.** `~/.ironpet/bin/ironpet-hook` is called by Cursor and Claude Code. Status hooks have short timeouts and always exit 0, so they never block or fail your agents. Approval hooks only act for agents ironpet itself started (they carry `IRONPET_RUN_ID`); for every other agent they return immediately. An approval waits at most an hour for an answer; after that, or if the app stops responding, the hook denies.
 - **Approvals.** Agents started from Ghost's chat ask before each file edit, shell command and non-read-only MCP tool. The per-chat **Auto** switch skips those prompts for that chat only. It resets with each new chat and when you open a chat from history. It is remembered only for the chat that was open when the app quit, so a restart doesn't silently turn it off mid-task. Even with Auto on, commands that match a destructive pattern (`rm -rf`, `git push --force`, `git reset --hard`, `git clean -f`, `DROP TABLE`, `mkfs`, `dd if=`, …) still ask. Writes to ironpet's own memory notes (`~/.ironpet/memory`) don't ask. Because these prompts run through the hooks, a chat refuses to start when the hooks for its backend aren't installed, and if the app isn't running the hooks deny.
-- **No API keys.** Chat goes through your existing `cursor-agent` or `claude` login. ironpet sends nothing anywhere itself, except the optional GitHub and Sentry polling below.
+- **No API keys.** Chat goes through your existing `cursor-agent` or `claude` login. ironpet sends nothing anywhere itself, except the optional GitHub and Sentry polling below and voice notes, if you turn them on.
 
 ## Files ironpet writes outside `~/.ironpet`
 
@@ -22,12 +22,14 @@ Please use GitHub's **Report a vulnerability** button on the repository's Securi
 | `~/.cursor/projects/*/mcp-auth.json` | Only with **Share MCP sign-ins** on (off by default) | Turn it off; copied entries stay until you sign out of that server |
 | Login item | Only if you leave Launch at login on in the welcome window | Settings → General, or right-click → Launch at login |
 | Keychain item `ironpet.sentry` | Only if you run `scripts/configure_sentry.sh` | `security delete-generic-password -s ironpet.sentry` |
+| Keychain item `ironpet.voice` | Only if you save an API key in Settings → Voice | Remove in Settings → Voice, or `security delete-generic-password -s ironpet.voice` |
 
 ## What ironpet reads
 
 - `~/.config/gh/hosts.yml` and the `gh` CLI, only with GitHub alerts on (off by default).
 - `~/.ironpet/sentry.json` and its Keychain token, only after you've configured Sentry.
 - Cursor's `storage.json` and iTerm2 via AppleScript, to find the project you're working in.
+- The microphone, only while you record a voice note with voice notes on (off by default). macOS asks for permission the first time you record, not before.
 - Wispr Flow's local database, to pick up dictation while the chat is open.
 
 ## Data in `~/.ironpet`
@@ -45,6 +47,10 @@ The chat that was open when the app quit is reopened on launch. Its id, its Auto
 
 Delete the folder to erase all of it, or run `./scripts/uninstall.sh` to remove ironpet completely (hooks, login item, app, Keychain item, and optionally this folder).
 
+## Voice notes send audio to a server you choose
+
+With voice notes on (Settings → Voice, off by default), each recording is uploaded as a WAV file to the base URL you set, along with the model name and, if you saved one, an `Authorization: Bearer` header carrying your API key. That may be a service such as OpenAI or Groq, or a server on your own Mac. ironpet does not choose the server or fall back to another. While the feature is off, the microphone is never opened and nothing is sent, apart from the one-second test tone that the Test connection button uploads when you press it. The key lives in the Keychain item `ironpet.voice` and is never written to `~/.ironpet`. Recordings are held in memory only: the last one is kept until its transcription succeeds, so Retry can send it again, and none is written to disk. A plain `http://` base URL sends audio and the key unencrypted, so use it only for `localhost`.
+
 ## Integrations are off by default
 
 | Integration | Default | Turn on |
@@ -52,3 +58,4 @@ Delete the folder to erase all of it, or run `./scripts/uninstall.sh` to remove 
 | GitHub PR & CI alerts | Off | Right-click → Integrations |
 | Share MCP sign-ins across folders | Off | Right-click → Integrations (shows a warning first) |
 | Sentry alerts | Off | `./scripts/configure_sentry.sh` |
+| Voice notes (audio sent to a server you choose) | Off | Settings → Voice |

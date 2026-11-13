@@ -80,6 +80,25 @@ final class ConfigTests: XCTestCase {
         try config.save(to: file)
         XCTAssertEqual(Config.load(from: file).config, config)
     }
+
+    func testOldConfigWithoutVoiceKeysKeepsVoiceOff() throws {
+        try write(#"{"pet":{"name":"Mochi"},"hotkeys":{"chat":"cmd+opt+h"}}"#)
+        let (config, error) = Config.load(from: file)
+        XCTAssertNil(error)
+        XCTAssertEqual(config.voice, Config.Voice())
+        XCTAssertFalse(config.voice.enabled)
+        XCTAssertEqual(config.voice.baseUrl, "http://localhost:8000/v1")
+        XCTAssertEqual(config.hotkeys.voice, "cmd+opt+v")
+    }
+
+    func testVoiceKeysRoundTrip() throws {
+        var config = Config()
+        config.voice = Config.Voice(enabled: true, baseUrl: "https://api.groq.com/openai/v1", model: "whisper-large-v3-turbo")
+        try config.save(to: file)
+        XCTAssertEqual(Config.load(from: file).config, config)
+        let saved = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertFalse(saved.lowercased().contains("apikey"))
+    }
 }
 
 final class ShortcutTests: XCTestCase {

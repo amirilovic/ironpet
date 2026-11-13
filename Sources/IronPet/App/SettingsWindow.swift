@@ -74,6 +74,7 @@ struct SettingsView: View {
                 GeneralSettings(model: model).tabItem { Label("General", systemImage: "gearshape") }
                 RemindersSettings().tabItem { Label("Reminders", systemImage: "drop") }
                 IntegrationsSettings().tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }
+                VoiceSettings(model: model).tabItem { Label("Voice", systemImage: "mic") }
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
@@ -253,7 +254,7 @@ private struct ShortcutRow: View {
                 message = "Use ⌘, ⌥ or ⌃ (Shift alone isn't enough), or a function key."
                 return nil
             }
-            let others = [\Config.Hotkeys.chat, \.captureWindow, \.captureRegion].filter { $0 != path }
+            let others = [\Config.Hotkeys.chat, \.captureWindow, \.captureRegion, \.voice].filter { $0 != path }
             if others.contains(where: { Shortcut(store.config.hotkeys[keyPath: $0]) == shortcut }) {
                 message = "\(shortcut.display) is already used for another action."
                 return nil
@@ -271,6 +272,112 @@ private struct ShortcutRow: View {
         monitor = nil
         model.actions.suspendHotKeys(false)
     }
+}
+
+// MARK: - Voice
+
+private struct VoiceSettings: View {
+    @ObservedObject var model: SettingsModel
+    @ObservedObject private var store = ConfigStore.shared
+    @State private var baseUrl = ConfigStore.shared.config.voice.baseUrl
+    @State private var modelName = ConfigStore.shared.config.voice.model
+    @State private var key = ""
+    @State private var keySaved = VoiceKey.isSet
+    @State private var keyError = false
+    @State private var testing = false
+    @State private var testResult: (ok: Bool, text: String)?
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Voice notes", isOn: Binding(get: { store.config.voice.enabled },
+                                                    set: { on in store.update { $0.voice.enabled = on } }))
+            } footer: {
+                Text("Off by default. When on, a microphone button appears in the chat, and what you record is sent to the server below. ironpet ships no speech model; point it at any server with an OpenAI-style /audio/transcriptions endpoint. Nothing is recorded or sent while this is off.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Server") {
+                TextField("Base URL", text: $baseUrl)
+                    .onSubmit(saveServer)
+                    .onChange(of: baseUrl) { saveServer() }
+                TextField("Model", text: $modelName)
+                    .onSubmit(saveServer)
+                    .onChange(of: modelName) { saveServer() }
+                LabeledContent("API key") {
+                    HStack {
+                        SecureField(keySaved ? "Saved in Keychain" : "Optional", text: $key)
+                            .onSubmit(saveKey)
+                            .multilineTextAlignment(.trailing)
+                        if !key.isEmpty { Button("Save", action: saveKey) }
+                        if keySaved && key.isEmpty {
+                            Button("Remove") {
+                                VoiceKey.delete()
+                                keySaved = false
+                            }
+                        }
+                    }
+                }
+                if keyError {
+                    Text("Could not save the key to the Keychain.").font(.caption).foregroundStyle(.red)
+                }
+                LabeledContent("Connection") {
+                    HStack {
+                        if testing { ProgressView().controlSize(.small) }
+                        Button("Test connection", action: testConnection).disabled(testing)
+                    }
+                }
+                if let testResult {
+                    Text(testResult.text)
+                        .font(.caption)
+                        .foregroundStyle(testResult.ok ? Color.green : Color.red)
+                        .textSelection(.enabled)
+                }
+            }
+            Section {
+                ShortcutRow(title: "Hold to talk", path: \.voice, model: model)
+            } footer: {
+                Text("The transcript lands in the chat input, or is sent right away when \"Send after dictation\" is on in the chat's settings menu. Hold the shortcut to record and release to transcribe. The key is kept in your Keychain, not in config.json.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func saveServer() {
+        store.update {
+            $0.voice.baseUrl = baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            $0.voice.model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    private func saveKey() {
+        keyError = !VoiceKey.save(key)
+        keySaved = VoiceKey.isSet
+        if !keyError { key = "" }
+    }
+
+    /// Sends one second of a quiet tone: enough to prove the URL, key and model are accepted without needing speech.
+    private func testConnection() {
+        saveServer()
+        if !key.isEmpty { saveKey() }
+        testing = true
+        testResult = nil
+        let transcriber = Transcriber(baseURL: baseUrl, model: modelName, apiKey: VoiceKey.load(), timeout: 30)
+        Task {
+            do {
+                let text = try await transcriber.transcribe(wav: Self.testClip)
+                testResult = (true, text.isEmpty ? "Connected. The server accepted the test clip." : "Connected. The server replied: \"\(text)\"")
+            } catch {
+                testResult = (false, error.localizedDescription)
+            }
+            testing = false
+        }
+    }
+
+    private static let testClip: Data = {
+        let samples = (0..<WAV.sampleRate).map { Int16(sin(Double($0) * 2 * .pi * 440 / Double(WAV.sampleRate)) * 3000) }
+        return WAV.encode(samples)
+    }()
 }
 
 // MARK: - Reminders
