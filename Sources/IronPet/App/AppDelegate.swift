@@ -416,6 +416,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "Quit ironpet", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu
+        main.addItem(submenu("Edit", Self.editItems()))
+        let newChat = NSMenuItem(title: "New Chat", action: #selector(newChat(_:)), keyEquivalent: "n")
+        newChat.target = self
+        main.addItem(submenu("Chat", [newChat]))
+        // performClose(_:) beeps on the chat panel, which has no .closable style, so close the key window directly.
+        let close = NSMenuItem(title: "Close", action: #selector(closeKeyWindow(_:)), keyEquivalent: "w")
+        close.target = self
+        main.addItem(submenu("Window", [close]))
         return main
+    }
+
+    /// Key equivalents reach a text field only through the main menu, so without these items ⌘Z, ⌘X, ⌘C,
+    /// ⌘A and friends did nothing in the chat. The actions go to the first responder. AppKit adds
+    /// "Start Dictation" and "Emoji & Symbols" to a menu titled "Edit" by itself.
+    private static func editItems() -> [NSMenuItem] {
+        func item(_ title: String, _ action: Selector, _ key: String, _ modifiers: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            return item
+        }
+        return [
+            item("Undo", Selector(("undo:")), "z"),
+            item("Redo", Selector(("redo:")), "z", [.command, .shift]),
+            .separator(),
+            item("Cut", #selector(NSText.cut(_:)), "x"),
+            item("Copy", #selector(NSText.copy(_:)), "c"),
+            item("Paste", #selector(NSText.paste(_:)), "v"),
+            item("Paste and Match Style", #selector(NSTextView.pasteAsPlainText(_:)), "v", [.command, .option, .shift]),
+            item("Delete", #selector(NSText.delete(_:)), ""),
+            item("Select All", #selector(NSText.selectAll(_:)), "a"),
+        ]
+    }
+
+    private func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {
+        let menu = NSMenu(title: title)
+        items.forEach(menu.addItem)
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.submenu = menu
+        return item
+    }
+
+    @objc private func closeKeyWindow(_ sender: Any?) {
+        NSApp.keyWindow?.close()
+    }
+
+    @objc private func newChat(_ sender: Any?) {
+        chat.newChat()
+        showChat()
     }
 }

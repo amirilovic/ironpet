@@ -379,11 +379,17 @@ struct ChatView: View {
                     .lineLimit(1...8)
                     .focused($inputFocused)
                     .onSubmit(session.send)
+                    // Return sends; Shift-Return adds a line break at the caret (Option-Return already did).
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.contains(.shift) else { return .ignored }
+                        NSApp.sendAction(#selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)), to: nil, from: nil)
+                        return .handled
+                    }
                     .onChange(of: session.input) { old, new in session.inputChanged(from: old, to: new) }
                     .padding(.horizontal, 4)
                     .padding(.vertical, 5)
                 if session.isRunning {
-                    sendButton("stop.fill", color: .red, help: "Stop", action: session.stop)
+                    sendButton("stop.fill", color: .red, help: "Stop (Esc)", action: session.stop)
                 } else {
                     sendButton("arrow.up", color: .accentColor, help: "Send (Enter)", action: session.send)
                         .disabled(session.input.trimmingCharacters(in: .whitespaces).isEmpty && session.attachments.isEmpty)
