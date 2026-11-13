@@ -26,6 +26,9 @@ enum PreviewRenderer {
             session.loadPreview(preview)
             render(ChatView(session: session, close: {}).frame(width: 520, height: 640).panel(), to: dir, file)
         }
+        let settings = ChatSession(restore: false)
+        settings.loadPreview(.done)
+        render(ChatView(session: settings, close: {}, settingsOnly: true).panel(), to: dir, "chat-settings")
 
         let sessions = SessionStore()
         sessions.loadPreview(sampleSessions)

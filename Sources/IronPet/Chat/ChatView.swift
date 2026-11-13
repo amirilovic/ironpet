@@ -6,8 +6,15 @@ struct ChatView: View {
     @ObservedObject private var config = ConfigStore.shared
     let close: () -> Void
     @FocusState private var inputFocused: Bool
+    @State private var showSettings = false
+    /// `--render-previews` only: draw the settings popover's content on its own, since a popover can't render offscreen.
+    var settingsOnly = false
 
     var body: some View {
+        if settingsOnly { settingsPopover } else { chat }
+    }
+
+    private var chat: some View {
         VStack(spacing: 0) {
             header
             Hairline()
@@ -41,36 +48,17 @@ struct ChatView: View {
     private var header: some View {
         HStack(spacing: 10) {
             PetAvatar(size: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(ConfigStore.shared.config.pet.name).font(.system(size: 13, weight: .semibold))
-                Menu {
-                    ForEach(session.recents, id: \.self) { url in
-                        Button(url.lastPathComponent) { session.use(url) }
-                    }
-                    Divider()
-                    Button("No project (general question)", action: session.useNoProject)
-                    Button("Choose folder…", action: chooseFolder)
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: session.needsWorkspace ? "folder.badge.questionmark" : "folder.fill")
-                        Text(session.needsWorkspace ? "Choose a project" : session.workspaceLabel)
-                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
-                    }
-                    .font(.system(size: 11, weight: .medium))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(Color.primary.opacity(0.07), in: Capsule())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .foregroundStyle(.secondary)
-            }
+            Text(ConfigStore.shared.config.pet.name).font(.system(size: 13, weight: .semibold))
             Spacer()
-            autoToggle
+            if session.autoMode {
+                // The switch lives in settings; this stays so it is always obvious the agent runs unattended.
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .help("Auto is on: the agent edits and runs commands without asking")
+            }
             HStack(spacing: 2) {
-                historyMenu
-                iconButton("square.and.pencil", help: "New chat", action: session.newChat)
+                settingsButton
                 iconButton("xmark", help: "Close (Esc)", action: close)
             }
         }
@@ -78,26 +66,75 @@ struct ChatView: View {
         .padding(.vertical, 10)
     }
 
-    /// A pill instead of a switch: reads as a mode, and turns orange so it is obvious the agent runs unattended.
-    private var autoToggle: some View {
-        Button { session.autoMode.toggle() } label: {
-            HStack(spacing: 4) {
-                Image(systemName: session.autoMode ? "bolt.fill" : "bolt")
-                Text("Auto")
+    /// Project, agent, model and dictation live behind one button, so the header and composer stay clear.
+    private var settingsButton: some View {
+        Button { showSettings.toggle() } label: { Image(systemName: "slider.horizontal.3").font(.system(size: 13)) }
+            .buttonStyle(HoverIconStyle())
+            .help("Chat settings")
+            .popover(isPresented: $showSettings, arrowEdge: .bottom) { settingsPopover }
+    }
+
+    /// Laid out like System Settings: grouped cards, label on the left, value or control on the right.
+    private var settingsPopover: some View {
+        VStack(spacing: 10) {
+            SettingsCard {
+                SettingsRow("Project") { projectMenu }
+                SettingsRow("Agent") { backendMenu }
+                SettingsRow("Model", last: true) { modelMenu }
             }
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(session.autoMode ? Color.orange : Color.secondary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background(session.autoMode ? Color.orange.opacity(0.16) : Color.primary.opacity(0.06), in: Capsule())
-            .overlay(Capsule().strokeBorder(session.autoMode ? Color.orange.opacity(0.45) : Color.clear))
-            .contentShape(Capsule())
+            SettingsCard {
+                SettingsRow("Auto") {
+                    Toggle("", isOn: $session.autoMode)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .tint(.orange)
+                }
+                .help("Let the agent edit and run commands without asking (destructive commands still ask)")
+                SettingsRow("Send after dictation", last: true) {
+                    Toggle("", isOn: $session.sendAfterDictation)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                }
+                .help("Send the message as soon as you stop talking (hold fn to talk)")
+            }
+            HStack(spacing: 8) {
+                Button {
+                    session.newChat()
+                    showSettings = false
+                } label: { Label("New chat", systemImage: "square.and.pencil") }
+                .buttonStyle(.borderedProminent)
+                historyMenu
+                Button {
+                    NSWorkspace.shared.open(Memory.directory)
+                    showSettings = false
+                } label: { Label("Memory folder", systemImage: "brain") }
+                .help("Open the notes Ghost keeps about you and your projects")
+            }
+            .controlSize(.small)
+            .fixedSize()
+            .frame(maxWidth: .infinity)
+            .padding(.top, 2)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Auto")
-        .accessibilityValue(session.autoMode ? "on" : "off")
-        .help("Let the agent edit and run commands without asking (destructive commands still ask)")
-        .animation(.easeInOut(duration: 0.15), value: session.autoMode)
+        .padding(12)
+        .frame(width: 360)
+    }
+
+    private var projectMenu: some View {
+        Menu {
+            ForEach(session.recents, id: \.self) { url in
+                Button(url.lastPathComponent) { session.use(url) }
+            }
+            Divider()
+            Button("No project (general question)", action: session.useNoProject)
+            Button("Choose folder…", action: chooseFolder)
+        } label: {
+            Text(session.needsWorkspace ? "Choose…" : session.workspaceLabel)
+        }
+        .settingsValueMenu()
+        .disabled(session.isRunning)
+        .help("Folder the agent works in. Switching starts a new chat.")
     }
 
     private var historyMenu: some View {
@@ -106,18 +143,15 @@ struct ChatView: View {
             ForEach(session.history) { thread in
                 Button("\(thread.title) — \(URL(fileURLWithPath: thread.workspace).lastPathComponent)") {
                     session.open(thread)
+                    showSettings = false
                 }
             }
-            Divider()
-            Button("Open memory folder") { NSWorkspace.shared.open(Memory.directory) }
         } label: {
-            Image(systemName: "clock.arrow.circlepath").font(.system(size: 13))
+            Label("Previous chats", systemImage: "clock.arrow.circlepath")
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
         .menuIndicator(.hidden)
         .fixedSize()
-        .frame(width: 26, height: 26)
-        .help("Previous chats")
     }
 
     private func iconButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
@@ -338,20 +372,16 @@ struct ChatView: View {
                 .padding(.horizontal, 4)
                 .padding(.top, 4)
             }
-            TextField(session.isRunning ? "\(ConfigStore.shared.config.pet.name) is working…" : "Ask \(ConfigStore.shared.config.pet.name)…", text: $session.input, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13.5))
-                .lineLimit(1...8)
-                .focused($inputFocused)
-                .onSubmit(session.send)
-                .onChange(of: session.input) { old, new in session.inputChanged(from: old, to: new) }
-                .padding(.horizontal, 4)
-                .padding(.top, 2)
-            HStack(spacing: 4) {
-                backendMenu
-                modelMenu
-                Spacer()
-                dictationToggle
+            HStack(alignment: .bottom, spacing: 6) {
+                TextField(session.isRunning ? "\(ConfigStore.shared.config.pet.name) is working…" : "Ask \(ConfigStore.shared.config.pet.name)…", text: $session.input, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13.5))
+                    .lineLimit(1...8)
+                    .focused($inputFocused)
+                    .onSubmit(session.send)
+                    .onChange(of: session.input) { old, new in session.inputChanged(from: old, to: new) }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 5)
                 if session.isRunning {
                     sendButton("stop.fill", color: .red, help: "Stop", action: session.stop)
                 } else {
@@ -370,20 +400,6 @@ struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 12)
-    }
-
-    private var dictationToggle: some View {
-        Button { session.sendAfterDictation.toggle() } label: {
-            Image(systemName: session.sendAfterDictation ? "waveform.badge.checkmark" : "waveform")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(session.sendAfterDictation ? Color.accentColor : Color.secondary)
-                .frame(width: 26, height: 26)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Send after dictation")
-        .accessibilityValue(session.sendAfterDictation ? "on" : "off")
-        .help(session.sendAfterDictation ? "Send after dictation: on (hold fn to talk)" : "Send after dictation: off (hold fn to talk)")
     }
 
     private func sendButton(_ symbol: String, color: Color, help: String, action: @escaping () -> Void) -> some View {
@@ -406,12 +422,9 @@ struct ChatView: View {
                 }
             }
         } label: {
-            Label(session.backend.displayName, systemImage: "terminal")
+            Text(session.backend.displayName)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .controlSize(.small)
-        .foregroundStyle(.secondary)
+        .settingsValueMenu()
         .disabled(session.isRunning)
         .help("Agent that runs your request. Switching starts a new chat.")
     }
@@ -439,12 +452,9 @@ struct ChatView: View {
                 }
             }
         } label: {
-            Label(session.modelName, systemImage: "cpu")
+            Text(session.modelName)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .controlSize(.small)
-        .foregroundStyle(.secondary)
+        .settingsValueMenu()
         .disabled(session.isRunning)
         .help("Model used for the next message")
     }
@@ -788,5 +798,49 @@ private struct PickerRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+private struct SettingsCard<Content: View>: View {
+    @ViewBuilder let content: Content
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.08)))
+    }
+}
+
+private struct SettingsRow<Content: View>: View {
+    let title: String
+    let last: Bool
+    let content: Content
+
+    init(_ title: String, last: Bool = false, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.last = last
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(title).font(.system(size: 13))
+                Spacer(minLength: 12)
+                content
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 36)
+            if !last { Hairline().padding(.horizontal, 12) }
+        }
+    }
+}
+
+private extension View {
+    /// A menu that reads as the row's value: secondary text with a small chevron, aligned right.
+    func settingsValueMenu() -> some View {
+        self.menuStyle(.borderlessButton)
+            .fixedSize()
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
     }
 }
