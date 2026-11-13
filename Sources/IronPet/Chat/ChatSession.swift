@@ -123,9 +123,11 @@ final class ChatSession: ObservableObject {
 
     private func restoreLastChat() {
         let defaults = UserDefaults.standard
+        // Read Auto first: apply(_:) turns Auto off, and its didSet would overwrite the saved value.
+        let savedAuto = defaults.bool(forKey: Self.autoKey)
         if let id = defaults.string(forKey: Self.threadKey), let thread = ThreadStore.load(id) {
             apply(thread.restoredAfterQuit())
-            autoMode = defaults.bool(forKey: Self.autoKey)
+            autoMode = savedAuto
         }
         input = defaults.string(forKey: Self.draftKey) ?? ""
         attachments = (defaults.stringArray(forKey: Self.attachmentsKey) ?? [])
