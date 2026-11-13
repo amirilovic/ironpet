@@ -22,7 +22,7 @@ enum HookScript {
       if [ -z "${IRONPET_RUN_ID:-}" ]; then printf '{}\n'; exit 0; fi
       RESPONSE=""
       if [ -r "$DIR/port" ] && [ -r "$DIR/token" ]; then
-        RESPONSE="$(printf '%s' "$PAYLOAD" | curl -s --connect-timeout 1 -X POST \
+        RESPONSE="$(printf '%s' "$PAYLOAD" | curl -s --connect-timeout 1 --max-time 3600 -X POST \
           -H "Content-Type: application/json" \
           -H "X-Ironpet-Token: $(cat "$DIR/token")" \
           -H "X-Ironpet-Source: $SOURCE" \
