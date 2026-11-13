@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// One quick-chat thread with the pet, backed by headless agent CLI turns (cursor-agent or Claude Code).
@@ -94,6 +95,10 @@ final class ChatSession: ObservableObject {
     private var decided: [String: Bool] = [:]
     private var dictationTimer: Timer?
     private var prefilling = false
+    let voice = VoiceController()
+    private var voiceChanges: AnyCancellable?
+    /// The transcription error that offers Retry, so only that card shows the button.
+    @Published private(set) var voiceRetryItem: UUID?
 
     /// Cursor preToolUse tools allowed without asking. Shell is gated on beforeShellExecution, MCP on beforeMCPExecution.
     static let cursorUngated: Set<String> = ["Read", "Grep", "Glob", "LS", "SemanticSearch", "ReadLints", "WebSearch",
@@ -119,6 +124,32 @@ final class ChatSession: ObservableObject {
             ?? (backend == .cursor ? UserDefaults.standard.string(forKey: "chatModel") : nil)
         Task { cursorModels = await ModelCatalog.refresh() }
         if restore { restoreLastChat() }
+        // Phase changes are rare (start, stop, result), so forwarding them re-renders the composer only then.
+        voiceChanges = voice.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+        voice.onTranscript = { [weak self] in self?.receiveTranscript($0) }
+        voice.onFailure = { [weak self] message, canRetry in self?.voiceFailed(message, canRetry: canRetry) }
+    }
+
+    /// A voice note's text goes into the input to edit, or is sent straight away when "Send after dictation" is on, the same switch Wispr Flow dictation uses.
+    /// It is not run through the dictation heuristics, which would send any multi-word insert.
+    func receiveTranscript(_ text: String) {
+        let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        prefilling = true
+        input = existing.isEmpty ? text : existing + " " + text
+        if sendAfterDictation { send() }
+    }
+
+    private func voiceFailed(_ message: String, canRetry: Bool) {
+        let item = Item(kind: .error(message))
+        items.append(item)
+        voiceRetryItem = canRetry ? item.id : nil
+    }
+
+    func retryVoice() {
+        guard let id = voiceRetryItem else { return }
+        items.removeAll { $0.id == id }
+        voiceRetryItem = nil
+        voice.retry()
     }
 
     private func restoreLastChat() {

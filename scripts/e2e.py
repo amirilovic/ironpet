@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 HOME = os.path.expanduser("~")
@@ -537,14 +538,227 @@ def scenario_settings():
         record("Settings: hand edits to config.json appear in the window", bool(shown))
 
 
+SHOTS = os.environ.get("IRONPET_E2E_SHOTS", "/tmp/ironpet-e2e-shots")
+MLX_PORT = 8000
+
+
+def set_voice_config(**voice):
+    config = read_config()
+    config.setdefault("voice", {}).update(voice)
+    json.dump(config, open(CONFIG, "w"), indent=2)
+    time.sleep(2.6)  # the app re-reads config.json every 2 s
+
+
+def speak(text, name):
+    """A 16 kHz mono WAV of `text`, spoken by macOS."""
+    os.makedirs(SHOTS, exist_ok=True)
+    aiff, wav = f"{SHOTS}/{name}.aiff", f"{SHOTS}/{name}.wav"
+    subprocess.run(["say", "-o", aiff, text], check=True)
+    subprocess.run(["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", aiff, wav], check=True)
+    return wav
+
+
+def voice_state():
+    return chat()["voice"]
+
+
+def shot(name):
+    x, y, w, h = chat()["frame"]
+    subprocess.run(["screencapture", "-x", "-R", f"{int(x)},{int(y)},{int(w)},{int(h)}", f"{SHOTS}/{name}.png"])
+
+
+def set_dark_mode(on):
+    osa(f'tell application "System Events" to tell appearance preferences to set dark mode to {"true" if on else "false"}')
+    time.sleep(1.5)
+
+
+class SlowTranscriber:
+    """An OpenAI-style server that waits before answering, so the transcribing state can be seen, and counts requests."""
+
+    def __init__(self, port=8001, delay=4.0):
+        import http.server
+        import threading
+        outer = self
+        self.requests = 0
+        self.delay = delay
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                outer.requests += 1
+                time.sleep(outer.delay)
+                body = b'{"text": "slow stub transcript"}'
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except OSError:
+                    pass  # the client cancelled
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+
+
+def scenario_voice():
+    """Voice notes against a real local mlx-audio server (Parakeet), driven by a WAV file instead of the microphone."""
+    server = None
+    slow = None
+    auto = subprocess.run(["defaults", "read", DEFAULTS_DOMAIN, "sendAfterDictation"], capture_output=True, text=True).stdout.strip()
+    dark = osa('tell application "System Events" to tell appearance preferences to get dark mode') == "true"
+    with PreservedUserState():
+        try:
+            relaunch(test_mode=True)
+            wav = speak("Hello from the voice note test. Please summarise the readme.", "voice-note")
+            local = {"enabled": True, "baseUrl": f"http://localhost:{MLX_PORT}/v1",
+                     "model": "mlx-community/parakeet-tdt-0.6b-v3"}
+            set_voice_config(enabled=False)
+            record("Voice: off, the test endpoint refuses to record",
+                   call("POST", "/test/voice/start", {"file": wav, "autoSend": False}).get("error") == "voice notes are off")
+
+            # S6: nothing listens yet, so the transcription fails with an error that offers Retry.
+            set_voice_config(**local)
+            call("POST", "/test/show-chat", {"newChat": True})
+            call("POST", "/test/voice/start", {"file": wav, "autoSend": False})
+            wait_for(lambda: voice_state() == "recording", 5)
+            time.sleep(1.5)
+            call("POST", "/test/voice/stop")
+            c = wait_for(lambda: (lambda c: c if c["voice"] == "idle" and c["items"] else None)(chat()), 20)
+            errors = [i for i in (c or {"items": []})["items"] if i["kind"] == "error"]
+            record("Voice: unreachable server shows an error with Retry", bool(errors) and c["voiceRetry"] and c["input"] == "",
+                   errors[0]["text"] if errors else "no error item")
+
+            server = subprocess.Popen(["uvx", "--from", "mlx-audio[server]", "mlx_audio.server", "--port", str(MLX_PORT)],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            def up():
+                try:
+                    urllib.request.urlopen(f"http://localhost:{MLX_PORT}/v1/models", timeout=2)
+                    return True
+                except urllib.error.HTTPError:
+                    return True
+                except Exception:
+                    return False
+
+            record("Voice: mlx-audio server started", bool(wait_for(up, 240, 2)))
+            call("POST", "/test/voice/retry")
+            c = wait_for(lambda: (lambda c: c if c["input"] else None)(chat()), 90)
+            record("Voice: Retry re-sends the same recording and succeeds", bool(c) and "voice note" in c["input"].lower()
+                   and not c["voiceRetry"], c["input"] if c else "no transcript")
+
+            # S4: the transcript goes into the input and nothing is sent.
+            call("POST", "/test/show-chat", {"newChat": True})
+            call("POST", "/test/voice/start", {"file": wav, "autoSend": False})
+            time.sleep(1.5)
+            call("POST", "/test/voice/stop")
+            c = wait_for(lambda: (lambda c: c if c["input"] else None)(chat()), 90)
+            record("Voice: transcript lands in the input and is not sent",
+                   bool(c) and "summar" in c["input"].lower() and not any(i["kind"] == "user" for i in c["items"]),
+                   c["input"] if c else "no transcript")
+
+            # S5: with auto-send on the transcript is sent as a chat message.
+            fresh_workspace()
+            call("POST", "/test/voice/start", {"file": wav, "newChat": True, "workspace": WS, "autoSend": True})
+            time.sleep(1.5)
+            call("POST", "/test/voice/stop")
+            c = wait_for(lambda: (lambda c: c if any(i["kind"] == "user" for i in c["items"]) else None)(chat()), 90)
+            sent = [i["text"] for i in c["items"] if i["kind"] == "user"] if c else []
+            record("Voice: send automatically sends the transcript", bool(sent) and c["input"] == "", "; ".join(sent))
+            call("POST", "/test/stop")
+            call("POST", "/test/show-chat", {"newChat": True})
+
+            # S11 and S12: the recording UI, with a server slow enough to catch the transcribing state.
+            slow = SlowTranscriber()
+            set_voice_config(baseUrl="http://127.0.0.1:8001/v1")
+            for mode in ("light", "dark"):
+                set_dark_mode(mode == "dark")
+                call("POST", "/test/show-chat", {"newChat": True})
+                call("POST", "/test/voice/start", {"file": wav, "autoSend": False})
+                time.sleep(3.5)
+                record(f"Voice: recording state ({mode})", voice_state() == "recording")
+                shot(f"voice-recording-{mode}")
+                call("POST", "/test/voice/stop")
+                time.sleep(0.8)
+                record(f"Voice: transcribing state ({mode})", voice_state() == "transcribing")
+                shot(f"voice-transcribing-{mode}")
+                c = wait_for(lambda: (lambda c: c if c["input"] else None)(chat()), 20)
+                record(f"Voice: input returns with the transcript ({mode})",
+                       bool(c) and c["voice"] == "idle" and c["input"] == "slow stub transcript")
+                call("POST", "/test/show-chat", {"newChat": True})
+                call("POST", "/test/stop")
+
+            # Cancel while recording, then while transcribing: the input stays empty.
+            set_dark_mode(False)
+            call("POST", "/test/show-chat", {"newChat": True})
+            before = slow.requests
+            call("POST", "/test/voice/start", {"file": wav, "autoSend": False})
+            time.sleep(1.2)
+            call("POST", "/test/voice/cancel")
+            time.sleep(1)
+            c = chat()
+            record("Voice: cancel while recording sends nothing",
+                   c["voice"] == "idle" and c["input"] == "" and slow.requests == before)
+            call("POST", "/test/voice/start", {"file": wav, "autoSend": False})
+            time.sleep(1.2)
+            call("POST", "/test/voice/stop")
+            time.sleep(0.8)
+            call("POST", "/test/voice/cancel")
+            time.sleep(slow.delay + 1)
+            c = chat()
+            record("Voice: cancel while transcribing leaves the input empty", c["voice"] == "idle" and c["input"] == "")
+        finally:
+            # "Send after dictation" lives in the app's preferences, outside config.json: put the user's value back.
+            subprocess.run(["defaults", "write", DEFAULTS_DOMAIN, "sendAfterDictation", "-bool", "false" if auto == "0" else "true"])
+            if slow:
+                slow.close()
+            if server:
+                server.terminate()
+            set_dark_mode(dark)
+
+
+def scenario_voice_key():
+    """An API key typed in Settings → Voice goes to the Keychain and to no file under ~/.ironpet."""
+    secret = "e2e-key-" + str(int(time.time()))
+    service = ["security", "find-generic-password", "-s", "ironpet.voice"]
+    if subprocess.run(service, capture_output=True).returncode == 0:
+        return record("Voice key: Keychain item", False, "SKIPPED: an ironpet.voice key already exists; not overwriting it")
+    with PreservedUserState():
+        try:
+            if not open_settings():
+                return record("Voice key: Settings opens", False)
+            win = "ironpet Settings"
+            osa(f'tell application "System Events" to tell process "IronPet" to click radio button 4 of tab group 1 of group 1 of window "{win}"')
+            time.sleep(1)
+            ax(win, "focus", "AXTextField", "API key")
+            keystroke(secret)
+            keystroke("\r")
+            time.sleep(1)
+            stored = subprocess.run([*service, "-w"], capture_output=True, text=True).stdout.strip()
+            record("Voice key: saved in the Keychain", stored == secret)
+            time.sleep(2.5)
+            hits = subprocess.run(["grep", "-rl", secret, f"{HOME}/.ironpet"], capture_output=True, text=True).stdout.strip()
+            record("Voice key: not in any file under ~/.ironpet", hits == "", hits)
+        finally:
+            subprocess.run(["security", "delete-generic-password", "-s", "ironpet.voice"], capture_output=True)
+
+
 SCENARIOS = {"cursor": scenario_cursor, "claude": scenario_claude, "auto": scenario_auto, "picker": scenario_picker,
              "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
              "notification": scenario_notification_approval, "github": scenario_github, "mcp": scenario_mcp,
-             "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings}
+             "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
+             "voice": scenario_voice, "voice-key": scenario_voice_key}
 
 # Need MCP servers signed in with cursor-agent: "mcp" a Langfuse MCP (its write is denied, so nothing is created),
 # "sentry" a Sentry MCP. Run them by name, e.g. `python3 scripts/e2e.py mcp sentry`.
-OPT_IN = {"mcp", "sentry"}
+# "voice" starts a local mlx-audio server with `uvx` (needs the Parakeet model in the Hugging Face cache) and flips
+# the system between light and dark mode for screenshots, saved to $IRONPET_E2E_SHOTS.
+OPT_IN = {"mcp", "sentry", "voice", "voice-key"}
 
 if __name__ == "__main__":
     unknown = [name for name in sys.argv[1:] if name not in SCENARIOS]

@@ -97,7 +97,7 @@ struct ChatView: View {
                         .toggleStyle(.switch)
                         .controlSize(.small)
                 }
-                .help("Send the message as soon as you stop talking (hold fn to talk)")
+                .help("Send the message as soon as you stop talking (Wispr Flow's fn, or the voice note shortcut)")
             }
             HStack(spacing: 8) {
                 Button {
@@ -215,7 +215,12 @@ struct ChatView: View {
 
     private var hints: some View {
         HStack(spacing: 14) {
-            hint("mic.fill", keys: ["fn"], "talk")
+            // With voice notes on, the hold-to-talk shortcut is ironpet's own; otherwise it is Wispr Flow's fn.
+            if let voiceKey = VoiceController.hotkey(in: config.config).flatMap(Shortcut.display) {
+                hint("mic.fill", keys: [voiceKey], "hold to talk")
+            } else {
+                hint("mic.fill", keys: ["fn"], "talk")
+            }
             hint("macwindow", keys: ["⇧⌥⌘G"], "window")
             hint("crop", keys: ["⌃⌥⌘G"], "region")
         }
@@ -314,12 +319,19 @@ struct ChatView: View {
             case .tool:
                 EmptyView()
             case .error(let text):
-                Label(text, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.red)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(text, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red)
+                    if session.voiceRetryItem == item.id {
+                        Button("Retry", action: session.retryVoice)
+                            .controlSize(.small)
+                            .help("Send the same recording again")
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
             }
         }
     }
@@ -360,6 +372,32 @@ struct ChatView: View {
     // MARK: Composer
 
     private var composer: some View {
+        SwiftUI.Group {
+            if session.voice.phase != .idle {
+                VoiceBar(voice: session.voice)
+            } else {
+                composerInput
+            }
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14)
+            .strokeBorder(voiceActive || inputFocused ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.1),
+                          lineWidth: voiceActive || inputFocused ? 1.5 : 1))
+        .contentShape(Rectangle())
+        .onTapGesture { if !voiceActive { inputFocused = true } }
+        .animation(.easeOut(duration: 0.12), value: inputFocused)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+        .onChange(of: session.voice.phase) { _, phase in
+            if phase == .idle { inputFocused = true }
+        }
+    }
+
+    private var voiceActive: Bool { session.voice.phase != .idle }
+
+    private var composerInput: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !session.attachments.isEmpty {
                 HStack(spacing: 6) {
@@ -399,6 +437,13 @@ struct ChatView: View {
                     .onChange(of: session.input) { old, new in session.inputChanged(from: old, to: new) }
                     .padding(.horizontal, 4)
                     .padding(.vertical, 5)
+                if config.config.voice.enabled {
+                    Button { session.voice.start() } label: {
+                        Image(systemName: "mic").font(.system(size: 13, weight: .semibold))
+                    }
+                    .buttonStyle(HoverIconStyle())
+                    .help("Record a voice note")
+                }
                 if session.isRunning {
                     sendButton("stop.fill", color: .red, help: "Stop (Esc)", action: session.stop)
                 } else {
@@ -407,16 +452,6 @@ struct ChatView: View {
                 }
             }
         }
-        .padding(10)
-        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14)
-            .strokeBorder(inputFocused ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.1), lineWidth: inputFocused ? 1.5 : 1))
-        .contentShape(Rectangle())
-        .onTapGesture { inputFocused = true }
-        .animation(.easeOut(duration: 0.12), value: inputFocused)
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 12)
     }
 
     private func sendButton(_ symbol: String, color: Color, help: String, action: @escaping () -> Void) -> some View {

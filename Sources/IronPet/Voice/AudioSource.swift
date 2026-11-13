@@ -1,0 +1,156 @@
+import AVFoundation
+
+/// Where a voice note's audio comes from. The microphone in the app; a WAV file in `--test-mode`, so the same
+/// recording UI and transcription path can be driven without a person speaking.
+protocol AudioSource: AnyObject {
+    /// Starts capturing. `level` gets a 0...1 loudness value, from any thread.
+    func start(level: @escaping @Sendable (Float) -> Void) throws
+    /// Stops and returns everything captured as a 16 kHz mono WAV.
+    func finish() -> Data
+    /// Stops and drops the audio.
+    func cancel()
+}
+
+enum VoiceError: LocalizedError {
+    case noInput
+    case unreadable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noInput: return "No microphone input is available."
+        case .unreadable(let path): return "Could not read audio from \(path)."
+        }
+    }
+}
+
+/// Converts any PCM buffer to 16 kHz mono Float32, keeping resampler state between calls.
+final class PCMConverter: @unchecked Sendable {
+    static let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(WAV.sampleRate),
+                                            channels: 1, interleaved: false)!
+    private let converter: AVAudioConverter
+
+    init?(from format: AVAudioFormat) {
+        guard let converter = AVAudioConverter(from: format, to: Self.outputFormat) else { return nil }
+        self.converter = converter
+    }
+
+    func convert(_ buffer: AVAudioPCMBuffer) -> [Float] {
+        let ratio = Self.outputFormat.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
+        guard let output = AVAudioPCMBuffer(pcmFormat: Self.outputFormat, frameCapacity: capacity) else { return [] }
+        var supplied = false
+        var error: NSError?
+        converter.convert(to: output, error: &error) { _, status in
+            if supplied {
+                status.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            status.pointee = .haveData
+            return buffer
+        }
+        guard error == nil, let channel = output.floatChannelData?[0] else { return [] }
+        return Array(UnsafeBufferPointer(start: channel, count: Int(output.frameLength)))
+    }
+
+    static func int16(_ floats: [Float]) -> [Int16] {
+        floats.map { Int16(max(-1, min(1, $0)) * 32767) }
+    }
+
+    /// Loudness on a 0...1 scale: RMS in dB, with -50 dB and below as silence.
+    static func level(of floats: ArraySlice<Float>) -> Float {
+        guard !floats.isEmpty else { return 0 }
+        let meanSquare = floats.reduce(Float(0)) { $0 + $1 * $1 } / Float(floats.count)
+        let decibels = 10 * log10(max(meanSquare, 1e-10))
+        return max(0, min(1, (decibels + 50) / 50))
+    }
+}
+
+/// The default input device through AVAudioEngine.
+final class MicrophoneSource: AudioSource, @unchecked Sendable {
+    private let engine = AVAudioEngine()
+    private let lock = NSLock()
+    private var samples: [Int16] = []
+    private var running = false
+
+    func start(level: @escaping @Sendable (Float) -> Void) throws {
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0, let converter = PCMConverter(from: format) else {
+            throw VoiceError.noInput
+        }
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            let floats = converter.convert(buffer)
+            guard !floats.isEmpty else { return }
+            level(PCMConverter.level(of: floats[...]))
+            self?.append(PCMConverter.int16(floats))
+        }
+        engine.prepare()
+        try engine.start()
+        running = true
+    }
+
+    private func append(_ chunk: [Int16]) {
+        lock.lock()
+        samples += chunk
+        lock.unlock()
+    }
+
+    private func stopEngine() {
+        guard running else { return }
+        running = false
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+    }
+
+    func finish() -> Data {
+        stopEngine()
+        lock.lock()
+        defer { lock.unlock() }
+        return WAV.encode(samples)
+    }
+
+    func cancel() {
+        stopEngine()
+    }
+}
+
+/// Plays a WAV file as if it were being spoken: levels follow the file in real time, and `finish` returns all of it.
+final class FileSource: AudioSource, @unchecked Sendable {
+    private let samples: [Float]
+    private var timer: DispatchSourceTimer?
+    private static let tick = 0.04
+
+    init(url: URL) throws {
+        guard let file = try? AVAudioFile(forReading: url),
+              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+              (try? file.read(into: buffer)) != nil,
+              let converter = PCMConverter(from: file.processingFormat)
+        else { throw VoiceError.unreadable(url.path) }
+        samples = converter.convert(buffer)
+    }
+
+    func start(level: @escaping @Sendable (Float) -> Void) throws {
+        let window = Int(Self.tick * Double(WAV.sampleRate))
+        var position = 0
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInteractive))
+        timer.schedule(deadline: .now(), repeating: Self.tick)
+        timer.setEventHandler { [samples] in
+            let end = min(position + window, samples.count)
+            level(position < end ? PCMConverter.level(of: samples[position..<end]) : 0)
+            position = end
+        }
+        timer.resume()
+        self.timer = timer
+    }
+
+    func finish() -> Data {
+        cancel()
+        return WAV.encode(PCMConverter.int16(samples))
+    }
+
+    func cancel() {
+        timer?.cancel()
+        timer = nil
+    }
+}

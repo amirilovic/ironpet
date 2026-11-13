@@ -99,9 +99,13 @@ Status of milestone 2: built. Threads are saved to `~/.ironpet/threads/` and reo
 
 - **First run (`App/SetupWindow.swift`).** Shown when setup was never finished or skipped and there is no `config.json` (a config brought from another Mac counts as set up). It offers pet name, hooks per agent (pre-ticked when the tool is detected or ironpet's hooks are already there), launch at login, break reminders and GitHub alerts. Start writes `config.json`, installs the chosen hooks, removes unticked ones left by an older version, and switches chat to Claude Code if cursor-agent is missing. Not now or closing the window writes the default config (no hooks). Hooks are recorded as `integrations.cursorHooks` / `claudeHooks`; on each launch the chosen ones are refreshed, and toggling them in Settings installs or removes only that agent's hooks.
 
+## Voice notes
+
+Opt-in (`voice.enabled`, off by default). `VoiceController` is one state machine (idle, recording, transcribing) driven by the mic button, the hold-to-talk hotkey (`hotkeys.voice`, registered only while enabled) and the `--test-mode` endpoints under `/test/voice/*`, which feed a WAV file through the same states. `MicrophoneSource` records with AVAudioEngine and converts to 16 kHz mono; `Transcriber` posts the WAV to `{baseUrl}/audio/transcriptions` with `file`, `model` and an explicit `response_format=json` (mlx-audio defaults to `ndjson`). The API key is in the Keychain (`ironpet.voice`), never in config.json. The waveform reads a `LevelBuffer` on its own display-rate timeline, so level updates never re-render the chat. A failed transcription keeps the recording in memory so Retry can re-send it. Recordings are capped at 5 minutes instead of being chunked.
+
 ## Testing
 
-`python3 scripts/e2e.py [scenario ...]` (cursor, claude, auto, picker, iterm, capture, summaries, notification, github, setup, settings; mcp and sentry only when named) relaunches the installed app with `--test-mode`, which enables token-protected `/test/*` endpoints that drive the same code paths as the UI (show chat, send, Allow/Deny, session jump, capture). It runs real cursor-agent and Claude Code turns, checks files on disk and iTerm state via AppleScript, then relaunches the app normally. Test endpoints do not exist outside `--test-mode`.
+`python3 scripts/e2e.py [scenario ...]` (cursor, claude, auto, picker, iterm, capture, summaries, notification, github, setup, settings; mcp, sentry, voice and voice-key only when named) relaunches the installed app with `--test-mode`, which enables token-protected `/test/*` endpoints that drive the same code paths as the UI (show chat, send, Allow/Deny, session jump, capture). It runs real cursor-agent and Claude Code turns, checks files on disk and iTerm state via AppleScript, then relaunches the app normally. Test endpoints do not exist outside `--test-mode`.
 
 ## Milestones
 

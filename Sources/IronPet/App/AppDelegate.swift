@@ -138,7 +138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let (newAgents, oldAgents) = (hookAgents(in: new), hookAgents(in: old))
         setHooks(installed: newAgents.filter { !oldAgents.contains($0) })
         setHooks(removed: oldAgents.filter { !newAgents.contains($0) })
-        if new.hotkeys != old.hotkeys { registerHotKeys() }
+        if new.hotkeys != old.hotkeys || new.voice.enabled != old.voice.enabled { registerHotKeys() }
+        if !new.voice.enabled { chat.voice.cancel() }
         if new.integrations.githubAlerts != old.integrations.githubAlerts {
             new.integrations.githubAlerts ? github.start() : github.stop()
         }
@@ -163,6 +164,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated { action() }
             }
             if hotKey.isRegistered { hotKeys.append(hotKey) } else { failed.insert(text) }
+        }
+        // Hold to talk. Only registered with voice notes on, so a disabled feature owns no key.
+        if let text = VoiceController.hotkey(in: config.config), let shortcut = Shortcut(text) {
+            let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, id: 4, onRelease: { [weak self] in
+                MainActor.assumeIsolated { self?.chat.voice.stop() }
+            }, handler: { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.showChat()
+                    self?.chat.voice.start()
+                }
+            })
+            if hotKey.isRegistered { hotKeys.append(hotKey) } else { failed.insert(text) }
+        } else if config.config.voice.enabled, !config.config.hotkeys.voice.isEmpty {
+            failed.insert(config.config.hotkeys.voice)
         }
         settingsModel.failedHotKeys = failed
     }
@@ -246,6 +261,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if TestControl.isEnabled {
             let control = TestControl(chat: chat, actions: TestControl.Actions(
                 showChat: { [weak self] in self?.showChat() },
+                chatFrame: { [weak self] in
+                    guard let frame = self?.chatPanel.frame, let screen = NSScreen.screens.first else { return .zero }
+                    return CGRect(x: frame.minX, y: screen.frame.height - frame.maxY, width: frame.width, height: frame.height)
+                },
                 openSession: { [weak self] id in self?.openSession(id) },
                 capture: { [weak self] region in self?.captureScreen(region: region) },
                 notificationAction: { [weak self] id, allow in self?.notifier.onApprovalAction?(id, allow) },
