@@ -636,7 +636,7 @@ private struct TypingIndicator: View {
             PetAvatar(size: 24)
             TimelineView(.animation(minimumInterval: 0.15)) { context in
                 let phase = Int(context.date.timeIntervalSinceReferenceDate * 3) % 3
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     HStack(spacing: 4) {
                         ForEach(0..<3) { i in
                             Circle()
@@ -645,16 +645,16 @@ private struct TypingIndicator: View {
                                 .opacity(i == phase ? 1 : 0.35)
                         }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
                     if let started {
                         Text(Self.format(context.date.timeIntervalSince(started)))
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 10))
                             .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.primary.opacity(0.08), in: Capsule())
             }
         }
     }
