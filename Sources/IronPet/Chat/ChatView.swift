@@ -34,8 +34,8 @@ struct ChatView: View {
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    guard let url, ImageIntake.isImageFile(url) else { return }
-                    let saved = ImageIntake.save([url])
+                    guard let url else { return }
+                    let saved = FileIntake.attach([url])
                     DispatchQueue.main.async { saved.forEach(session.attach) }
                 }
             }
@@ -373,6 +373,12 @@ struct ChatView: View {
                 .padding(.top, 4)
             }
             HStack(alignment: .bottom, spacing: 6) {
+                Button(action: chooseFiles) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .buttonStyle(HoverIconStyle())
+                .help("Attach files")
                 TextField(session.isRunning ? "\(ConfigStore.shared.config.pet.name) is working…" : "Ask \(ConfigStore.shared.config.pet.name)…", text: $session.input, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13.5))
@@ -466,6 +472,17 @@ struct ChatView: View {
         } label: {
             if session.model == model.id { Label(model.name, systemImage: "checkmark") } else { Text(model.name) }
         }
+    }
+
+    private func chooseFiles() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.message = "Attach files to your message"
+        NSApp.activate()
+        guard panel.runModal() == .OK else { return }
+        FileIntake.attach(panel.urls).forEach(session.attach)
     }
 
     private func chooseFolder() {
@@ -691,7 +708,24 @@ struct Thumbnail: View {
                 .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
                 .help("Open screenshot")
         } else {
-            Label("Screenshot", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
+            // Not an image: show the file's own icon and name, like a Finder attachment.
+            let url = URL(fileURLWithPath: path)
+            HStack(spacing: 6) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                    .resizable()
+                    .frame(width: min(height - 12, 32), height: min(height - 12, 32))
+                Text(url.lastPathComponent)
+                    .font(.system(size: 11.5))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 160, alignment: .leading)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: min(height, 48))
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.15)))
+            .onTapGesture { NSWorkspace.shared.open(url) }
+            .help("Open \(url.lastPathComponent)")
         }
     }
 }
