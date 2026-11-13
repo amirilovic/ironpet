@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file: 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #diagram { display: flex; justify-content: center; }
+  #diagram svg { max-width: 100%; height: auto; }
+  #error { font: 12px -apple-system, sans-serif; color: #d33; white-space: pre-wrap; }
+</style>
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<div id="diagram"></div>
+<div id="error"></div>
+<script>
+  // Called by MermaidWebView with the diagram source and the current appearance.
+  async function renderDiagram(code, dark) {
+    const diagram = document.getElementById("diagram");
+    const error = document.getElementById("error");
+    try {
+      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default",
+                           fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif" });
+      const { svg } = await mermaid.render("m" + Date.now(), code);
+      diagram.innerHTML = svg;
+      error.textContent = "";
+    } catch (e) {
+      diagram.innerHTML = "";
+      error.textContent = "Mermaid could not render this diagram: " + (e && e.message ? e.message : e);
+    }
+    requestAnimationFrame(() => {
+      window.webkit.messageHandlers.size.postMessage({ h: Math.ceil(document.body.scrollHeight) });
+    });
+  }
+</script>
+</body>
+</html>

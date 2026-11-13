@@ -516,10 +516,8 @@ private struct AssistantBubble: View {
         HStack(alignment: .top, spacing: 8) {
             PetAvatar(size: 24)
             VStack(alignment: .leading, spacing: 3) {
-                Text(LocalizedStringKey(text))
+                MarkdownView(text: text)
                     .font(.system(size: 13.5))
-                    .lineSpacing(2)
-                    .textSelection(.enabled)
                     .padding(.top, 3)
                 if let date {
                     Text(timeFormatter.string(from: date)).font(.system(size: 10)).foregroundStyle(.tertiary)
