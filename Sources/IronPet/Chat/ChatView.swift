@@ -247,7 +247,12 @@ struct ChatView: View {
                 .padding(14)
             }
             .frame(maxHeight: .infinity)
-            .onChange(of: scrollKey) { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) } }
+            .onChange(of: scrollKey) {
+                // Lazy rows below the viewport only have estimated heights, so the first jump can land short.
+                // A second jump after layout settles reaches the real end.
+                proxy.scrollTo("bottom", anchor: .bottom)
+                DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
         }
     }
@@ -659,28 +664,24 @@ private struct ToolSteps: View {
 }
 
 /// Shown while the agent works: the pet, animated dots and how long this turn has been running.
+/// Nothing here ticks through SwiftUI every frame: a per-frame `TimelineView` re-ran layout of the whole
+/// transcript on each tick, which pinned the main thread at 100% CPU in long chats. The dots animate in
+/// Core Animation, and the elapsed time re-renders once a second.
 private struct TypingIndicator: View {
     let started: Date?
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             PetAvatar(size: 24)
-            TimelineView(.animation(minimumInterval: 0.15)) { context in
-                let phase = Int(context.date.timeIntervalSinceReferenceDate * 3) % 3
-                // Same layout as a finished reply: the bubble, then the elapsed time where its timestamp goes.
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 4) {
-                        ForEach(0..<3) { i in
-                            Circle()
-                                .fill(Color.secondary)
-                                .frame(width: 6, height: 6)
-                                .opacity(i == phase ? 1 : 0.35)
-                        }
-                    }
+            // Same layout as a finished reply: the bubble, then the elapsed time where its timestamp goes.
+            VStack(alignment: .leading, spacing: 3) {
+                PulsingDots()
+                    .frame(width: 30, height: 6)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
                     .background(Color.primary.opacity(0.08), in: Capsule())
-                    if let started {
+                if let started {
+                    TimelineView(.periodic(from: started, by: 1)) { context in
                         Text(Self.format(context.date.timeIntervalSince(started)))
                             .font(.system(size: 10))
                             .monospacedDigit()
@@ -697,12 +698,73 @@ private struct TypingIndicator: View {
     }
 }
 
+/// Three dots that light up in turn, animated by Core Animation so SwiftUI never re-evaluates for a frame.
+private struct PulsingDots: NSViewRepresentable {
+    func makeNSView(context: Context) -> DotsView { DotsView() }
+    func updateNSView(_ view: DotsView, context: Context) {}
+
+    final class DotsView: NSView {
+        private var dots: [CALayer] = []
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            for i in 0..<3 {
+                let dot = CALayer()
+                dot.bounds = CGRect(x: 0, y: 0, width: 6, height: 6)
+                dot.cornerRadius = 3
+                dot.backgroundColor = NSColor.secondaryLabelColor.cgColor
+                dot.opacity = 0.35
+                // One third of the cycle each, like the old 0.15s phase steps.
+                let pulse = CAKeyframeAnimation(keyPath: "opacity")
+                pulse.values = [1, 0.35, 0.35]
+                pulse.keyTimes = [0, 0.33, 1]
+                pulse.duration = 0.45
+                pulse.beginTime = CACurrentMediaTime() + 0.15 * Double(i)
+                pulse.repeatCount = .infinity
+                pulse.calculationMode = .discrete
+                dot.add(pulse, forKey: "pulse")
+                layer?.addSublayer(dot)
+                dots.append(dot)
+            }
+        }
+
+        required init?(coder: NSCoder) { fatalError() }
+
+        override var isFlipped: Bool { true }
+
+        override func layout() {
+            super.layout()
+            for (i, dot) in dots.enumerated() { dot.position = CGPoint(x: 3 + 10 * CGFloat(i), y: bounds.midY) }
+        }
+
+        override func viewDidChangeEffectiveAppearance() {
+            dots.forEach { $0.backgroundColor = NSColor.secondaryLabelColor.cgColor }
+        }
+    }
+}
+
+/// Decoded attachment images, so a re-render of the transcript does not read and decode every file again.
+enum ThumbnailCache {
+    private static let cache = NSCache<NSString, NSImage>()
+    /// How many times a file was actually decoded; tests read it.
+    nonisolated(unsafe) static var decodeCount = 0
+
+    static func image(at path: String) -> NSImage? {
+        if let cached = cache.object(forKey: path as NSString) { return cached }
+        guard let image = NSImage(contentsOfFile: path) else { return nil }
+        decodeCount += 1
+        cache.setObject(image, forKey: path as NSString)
+        return image
+    }
+}
+
 struct Thumbnail: View {
     let path: String
     let height: CGFloat
 
     var body: some View {
-        if let image = NSImage(contentsOfFile: path) {
+        if let image = ThumbnailCache.image(at: path) {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
