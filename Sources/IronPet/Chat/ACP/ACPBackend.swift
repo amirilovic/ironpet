@@ -37,6 +37,7 @@ struct AuthMethod: Identifiable, Hashable {
 enum AgentEvent {
     case session(String)
     case models(current: String?, [ChatModel])
+    case commands([SlashCommand])
     case assistant(String)
     case toolStarted(id: String, summary: String)
     case toolUpdated(id: String, summary: String)
@@ -420,8 +421,14 @@ final class ACPBackend {
     // MARK: Agent to client
 
     private func notification(_ method: String, _ params: JSON) {
-        guard method == "session/update", params["sessionId"] as? String == sessionID, !replaying,
+        guard method == "session/update", params["sessionId"] as? String == sessionID,
               let update = params["update"] as? JSON else { return }
+        // The command list is state, not history, so it also counts while the session replays.
+        if update["sessionUpdate"] as? String == "available_commands_update" {
+            emit(.commands(SlashCommand.parse(update["availableCommands"] as? [JSON] ?? [])))
+            return
+        }
+        guard !replaying else { return }
         switch update["sessionUpdate"] as? String {
         case "agent_message_chunk":
             if let content = update["content"] as? JSON, content["type"] as? String == "text", let text = content["text"] as? String, !text.isEmpty {

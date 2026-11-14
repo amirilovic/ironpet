@@ -27,7 +27,9 @@ final class ACPBackendTests: XCTestCase {
             sid = p.get("sessionId") or "sess-1"
             if os.environ.get("FAKE_MODE") == "bypass":
                 pass
-            if method == "session/load": update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "REPLAY"}})
+            if method == "session/load":
+                update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "REPLAY"}})
+                update({"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "review", "description": "Review code"}, {"name": "init", "description": "Set up", "input": {"hint": "path"}}, {"name": "compact", "description": "Shrink"}]})
             send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": sid,
                   "modes": {"currentModeId": "bypassPermissions" if mode == "bypass" else "default",
                             "availableModes": [{"id": "default"}, {"id": "bypassPermissions"}]},
@@ -97,6 +99,17 @@ final class ACPBackendTests: XCTestCase {
         XCTAssertTrue(events.contains { if case .session("sess-1") = $0 { return true } else { return false } })
         let models = events.compactMap { event -> [ChatModel]? in if case .models(_, let list) = event { return list } else { return nil } }.first
         XCTAssertEqual(models?.map(\.id), ["m1", "m2"])
+        backend.shutdown()
+    }
+
+    func testCommandListIsReportedEvenWhileTheSessionReplays() async {
+        let backend = ACPBackend(agent: agent)
+        let events = await run(backend, turn("hello", resume: "sess-1"))
+        XCTAssertFalse(text(events).contains("REPLAY"))
+        let commands = events.compactMap { event -> [SlashCommand]? in if case .commands(let list) = event { return list } else { return nil } }.first
+        XCTAssertEqual(commands?.map(\.name), ["review", "init", "compact"])
+        XCTAssertEqual(commands?[1].hint, "path")
+        XCTAssertEqual(commands?[0].detail, "Review code")
         backend.shutdown()
     }
 

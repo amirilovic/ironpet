@@ -63,6 +63,43 @@ final class ChatSession: ObservableObject {
         AgentCatalog.agent(id: UserDefaults.standard.string(forKey: "chatAgent")) ?? AgentCatalog.agent(id: "cursor")!
     /// Installed agents that answer `initialize`. Starts as just the current one until the check finishes.
     @Published private(set) var agents: [ACPAgent] = []
+    @Published private(set) var commands: [SlashCommand] = []
+    @Published var slash = SlashPopupState()
+
+    /// Commands the popup shows for the current input; empty when it should be closed.
+    var slashMatches: [SlashCommand] { slash.dismissed ? [] : SlashCommand.matches(for: input, in: commands) }
+
+    /// Puts the selected command into the input. Returns false when the popup is closed.
+    @discardableResult
+    func completeSlash() -> Bool {
+        let list = slashMatches
+        guard !list.isEmpty else { return false }
+        completeSlash(list[min(slash.selection, list.count - 1)])
+        return true
+    }
+
+    func completeSlash(_ command: SlashCommand) {
+        // Not a dictation: the user still has to add arguments, so it must not schedule an auto-send.
+        prefill("/\(command.name) ")
+    }
+
+    func moveSlashSelection(_ delta: Int) {
+        slash.move(delta, count: slashMatches.count)
+    }
+
+    /// Esc closes the popup. Returns false when it was not open.
+    @discardableResult
+    func dismissSlash() -> Bool {
+        guard !slashMatches.isEmpty else { return false }
+        slash.dismissed = true
+        return true
+    }
+
+    func receiveCommands(_ list: [SlashCommand]) {
+        if list != commands { slash.selection = 0 }
+        commands = list
+        if persists { SlashCommand.store(list, for: agent.id) }
+    }
     /// nil uses the agent's default model. Stored per agent.
     @Published var model: String? {
         didSet { UserDefaults.standard.set(model, forKey: "chatModel.\(agent.id)") }
@@ -121,6 +158,7 @@ final class ChatSession: ObservableObject {
         workspace = recents.first
         model = UserDefaults.standard.string(forKey: "chatModel.\(agent.id)")
         models = Self.cachedModels(for: agent)
+        commands = SlashCommand.cached(for: agent.id)
         agents = [agent]
         if restore { Task { await refreshAgents() } }
         if restore { restoreLastChat() }
@@ -229,6 +267,7 @@ final class ChatSession: ObservableObject {
         UserDefaults.standard.set(next.id, forKey: "chatAgent")
         model = UserDefaults.standard.string(forKey: "chatModel.\(next.id)")
         models = Self.cachedModels(for: next)
+        commands = SlashCommand.cached(for: next.id)
         if !agents.contains(next) { agents.append(next) }
     }
 
@@ -447,6 +486,7 @@ final class ChatSession: ObservableObject {
 
     /// Wispr Flow inserts a whole dictation at once; typing grows the text one character at a time.
     func inputChanged(from old: String, to new: String) {
+        slash.reset()
         if prefilling {
             prefilling = false
             return
@@ -560,6 +600,8 @@ final class ChatSession: ObservableObject {
             models = list
             UserDefaults.standard.set(list.map { [$0.id, $0.name] }, forKey: "cachedModels.\(agent.id)")
             if let model, !list.isEmpty, !list.contains(where: { $0.id == model }) { self.model = nil }
+        case .commands(let list):
+            receiveCommands(list)
         case .toolUpdated(let id, let summary):
             if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
                case .tool(_, let ok) = items[index].kind {

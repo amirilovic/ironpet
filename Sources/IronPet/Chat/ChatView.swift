@@ -443,6 +443,10 @@ struct ChatView: View {
 
     private var composerInput: some View {
         VStack(alignment: .leading, spacing: 6) {
+            let matches = session.slashMatches
+            if !matches.isEmpty {
+                SlashPopup(commands: matches, selection: min(session.slash.selection, matches.count - 1), pick: session.completeSlash)
+            }
             if !session.attachments.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(session.attachments, id: \.self) { url in
@@ -474,10 +478,23 @@ struct ChatView: View {
                     .onSubmit(session.send)
                     // Return sends; Shift-Return adds a line break at the caret (Option-Return already did).
                     .onKeyPress(.return, phases: .down) { press in
+                        if !press.modifiers.contains(.shift), session.completeSlash() { return .handled }
                         guard press.modifiers.contains(.shift) else { return .ignored }
                         NSApp.sendAction(#selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)), to: nil, from: nil)
                         return .handled
                     }
+                    .onKeyPress(.tab, phases: .down) { _ in session.completeSlash() ? .handled : .ignored }
+                    .onKeyPress(.upArrow, phases: .down) { _ in
+                        guard !session.slashMatches.isEmpty else { return .ignored }
+                        session.moveSlashSelection(-1)
+                        return .handled
+                    }
+                    .onKeyPress(.downArrow, phases: .down) { _ in
+                        guard !session.slashMatches.isEmpty else { return .ignored }
+                        session.moveSlashSelection(1)
+                        return .handled
+                    }
+                    .onKeyPress(.escape, phases: .down) { _ in session.dismissSlash() ? .handled : .ignored }
                     .onChange(of: session.input) { old, new in session.inputChanged(from: old, to: new) }
                     .padding(.horizontal, 4)
                     .padding(.vertical, 5)
@@ -1021,5 +1038,47 @@ private extension View {
             .fixedSize()
             .font(.system(size: 13))
             .foregroundStyle(.secondary)
+    }
+}
+
+/// The command list above the input while the input starts with `/`.
+private struct SlashPopup: View {
+    let commands: [SlashCommand]
+    let selection: Int
+    let pick: (SlashCommand) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(commands.enumerated()), id: \.element.id) { index, command in
+                        Button { pick(command) } label: {
+                            HStack(spacing: 8) {
+                                Text("/\(command.name)").font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                                if let hint = command.hint {
+                                    Text(hint).font(.system(size: 11.5)).foregroundStyle(.tertiary)
+                                }
+                                Text(command.detail).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(index == selection ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .id(command.id)
+                    }
+                }
+            }
+            .frame(maxHeight: 160)
+            .fixedSize(horizontal: false, vertical: true)
+            .onChange(of: selection) { _, new in
+                if commands.indices.contains(new) { proxy.scrollTo(commands[new].id) }
+            }
+        }
+        .padding(4)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
     }
 }
