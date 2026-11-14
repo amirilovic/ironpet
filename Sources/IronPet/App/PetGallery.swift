@@ -229,15 +229,23 @@ private struct BuildPetSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Build a new pet").font(.headline)
-            Text("Describe how you want your pet to look, in one line. ironpet sends this to your current chat, and the agent draws the sheet into ~/.ironpet/pets.")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            TextField("a red fox with a scarf", text: $description)
-                .onSubmit(submit)
+            Text("Describe your pet").font(.headline)
+            TextEditor(text: $description)
+                .font(.body)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .frame(height: 96)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+                .overlay(alignment: .topLeading) {
+                    if description.isEmpty {
+                        Text("a red fox with a scarf").foregroundStyle(.tertiary).padding(.horizontal, 11).padding(.vertical, 6)
+                            .allowsHitTesting(false)
+                    }
+                }
             HStack {
                 Spacer()
                 Button("Cancel") { done(nil) }.keyboardShortcut(.cancelAction)
-                Button("Send to chat", action: submit).keyboardShortcut(.defaultAction).disabled(trimmed.isEmpty)
+                Button("Send to chat", action: submit).keyboardShortcut(.return, modifiers: .command).disabled(trimmed.isEmpty)
             }
         }
         .padding(20)

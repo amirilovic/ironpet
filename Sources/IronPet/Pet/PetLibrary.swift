@@ -162,56 +162,22 @@ enum PetPreview {
     }
 }
 
-/// The message "Build a new pet" sends to the chat.
+/// What "Build a new pet" sends: the `ironpet-pets` skill, called by name. The skill holds the atlas layout and the steps.
 enum PetPrompt {
-    /// "a red fox with a scarf" becomes "red-fox-with-a-scarf".
-    static func kebab(_ description: String) -> String {
-        var words = description.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
-        while words.count > 1, ["a", "an", "the"].contains(words[0]) { words.removeFirst() }
-        let joined = words.joined(separator: "-")
-        return String(joined.prefix(40)).trimmingCharacters(in: CharacterSet(charactersIn: "-")).nonEmpty ?? "new-pet"
+    static let skillName = "ironpet-pets"
+
+    static func build(description: String) -> String {
+        "/\(skillName) \(description.trimmingCharacters(in: .whitespacesAndNewlines))"
     }
 
-    /// The reference generator inside the app bundle, or nil when running outside one.
-    static var bundledGenerator: String? { Bundle.main.url(forResource: "make_pet", withExtension: "swift")?.path }
-
-    /// The pet-building skill inside the app bundle, or nil when running outside one.
-    static var bundledSkill: String? {
-        Bundle.main.url(forResource: "SKILL", withExtension: "md", subdirectory: "skills/ironpet-pets")?.path
-    }
-
-    /// Whether an agent on this Mac has the ironpet-pets skill, so the request can be the bare slash command.
+    /// Whether an agent on this Mac has the skill.
     static var isSkillInstalled: Bool {
-        SkillManager.standard.entries().first { $0.skill.name == "ironpet-pets" }?.status.isInstalledAnywhere ?? false
+        SkillManager.standard.entries().first { $0.skill.name == skillName }?.status.isInstalledAnywhere ?? false
     }
 
-    /// `skillInstalled`: send `/ironpet-pets <description>`. Otherwise the request names the bundled skill file and the paths.
-    static func build(description: String, library: URL = PetLibrary.folder, generatorPath: String? = bundledGenerator,
-                      skillPath: String? = bundledSkill, skillInstalled: Bool = false) -> String {
-        let sheetExtensions = PetLibrary.sheetExtensions
-        let description = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = kebab(description)
-        // Never ask the agent to overwrite a sheet the user has, or to shadow a bundled pet.
-        func taken(_ name: String) -> Bool {
-            PetLibrary.builtInNames.contains(name) || sheetExtensions.contains { FileManager.default.fileExists(atPath: library.appendingPathComponent("\(name).\($0)").path) }
-        }
-        var name = base
-        var n = 2
-        while taken(name) { name = "\(base)-\(n)"; n += 1 }
-        let output = library.appendingPathComponent("\(name).png")
-        let shortOutput = PetLibrary.tildePath(output)
-        // Installed, the skill runs from its name alone. The skill finds the output folder and the generator itself.
-        if skillInstalled { return "/ironpet-pets \(description)" }
-        let skill = skillPath.map { "the ironpet-pets skill at \($0)" } ?? "the ironpet-pets skill (skills/ironpet-pets/SKILL.md in the ironpet repository)"
-        let generator = generatorPath ?? "tools/make_pet.swift in the ironpet repository"
-        return """
-        Create a new ironpet character: \(description)
-
-        Read and follow \(skill). Write the sheet to \(shortOutput) (absolute path: \(output.path)). The reference generator is \(generator).
-        """
+    /// Installs the skill for the agents found on this Mac when none has it, the way Settings → Skills does.
+    static func ensureSkillInstalled() {
+        guard !isSkillInstalled else { return }
+        do { try SkillManager.standard.install(names: [skillName]) } catch { NSLog("ironpet: could not install the \(skillName) skill: \(error)") }
     }
-}
-
-private extension String {
-    var nonEmpty: String? { isEmpty ? nil : self }
 }

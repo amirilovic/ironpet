@@ -181,40 +181,12 @@ final class PetLibraryTests: XCTestCase {
 
     // MARK: Prompt
 
-    func testKebabNames() {
-        XCTAssertEqual(PetPrompt.kebab("a red fox with a scarf"), "red-fox-with-a-scarf")
-        XCTAssertEqual(PetPrompt.kebab("  The Tiny Dragon!! "), "tiny-dragon")
-        XCTAssertEqual(PetPrompt.kebab("???"), "new-pet")
-        XCTAssertLessThanOrEqual(PetPrompt.kebab(String(repeating: "word ", count: 30)).count, 40)
+    func testPromptCallsTheSkillByName() {
+        XCTAssertEqual(PetPrompt.build(description: "  red fox with a scarf "), "/ironpet-pets red fox with a scarf")
     }
 
-    func testPromptIsShortAndCarriesTheDescriptionPathsAndSkill() {
-        let prompt = PetPrompt.build(description: "red fox with a scarf", library: URL(fileURLWithPath: "/home/me/.ironpet/pets"),
-                                     generatorPath: "/Applications/IronPet.app/Contents/Resources/make_pet.swift",
-                                     skillPath: "/Applications/IronPet.app/Contents/Resources/skills/ironpet-pets/SKILL.md")
-        XCTAssertTrue(prompt.hasPrefix("Create a new ironpet character: red fox with a scarf"))
-        XCTAssertTrue(prompt.contains("/home/me/.ironpet/pets/red-fox-with-a-scarf.png"))
-        XCTAssertTrue(prompt.contains("/Applications/IronPet.app/Contents/Resources/make_pet.swift"))
-        XCTAssertTrue(prompt.contains("/Applications/IronPet.app/Contents/Resources/skills/ironpet-pets/SKILL.md"))
-        XCTAssertLessThan(prompt.count, 600)
-    }
-
-    func testInstalledSkillIsCalledByName() {
-        let prompt = PetPrompt.build(description: "  red fox with a scarf ", library: library, generatorPath: "/x/make_pet.swift",
-                                     skillPath: "/x/SKILL.md", skillInstalled: true)
-        XCTAssertEqual(prompt, "/ironpet-pets red fox with a scarf")
-    }
-
-    func testPromptWithoutABundleNamesTheRepoFiles() {
-        let prompt = PetPrompt.build(description: "cat", generatorPath: nil, skillPath: nil)
-        XCTAssertTrue(prompt.contains("tools/make_pet.swift"))
-        XCTAssertTrue(prompt.contains("skills/ironpet-pets/SKILL.md"))
-    }
-
-    func testPromptPicksAnUnusedFileName() throws {
-        try writeSheet("red-fox.png", in: library)
-        let prompt = PetPrompt.build(description: "red fox", library: library, generatorPath: nil, skillPath: nil)
-        XCTAssertTrue(prompt.contains("red-fox-2.png"))
+    func testTheBundledSkillIsNamedLikeThePrompt() {
+        XCTAssertNotNil(BundledSkills.named(PetPrompt.skillName))
     }
 
     /// The skill text states the layout, so it must match the rows the app plays.

@@ -48,16 +48,13 @@ fi
 mkdir -p "$APP/Contents/Resources/acp"
 cp sidecar/out/claude.mjs sidecar/out/codex.mjs sidecar/out/pi.mjs "$APP/Contents/Resources/acp/"
 # The pets are drawn in code. Ghost is the default sheet; all six fill the gallery in Settings. The generator itself
-# ships too, so "Build a new pet" can point the agent at it.
+# ships too, for the ironpet-pets skill to copy and adapt.
 mkdir -p "$APP/Contents/Resources/pets"
 for pet in ghost mochi hamster panda bunny cat; do
   swift tools/make_pet.swift "$pet" "$APP/Contents/Resources/pets/$pet.png" >/dev/null
 done
 cp "$APP/Contents/Resources/pets/ghost.png" "$APP/Contents/Resources/spritesheet.png"
 cp tools/make_pet.swift "$APP/Contents/Resources/make_pet.swift"
-# The skill the "Build a new pet" request points the agent at.
-mkdir -p "$APP/Contents/Resources/skills/ironpet-pets"
-cp skills/ironpet-pets/SKILL.md "$APP/Contents/Resources/skills/ironpet-pets/SKILL.md"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
