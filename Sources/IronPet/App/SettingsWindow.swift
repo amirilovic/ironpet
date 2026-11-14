@@ -8,6 +8,8 @@ final class SettingsModel: ObservableObject {
     struct Actions {
         /// Global hotkeys are paused while a shortcut is being recorded, so pressing the current one records it.
         var suspendHotKeys: (Bool) -> Void
+        /// Opens the chat and sends the "build a new pet" prompt in the current thread.
+        var buildPet: (String) -> Void
     }
 
     let actions: Actions
@@ -20,6 +22,7 @@ final class SettingsModel: ObservableObject {
     /// Shortcut config strings that failed to register (taken by another app or invalid).
     @Published var failedHotKeys: Set<String> = []
     @Published var launchAtLogin = LoginItem.isEnabled
+    let pets = PetGalleryModel()
     private let announcer: Announcer
 
     init(actions: Actions, announcer: Announcer) {
@@ -74,9 +77,27 @@ final class SettingsWindow {
             window.isReleasedWhenClosed = false
             window.center()
             self.window = window
+            let center = NotificationCenter.default
+            observers = [
+                center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.syncGalleryActivity() }
+                },
+                center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.model.pets.setWindowShown(false) }
+                },
+            ]
         }
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
+        model.pets.setWindowShown(true)
+    }
+
+    private var observers: [NSObjectProtocol] = []
+
+    /// Pauses the pet previews while the window is minimized or covered.
+    private func syncGalleryActivity() {
+        guard let window else { return }
+        model.pets.setWindowShown(window.isVisible && window.occlusionState.contains(.visible))
     }
 }
 
@@ -122,7 +143,6 @@ private struct GeneralSettings: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject private var store = ConfigStore.shared
     @State private var name = ConfigStore.shared.config.pet.name
-    @State private var spriteError: String?
 
     var body: some View {
         Form {
@@ -131,24 +151,7 @@ private struct GeneralSettings: View {
                     .onSubmit(saveName)
                     .onChange(of: name) { saveName() }
                     .onChange(of: store.config.pet.name) { if store.config.pet.name != name { name = store.config.pet.name } }
-                LabeledContent("Sprite sheet") {
-                    HStack {
-                        Text(store.config.pet.sprite.map { ($0 as NSString).lastPathComponent } ?? "Default")
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Button("Choose…", action: chooseSprite)
-                        if store.config.pet.sprite != nil {
-                            Button("Reset") { store.update { $0.pet.sprite = nil } }
-                        }
-                    }
-                }
-                if let spriteError {
-                    Text(spriteError).font(.caption).foregroundStyle(.red)
-                } else {
-                    Text("A PNG or WebP in the Codex pet v2 layout: 1536 px wide, 8 columns of 192×208 cells.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                PetGallery(gallery: model.pets, buildPet: model.actions.buildPet)
             }
             Section("Shortcuts") {
                 ShortcutRow(title: "Open chat", path: \.chat, model: model)
@@ -206,21 +209,6 @@ private struct GeneralSettings: View {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         store.update { $0.pet.name = trimmed }
-    }
-
-    private func chooseSprite() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.png, .webP]
-        panel.directoryURL = Paths.petDir
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        guard let image = NSImage(contentsOf: url)?.cgImage(forProposedRect: nil, context: nil, hints: nil),
-              Atlas(image: image) != nil else {
-            spriteError = "\(url.lastPathComponent) isn't a sprite sheet in the expected layout."
-            return
-        }
-        spriteError = nil
-        let path = url.path.replacingOccurrences(of: Paths.home.path, with: "~", options: .anchored)
-        store.update { $0.pet.sprite = path }
     }
 }
 

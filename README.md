@@ -161,7 +161,7 @@ Every reminder and watcher is an automation in `~/.ironpet/automations.json`. On
 
 ## Configuration
 
-Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rename the pet, swap its sprite sheet, change or turn off shortcuts, tune reminders, and turn integrations on. Everything is stored in `~/.ironpet/config.json`, which you can also edit by hand or keep in your dotfiles. Changes apply within a couple of seconds. List only the keys you want to change; anything missing uses the default:
+Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rename the pet, pick another from the pet gallery, change or turn off shortcuts, tune reminders, and turn integrations on. Everything is stored in `~/.ironpet/config.json`, which you can also edit by hand or keep in your dotfiles. Changes apply within a couple of seconds. List only the keys you want to change; anything missing uses the default:
 
 ```json
 {
@@ -221,6 +221,7 @@ All in `~/.ironpet/`:
 | `threads/` | Saved chats |
 | `screenshots/` | Last 30 captures |
 | `config.json` | Your settings |
+| `pets/` | Your pet library: every valid sprite sheet here shows in Settings → Pet |
 | `pet/spritesheet.png` | Optional custom pet art (overrides the bundled Ghost) |
 | `bin/ironpet-hook`, `port`, `token` | Hook bridge |
 
@@ -253,15 +254,21 @@ Ghost is drawn in code, not from image files; `scripts/bundle.sh` generates the 
 | `bunny` | Lilac bunny with long ears and a cotton tail |
 | `cat` | Grey tabby with green eyes and a curly tail |
 
-To switch, write the pet's sheet to `~/.ironpet/pet/spritesheet.png`, which overrides the bundled one. Rename the pet in Settings → Pet to match:
+Open Settings → Pet to see every pet as an animated tile and click one to switch. The gallery lists the six bundled pets, every valid PNG or WebP sheet in `~/.ironpet/pets/`, and the current `pet.sprite` if it lives elsewhere. A sheet in `~/.ironpet/pets/` replaces the bundled pet of the same name, and files that are not valid sheets are skipped. New files appear within a couple of seconds while Settings is open. With Reduce Motion on, tiles show one still frame.
+
+Picking a pet also renames it, but only while the name is still a default one (a built-in pet's name or the previous pet's name). A name you typed stays.
+
+- **Add from file…** copies a sheet you choose into `~/.ironpet/pets/` and selects it.
+- **Build a new pet** asks for a one-line description, then sends a short request to your current chat thread: "Create a new ironpet character: ...", with the output path `~/.ironpet/pets/<name>.png`. The request points the agent at the `ironpet-pets` skill (`skills/ironpet-pets/SKILL.md`, also bundled in the app) and at `make_pet.swift` in the app's Resources. The skill holds the atlas layout and the steps: copy the generator, add a theme, render, check, then move the sheet into the folder. The chat's session and folder stay as they are. When the agent writes the file, the new pet shows up in the gallery. If the agent is still running, or the chat has no folder yet, the request waits in the input box.
+
+To make a sheet by hand:
 
 ```bash
-swift tools/make_pet.swift panda      # writes ~/.ironpet/pet/spritesheet.png
-swift tools/make_pet.swift cat build/cat.png   # or anywhere, then pick it under Settings → Pet → Sprite sheet
+swift tools/make_pet.swift cat ~/.ironpet/pets/cat.png   # joins the gallery
 swift tools/make_pet.swift ghost --single build/pet.png && swift tools/make_icon.swift build/pet.png Resources/icon-1024.png
 ```
 
-Any sprite sheet in the Codex pet v2 layout (1536 px wide, 8 columns of 192×208 cells) works: put it at `~/.ironpet/pet/spritesheet.png`, or pick it under Settings → Pet → Sprite sheet.
+Any sprite sheet in the Codex pet v2 layout (1536 px wide, 8 columns of 192×208 cells) works. `pet.sprite` in `config.json` still takes a path, and `~/.ironpet/pet/spritesheet.png` still overrides the default when `pet.sprite` is unset.
 
 ## Uninstall
 
