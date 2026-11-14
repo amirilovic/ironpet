@@ -249,37 +249,15 @@ final class MeetingSettingsTests: XCTestCase {
 }
 
 final class SummaryRequestTests: XCTestCase {
-    private func request(readOnly: Bool, model: String? = "sonnet") -> RunRequest {
-        RunRequest(prompt: "p", workspace: URL(fileURLWithPath: "/tmp/meeting"), resume: nil, auto: false, model: model, readOnly: readOnly)
+    func testEveryPermissionRequestFromTheSummaryAgentIsRefused() {
+        XCTAssertFalse(MeetingController.summaryDecision.allow)
+        let options: [[String: Any]] = [["kind": "allow_once", "optionId": "yes"], ["kind": "reject_once", "optionId": "no"]]
+        let outcome = ACPBackend.outcome(MeetingController.summaryDecision, options: options)
+        XCTAssertEqual((outcome["outcome"] as? [String: Any])?["optionId"] as? String, "no")
     }
 
-    @MainActor
-    func testClaudeSummaryRunsWithNoTools() {
-        let args = ClaudeCodeBackend().arguments(for: request(readOnly: true))
-        let tools = args.firstIndex(of: "--tools")
-        XCTAssertNotNil(tools)
-        XCTAssertEqual(args[tools! + 1], "", "an empty tool list turns every tool off")
-        XCTAssertTrue(args.contains("--no-session-persistence"))
-        XCTAssertFalse(args.contains("--permission-mode"))
-        XCTAssertFalse(args.contains("--add-dir"))
-        XCTAssertEqual(args.last, "sonnet")
-    }
-
-    @MainActor
-    func testCursorSummaryRunsInAskModeWithoutForce() {
-        let args = CursorAgentBackend().arguments(for: request(readOnly: true, model: nil))
-        XCTAssertEqual(args[args.firstIndex(of: "--mode")! + 1], "ask")
-        XCTAssertEqual(args[args.firstIndex(of: "--sandbox")! + 1], "enabled")
-        XCTAssertFalse(args.contains("--force"))
-        XCTAssertFalse(args.contains("--add-dir"))
-        XCTAssertFalse(args.contains("--model"))
-    }
-
-    @MainActor
-    func testChatRunsAreUnchanged() {
-        XCTAssertTrue(ClaudeCodeBackend().arguments(for: request(readOnly: false)).contains("--add-dir"))
-        XCTAssertFalse(ClaudeCodeBackend().arguments(for: request(readOnly: false)).contains("--tools"))
-        XCTAssertFalse(CursorAgentBackend().arguments(for: request(readOnly: false)).contains("--mode"))
+    func testDefaultSummaryAgentIsInTheCatalog() {
+        XCTAssertNotNil(AgentCatalog.agent(id: Config.Meetings().summaryAgent))
     }
 
     func testPromptAsksForTheThreeSectionsAndEmbedsTheTranscript() async {

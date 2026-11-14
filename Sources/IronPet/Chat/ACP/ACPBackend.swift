@@ -95,6 +95,9 @@ final class ACPBackend {
     private(set) var capabilities: JSON = [:]
     private(set) var authMethods: [AuthMethod] = []
 
+    /// A restricted run gets only its own working folder: no memory or screenshot folders. Meeting summaries use it.
+    var restricted = false
+
     /// Called when the agent asks to run something. Answer once.
     var onPermission: ((ACPToolCall, @escaping (ApprovalDecision) -> Void) -> Void)?
 
@@ -287,7 +290,7 @@ final class ACPBackend {
         if sessionReady, sessionID != nil { return }
         var params: JSON = ["cwd": turn.workspace.path, "mcpServers": [JSON]()]
         let sessionCapabilities = capabilities["sessionCapabilities"] as? JSON ?? [:]
-        if sessionCapabilities["additionalDirectories"] != nil {
+        if sessionCapabilities["additionalDirectories"] != nil, !restricted {
             for dir in [Memory.directory, ScreenCapture.directory] { try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
             params["additionalDirectories"] = [Memory.directory.path, ScreenCapture.directory.path]
         }

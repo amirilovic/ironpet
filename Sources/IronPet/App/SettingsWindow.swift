@@ -404,19 +404,20 @@ private struct MeetingSettings: View {
     @ObservedObject private var store = ConfigStore.shared
     @State private var testing = false
     @State private var enableError: String?
-    @State private var cursorModels = ModelCatalog.cached
+    @State private var installedAgents: [ACPAgent] = []
 
     private var meetings: Config.Meetings { store.config.meetings }
 
-    /// The agents turned on under General, plus the saved one so the picker never shows a blank.
-    private var agents: [BackendKind] {
-        var list = BackendKind.allCases.filter { $0 == .cursor ? store.config.integrations.cursorHooks : store.config.integrations.claudeHooks }
-        if !list.contains(meetings.summaryAgent) { list.append(meetings.summaryAgent) }
+    /// The installed agents, plus the saved one so the picker never shows a blank.
+    private var agents: [ACPAgent] {
+        var list = installedAgents
+        if !list.contains(where: { $0.id == meetings.summaryAgent }), let saved = AgentCatalog.agent(id: meetings.summaryAgent) { list.append(saved) }
         return list
     }
 
+    /// Models the agent reported the last time it ran in the chat. An agent that never ran there has none yet.
     private var models: [ChatModel] {
-        meetings.summaryAgent == .cursor ? cursorModels : ClaudeCodeBackend.models
+        AgentCatalog.agent(id: meetings.summaryAgent).map(ChatSession.cachedModels(for:)) ?? []
     }
 
     var body: some View {
@@ -438,18 +439,16 @@ private struct MeetingSettings: View {
                 Toggle("Summarize automatically when a meeting ends", isOn: Binding(
                     get: { meetings.autoSummary }, set: { on in store.update { $0.meetings.autoSummary = on } }))
                 Picker("Summary agent", selection: Binding(get: { meetings.summaryAgent }, set: setAgent)) {
-                    ForEach(agents, id: \.self) { agent in
-                        Text(agent.displayName + (isOn(agent) ? "" : " (off in General)")).tag(agent)
-                    }
+                    ForEach(agents) { agent in Text(agent.name).tag(agent.id) }
                 }
                 Picker("Summary model", selection: Binding(get: { meetings.summaryModel ?? "" },
                                                           set: { id in store.update { $0.meetings.summaryModel = id.isEmpty ? nil : id } })) {
                     Text("Default").tag("")
                     ForEach(modelChoices, id: \.id) { Text($0.name).tag($0.id) }
                 }
-                if !isOn(meetings.summaryAgent) {
-                    Text("Turn on Watch \(meetings.summaryAgent.displayName) under General so this agent can run.")
-                        .font(.caption).foregroundStyle(.orange)
+                if models.isEmpty {
+                    Text("The model list fills in after this agent has run once in the chat. Default uses the agent's own choice.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             Section {
@@ -461,12 +460,12 @@ private struct MeetingSettings: View {
             Section {
                 EmptyView()
             } footer: {
-                Text("When a meeting ends, the transcript is sent to the summary agent, which runs with no tools: it can read the transcript and answer, and it cannot change files or run commands. ironpet writes summary.md itself. The server, model and key are the ones under Voice.")
+                Text("When a meeting ends, the transcript is sent to the summary agent, which only gets the meeting folder and has every permission request refused: it can read the transcript and answer, and it cannot change files or run commands. ironpet writes summary.md itself. The server, model and key are the ones under Voice.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .task { cursorModels = await ModelCatalog.refresh() }
+        .task { installedAgents = await ACPProbe.installed() }
     }
 
     /// The model list plus the saved id, so a model that left the list still shows.
@@ -476,11 +475,7 @@ private struct MeetingSettings: View {
         return list
     }
 
-    private func isOn(_ agent: BackendKind) -> Bool {
-        agent == .cursor ? store.config.integrations.cursorHooks : store.config.integrations.claudeHooks
-    }
-
-    private func setAgent(_ agent: BackendKind) {
+    private func setAgent(_ agent: String) {
         // A model id from one agent means nothing to the other.
         store.update {
             if $0.meetings.summaryAgent != agent { $0.meetings.summaryModel = nil }

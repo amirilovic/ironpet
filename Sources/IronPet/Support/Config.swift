@@ -42,7 +42,8 @@ struct Config: Codable, Equatable {
         var enabled = false
         /// Bundle id of the app recorded last time, or `"all"` for all system audio. Empty until the first meeting.
         var lastApp = ""
-        var summaryAgent = BackendKind.claude
+        /// An ACP agent id from `AgentCatalog`, such as `"claude"` or `"cursor"`.
+        var summaryAgent = "claude"
         /// nil uses the agent's default model.
         var summaryModel: String?
         /// Run the summary agent as soon as the transcript is final.

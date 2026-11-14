@@ -203,7 +203,7 @@ final class TestControl {
             "folder": meeting.folder?.path ?? "",
             "transcript": meeting.transcriptURL?.path ?? "",
             "summary": summary,
-            "summaryAgent": meeting.lastSummaryRequest?.agent.rawValue ?? "",
+            "summaryAgent": meeting.lastSummaryRequest?.agent ?? "",
             "summaryModel": meeting.lastSummaryRequest?.model ?? "",
             "summaryRan": meeting.lastSummaryRequest != nil,
             "notified": meetingNotified,

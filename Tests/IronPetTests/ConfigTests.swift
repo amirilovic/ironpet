@@ -96,14 +96,14 @@ final class ConfigTests: XCTestCase {
         let config = Config.load(from: file).config
         XCTAssertEqual(config.meetings, Config.Meetings())
         XCTAssertFalse(config.meetings.enabled)
-        XCTAssertEqual(config.meetings.summaryAgent, .claude)
+        XCTAssertEqual(config.meetings.summaryAgent, "claude")
         XCTAssertTrue(config.meetings.autoSummary)
         XCTAssertEqual(config.hotkeys.meeting, "")
     }
 
     func testMeetingKeysRoundTrip() throws {
         var config = Config()
-        config.meetings = Config.Meetings(enabled: true, lastApp: "us.zoom.xos", summaryAgent: .cursor,
+        config.meetings = Config.Meetings(enabled: true, lastApp: "us.zoom.xos", summaryAgent: "cursor",
                                           summaryModel: "gpt-5", autoSummary: false)
         config.hotkeys.meeting = "cmd+opt+m"
         try config.save(to: file)

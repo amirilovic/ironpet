@@ -88,7 +88,7 @@ final class MeetingController: ObservableObject {
     var onOpenInChat: ((URL, [URL]) -> Void)?
     var onChange: (() -> Void)?
     /// Agent and model of the last summary run, for `GET /test/meeting`.
-    private(set) var lastSummaryRequest: (agent: BackendKind, model: String?)?
+    private(set) var lastSummaryRequest: (agent: String, model: String?)?
     private(set) var summaryNotified: [String] = []
 
     private var recorders: [MeetingTrack: TrackRecorder] = [:]
@@ -97,8 +97,9 @@ final class MeetingController: ObservableObject {
     private var timer: Timer?
     private var pumping = false
     private var inFlight: Task<Void, Never>?
-    private var summaryRunner: CLIBackend?
+    private var summaryRunner: ACPBackend?
     private var summaryTimeout: Task<Void, Never>?
+    private var summaryTask: Task<Void, Never>?
     private var starting = false
     /// Bumped by `reset()`, so a request still in flight for a discarded meeting is ignored when it answers.
     private var generation = 0
@@ -511,37 +512,49 @@ final class MeetingController: ObservableObject {
     func summarize(_ config: Config.Meetings? = nil) {
         guard let folder, let transcriptURL, let text = try? String(contentsOf: transcriptURL, encoding: .utf8) else { return }
         let config = config ?? meetingConfig()
-        let request = RunRequest(prompt: Self.summaryPrompt(transcript: text), workspace: folder, resume: nil, auto: false,
-                                 model: config.summaryModel, readOnly: true)
         lastSummaryRequest = (config.summaryAgent, config.summaryModel)
         summary = .running
         setPhase(.summarizing)
-        let runner = config.summaryAgent.make()
+        guard let agent = AgentCatalog.agent(id: config.summaryAgent) else {
+            return summaryFinished("", error: "The summary agent \"\(config.summaryAgent)\" is not available. Pick another in Settings → Meetings.")
+        }
+        let runner = ACPBackend(agent: agent)
+        // Only the meeting folder is shared, and every permission request is refused, so the agent can read and answer
+        // but not change files or run commands. ironpet writes summary.md itself.
+        runner.restricted = true
+        runner.onPermission = { _, respond in respond(Self.summaryDecision) }
         summaryRunner = runner
+        let turn = ACPTurn(prompt: Self.summaryPrompt(transcript: text), preamble: nil, workspace: folder, resume: nil,
+                           model: config.summaryModel, images: [], files: [])
         var answer = ""
-        do {
-            try runner.start(request) { [weak self] event in
+        summaryTask = Task { [weak self] in
+            await runner.runTurn(turn) { event in
                 switch event {
                 case .assistant(let chunk): answer += chunk
                 case .finished(let error): self?.summaryFinished(answer, error: error)
+                case .needsSignIn: self?.summaryFinished("", error: "\(agent.name) needs you to sign in. Open it in the chat once, then try again.")
+                case .needsRuntime: self?.summaryFinished("", error: "\(agent.name) needs Node 22 or Bun. Open it in the chat once to set that up.")
                 default: break
                 }
             }
-        } catch {
-            summaryFinished("", error: error.localizedDescription)
-            return
         }
         summaryTimeout = Task { [weak self] in
             try? await Task.sleep(for: .seconds(600))
             guard !Task.isCancelled else { return }
-            self?.summaryRunner?.stop()
             self?.summaryFinished("", error: "The agent did not answer within 10 minutes.")
         }
     }
 
+    /// Every permission request from the summary agent is refused.
+    nonisolated static let summaryDecision = ApprovalDecision.deny("Meeting summaries are read-only")
+
     private func summaryFinished(_ answer: String, error: String?) {
         guard phase == .summarizing, let url = summaryURL else { return }
         summaryTimeout?.cancel()
+        summaryTask?.cancel()
+        summaryTask = nil
+        summaryRunner?.cancel()
+        summaryRunner?.shutdown()
         summaryRunner = nil
         let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         if let error {
@@ -632,7 +645,10 @@ final class MeetingController: ObservableObject {
         timer?.invalidate()
         timer = nil
         summaryTimeout?.cancel()
-        summaryRunner?.stop()
+        summaryTask?.cancel()
+        summaryTask = nil
+        summaryRunner?.cancel()
+        summaryRunner?.shutdown()
         summaryRunner = nil
         recorders = [:]
         sources = [:]
