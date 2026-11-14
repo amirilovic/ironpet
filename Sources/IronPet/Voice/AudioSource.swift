@@ -115,6 +115,7 @@ final class MicrophoneSource: StreamingSource, @unchecked Sendable {
     private var failedRestarts = 0
     private var restartPending = false
     private var cancelWatchdog: (() -> Void)?
+    private var cancelDebounce: (() -> Void)?
 
     init(engine: CaptureEngine = AVCaptureEngine(), clock: CaptureClock = DispatchCaptureClock()) {
         self.engine = engine
@@ -170,12 +171,19 @@ final class MicrophoneSource: StreamingSource, @unchecked Sendable {
 
     private func configurationChanged() {
         lock.lock()
-        let skip = !running || restartPending
-        if !skip { restartPending = true }
+        guard running else { lock.unlock(); return }
+        // A headset can post several notifications in a row while it switches profile. Each one pushes the restart back,
+        // so one restart runs after the burst ends. A retry already scheduled after a failure is left alone.
+        if restartPending && cancelDebounce == nil { lock.unlock(); return }
+        restartPending = true
+        cancelDebounce?()
+        cancelDebounce = clock.after(Self.restartDelay) { [weak self] in
+            self?.lock.lock()
+            self?.cancelDebounce = nil
+            self?.lock.unlock()
+            self?.restart(reason: "audio configuration changed")
+        }
         lock.unlock()
-        guard !skip else { return }
-        // A headset can post several notifications in a row while it switches profile. One restart covers them.
-        _ = clock.after(Self.restartDelay) { [weak self] in self?.restart(reason: "audio configuration changed") }
     }
 
     private func checkForSilence() {
@@ -203,6 +211,7 @@ final class MicrophoneSource: StreamingSource, @unchecked Sendable {
         guard active else { return }
         engine.removeTap()
         engine.stop()
+        engine.reset()
         do {
             let new = try installTap()
             try engine.start()
@@ -243,6 +252,10 @@ final class MicrophoneSource: StreamingSource, @unchecked Sendable {
         lock.unlock()
         cancelWatchdog?()
         cancelWatchdog = nil
+        lock.lock()
+        cancelDebounce?()
+        cancelDebounce = nil
+        lock.unlock()
         engine.onConfigurationChange = nil
         guard wasRunning else { return }
         engine.removeTap()

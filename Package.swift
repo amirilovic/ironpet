@@ -5,7 +5,8 @@ let package = Package(
     name: "IronPet",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "IronPet", path: "Sources/IronPet"),
+        .target(name: "IronPetObjC", path: "Sources/IronPetObjC"),
+        .executableTarget(name: "IronPet", dependencies: ["IronPetObjC"], path: "Sources/IronPet"),
         .testTarget(name: "IronPetTests", dependencies: ["IronPet"], path: "Tests/IronPetTests"),
     ]
 )
