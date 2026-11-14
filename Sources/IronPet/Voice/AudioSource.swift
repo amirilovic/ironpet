@@ -72,6 +72,22 @@ final class PCMConverter: @unchecked Sendable {
     }
 }
 
+/// A `PCMConverter` that follows the format of the buffers it is given. A Bluetooth headset switches from its
+/// stereo profile to the 16 kHz hands-free one once the engine starts, so buffers can arrive in a different format
+/// than `inputNode.outputFormat` reported earlier. A converter built for the old format returns no samples for them.
+final class AdaptiveConverter: @unchecked Sendable {
+    private var converter: PCMConverter?
+    private var format: AVAudioFormat?
+
+    func convert(_ buffer: AVAudioPCMBuffer) -> [Float] {
+        if converter == nil || format != buffer.format {
+            converter = PCMConverter(from: buffer.format)
+            format = buffer.format
+        }
+        return converter?.convert(buffer) ?? []
+    }
+}
+
 /// The default input device through AVAudioEngine.
 final class MicrophoneSource: StreamingSource, @unchecked Sendable {
     var sink: (@Sendable ([Int16]) -> Void)?
@@ -83,9 +99,8 @@ final class MicrophoneSource: StreamingSource, @unchecked Sendable {
     func start(level: @escaping @Sendable (Float) -> Void) throws {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0, let converter = PCMConverter(from: format) else {
-            throw VoiceError.noInput
-        }
+        guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceError.noInput }
+        let converter = AdaptiveConverter()
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             let floats = converter.convert(buffer)
             guard !floats.isEmpty else { return }
