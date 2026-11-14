@@ -4,6 +4,16 @@ final class PetView: NSView {
     var onClick: (() -> Void)?
     var onDragEnded: (() -> Void)?
     var contextMenu: (() -> NSMenu)?
+    var onRecordingClick: (() -> Void)?
+
+    enum Recording { case none, shown, hidden }
+    /// `.hidden` means a meeting is recording and its bubble is closed, so the pet shows a Recording button.
+    var recording: Recording = .none {
+        didSet { if recording != oldValue { needsDisplay = true } }
+    }
+    private var recordingRect: CGRect {
+        CGRect(x: bounds.midX - 38, y: 4, width: 76, height: 20)
+    }
 
     private var atlas: Atlas?
     private(set) var mood: PetMood = .idle
@@ -111,6 +121,20 @@ final class PetView: NSView {
         }
         ctx.restoreGState()
         if badge > 0, [.needsInput, .failed, .done].contains(mood) { drawBadge() }
+        if recording == .hidden { drawRecordingButton() }
+    }
+
+    private func drawRecordingButton() {
+        let rect = recordingRect
+        NSColor.systemRed.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2).fill()
+        NSColor.white.setFill()
+        NSBezierPath(ovalIn: CGRect(x: rect.minX + 8, y: rect.midY - 3.5, width: 7, height: 7)).fill()
+        let text = NSAttributedString(string: "Recording", attributes: [
+            .font: NSFont.boldSystemFont(ofSize: 10), .foregroundColor: NSColor.white,
+        ])
+        let s = text.size()
+        text.draw(at: NSPoint(x: rect.minX + 19, y: rect.midY - s.height / 2))
     }
 
     private func drawPlaceholder(_ ctx: CGContext) {
@@ -168,7 +192,13 @@ final class PetView: NSView {
     override func mouseUp(with event: NSEvent) {
         dragStart = nil
         dragDirection = nil
-        if didDrag { onDragEnded?() } else { onClick?() }
+        if didDrag {
+            onDragEnded?()
+        } else if recording == .hidden, recordingRect.contains(convert(event.locationInWindow, from: nil)) {
+            onRecordingClick?()
+        } else {
+            onClick?()
+        }
     }
 
     override func rightMouseDown(with event: NSEvent) {

@@ -537,7 +537,7 @@ def scenario_sentry_mcp():
 # Driven through macOS accessibility (System Events), so the terminal needs Accessibility permission.
 # These scenarios edit config.json and the hook files for real; the user's copies are restored afterwards.
 
-CONFIG = f"{HOME}/.ironpet/config.json"
+CONFIG = f"{ROOT}/config.json"
 HOOK_FILES = {"cursor": f"{HOME}/.cursor/hooks.json", "claude": f"{HOME}/.claude/settings.json"}
 DEFAULTS_DOMAIN = "dev.ironpet.app"
 
@@ -955,18 +955,333 @@ def scenario_voice_key():
             subprocess.run(["security", "delete-generic-password", "-s", "ironpet.voice"], capture_output=True)
 
 
+# MARK: meeting transcripts
+
+ME_SENTENCES = ["Can we ship the fix today?", "I will update the changelog tomorrow morning.",
+                "Please send the invoice to finance.", "Let us meet again on Friday."]
+THEM_SENTENCES = ["Yes, after the review is done.", "The deployment window opens at noon.",
+                  "Marketing needs two more screenshots.", "Friday works for everyone."]
+# Words that must show up in the right track. Parakeet is exact on synthetic speech, so a few words are enough.
+ME_KEYWORDS = ["ship", "changelog", "invoice", "friday"]
+THEM_KEYWORDS = ["review", "deployment", "screenshots", "friday"]
+
+
+def build_track(sentences, offset_slots, name, slot_seconds=7, slots=8):
+    """A 16 kHz mono WAV of `slots` equal slots; a sentence is spoken in every other slot, starting at `offset_slots`."""
+    import array
+    import wave
+    os.makedirs(SHOTS, exist_ok=True)
+    rate = 16000
+    out = array.array("h")
+    spoken = iter(sentences)
+    for slot in range(slots):
+        block = array.array("h", [0]) * (slot_seconds * rate)
+        if slot % 2 == offset_slots:
+            text = next(spoken, None)
+            if text:
+                with wave.open(speak(text, f"{name}-{slot}")) as w:
+                    data = array.array("h", w.readframes(w.getnframes()))
+                block[0:min(len(data), len(block) - rate)] = data[:len(block) - rate]
+        out.extend(block)
+    path = f"{SHOTS}/{name}.wav"
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(out.tobytes())
+    return path
+
+
+class MlxServer:
+    """A local mlx-audio server that the scenario can stop and start again."""
+
+    def __init__(self):
+        self.proc = None
+
+    def up(self):
+        try:
+            urllib.request.urlopen(f"http://localhost:{MLX_PORT}/v1/models", timeout=2)
+            return True
+        except urllib.error.HTTPError:
+            return True
+        except Exception:
+            return False
+
+    def start(self):
+        if self.proc is None:
+            self.proc = subprocess.Popen(["uvx", "--from", "mlx-audio[server]", "mlx_audio.server", "--port", str(MLX_PORT)],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return bool(wait_for(self.up, 240, 2))
+
+    def stop(self):
+        if self.proc:
+            self.proc.terminate()
+            self.proc.wait(timeout=30)
+            self.proc = None
+        subprocess.run(["pkill", "-f", "mlx_audio.server"], capture_output=True)
+        time.sleep(1)
+
+
+def set_meeting_config(**meetings):
+    config = read_config()
+    config.setdefault("meetings", {}).update(meetings)
+    json.dump(config, open(CONFIG, "w"), indent=2)
+    time.sleep(2.6)
+
+
+def meeting():
+    return call("GET", "/test/meeting")
+
+
+def meeting_shot(name):
+    x, y, w, h = meeting()["frame"]
+    subprocess.run(["screencapture", "-x", "-R", f"{int(x)},{int(y)},{int(w)},{int(h)}", f"{SHOTS}/{name}.png"])
+
+
+def transcript_lines(path):
+    """[(clock, speaker, text)] from transcript.md, in file order."""
+    import re
+    if not os.path.exists(path):
+        return []
+    return [m.groups() for m in (re.match(r"\[(\d\d:\d\d:\d\d)\] (Me|Them): (.*)", line) for line in open(path).read().splitlines()) if m]
+
+
+def has_words(lines, speaker, keywords):
+    text = " ".join(t for _, who, t in lines if who == speaker).lower()
+    return [w for w in keywords if w not in text]
+
+
+def scenario_meeting():
+    """Meeting transcripts against a real local mlx-audio server, driven by WAV files for the mic and the app track."""
+    import signal
+    dark = osa('tell application "System Events" to tell appearance preferences to get dark mode') == "true"
+    server = MlxServer()
+    server.stop()
+    local = {"enabled": True, "baseUrl": f"http://localhost:{MLX_PORT}/v1", "model": "mlx-community/parakeet-tdt-0.6b-v3"}
+    with PreservedUserState():
+        try:
+            relaunch(test_mode=True)
+            me = build_track(ME_SENTENCES, 0, "meeting-me")
+            them = build_track(THEM_SENTENCES, 1, "meeting-them")
+            config = read_config()
+            config["voice"] = {**config.get("voice", {}), **local}
+            config["meetings"] = {"enabled": False, "autoSummary": False}
+            json.dump(config, open(CONFIG, "w"), indent=2)
+            time.sleep(2.6)
+
+            # S9: off by default, nothing to start.
+            state = call("POST", "/test/meeting/picker")
+            started = call("POST", "/test/meeting/start", {"mic": me, "them": them})
+            record("Meeting S9: off means no picker, no panel, no menu item, no recording",
+                   state["phase"] == "idle" and state["frame"][2] == 0 and state["menuTitle"] == ""
+                   and started.get("error") == "meetings are off", json.dumps({k: state[k] for k in ("phase", "menuTitle")}))
+
+            # S10: the picker lists running apps and All system audio, never ironpet itself.
+            set_meeting_config(enabled=True)
+            for mode in ("light", "dark"):
+                set_dark_mode(mode == "dark")
+                state = call("POST", "/test/meeting/picker")
+                time.sleep(1)
+                meeting_shot(f"meeting-picker-{mode}")
+                call("POST", "/test/meeting/dismiss")
+            names = [c.lower() for c in state["choices"]]
+            record("Meeting S10: picker offers All system audio, not ironpet", "all system audio" in names
+                   and not any("ironpet" in n for n in names), f"selected {state['selected']!r} of {state['choices'][:6]}")
+            record("Meeting S10: menu offers Start meeting transcript", "Start meeting" in state["menuTitle"], state["menuTitle"])
+            set_dark_mode(dark)
+
+            # S5: both tracks transcribed while recording, then the rest after Stop.
+            record("Meeting: mlx-audio server started", server.start())
+            body = {"mic": me, "them": them, "chunkSeconds": 15, "app": "Test call", "retrySeconds": 3}
+            for mode in ("light", "dark"):
+                set_dark_mode(mode == "dark")
+                call("POST", "/test/meeting/start", body)
+                wait_for(lambda: meeting()["phase"] == "recording", 10)
+                got = wait_for(lambda: meeting()["lines"], 60, 1)
+                if mode == "light":
+                    state = meeting()
+                    record("Meeting S5: the panel shows transcript lines before stop", bool(got) and state["phase"] == "recording",
+                           "; ".join(state["lines"]))
+                    meeting_shot("meeting-recording-light")
+                    folder = state["folder"]
+                    record("Meeting: the status shows in the pet's bubble while recording", state["bubbleShown"] and not state["recordingButton"],
+                           json.dumps({k: state[k] for k in ("bubbleShown", "recordingButton")}))
+                    hidden = call("POST", "/test/meeting/hide-bubble")
+                    time.sleep(0.8)
+                    meeting_shot("meeting-bubble-hidden-light")
+                    record("Meeting: closing the bubble keeps recording and shows the pet's Recording button",
+                           hidden["phase"] == "recording" and not hidden["bubbleShown"] and hidden["recordingButton"],
+                           json.dumps({k: hidden[k] for k in ("phase", "bubbleShown", "recordingButton")}))
+                    shown = call("POST", "/test/meeting/show-bubble")
+                    time.sleep(0.8)
+                    record("Meeting: the Recording button brings the bubble back",
+                           shown["bubbleShown"] and not shown["recordingButton"] and shown["phase"] == "recording",
+                           json.dumps({k: shown[k] for k in ("phase", "bubbleShown", "recordingButton")}))
+                else:
+                    meeting_shot("meeting-recording-dark")
+                if mode == "light":
+                    time.sleep(max(0, 62 - 15))
+                    call("POST", "/test/meeting/stop")
+                    wait_for(lambda: meeting()["phase"] in ("done", "idle"), 90)
+                    state = meeting()
+                    meeting_shot("meeting-done-light")
+                    lines = transcript_lines(state["transcript"])
+                    missing_me, missing_them = has_words(lines, "Me", ME_KEYWORDS), has_words(lines, "Them", THEM_KEYWORDS)
+                    clocks = [c for c, _, _ in lines]
+                    record("Meeting S5: transcript.md has Me and Them lines matching the speech, in time order",
+                           not missing_me and not missing_them and clocks == sorted(clocks) and state["chunks"]["failed"] == 0,
+                           f"missing Me {missing_me}, Them {missing_them}, {len(lines)} lines")
+                    wavs = sorted(f for f in os.listdir(folder) if f.endswith(".wav"))
+                    record("Meeting S5: chunk WAVs stay in the meeting folder",
+                           any(w.startswith("mic-") for w in wavs) and any(w.startswith("them-") for w in wavs), ", ".join(wavs))
+                    record("Meeting S7: auto-summary off, no agent ran", state["summaryRan"] is False
+                           and not os.path.exists(f"{folder}/summary.md"))
+                else:
+                    time.sleep(8)
+                    call("POST", "/test/meeting/stop")
+                    wait_for(lambda: meeting()["phase"] in ("done", "idle"), 60)
+                    meeting_shot("meeting-done-dark")
+                call("POST", "/test/meeting/dismiss")
+            set_dark_mode(dark)
+
+            # S6a: the server goes away while recording; chunks wait, then get transcribed when it is back.
+            call("POST", "/test/meeting/start", body)
+            wait_for(lambda: meeting()["lines"], 60, 1)
+            server.stop()
+            waiting = wait_for(lambda: meeting()["chunks"]["waiting"] > 0, 45, 1)
+            state = meeting()
+            record("Meeting S6: server down, recording goes on and chunks wait", bool(waiting) and state["phase"] == "recording",
+                   json.dumps(state["chunks"]))
+            meeting_shot("meeting-waiting-light")
+            server.start()
+            cleared = wait_for(lambda: meeting()["chunks"]["waiting"] == 0, 120, 2)
+            record("Meeting S6: server back, waiting chunks get transcribed", bool(cleared), json.dumps(meeting()["chunks"]))
+            call("POST", "/test/meeting/stop")
+            wait_for(lambda: meeting()["phase"] in ("done", "idle"), 90)
+            state = meeting()
+            lines = transcript_lines(state["transcript"])
+            record("Meeting S6: nothing was lost", state["chunks"]["failed"] == 0 and not has_words(lines, "Me", ME_KEYWORDS[:2]),
+                   json.dumps(state["chunks"]))
+            call("POST", "/test/meeting/dismiss")
+
+            # S6b: the server stays down to the end.
+            server.stop()
+            call("POST", "/test/meeting/start", body)
+            time.sleep(40)
+            call("POST", "/test/meeting/stop")
+            wait_for(lambda: meeting()["phase"] in ("done", "idle"), 90)
+            state = meeting()
+            text = open(state["transcript"]).read()
+            record("Meeting S6: server down to the end gives 'not transcribed' lines", "(not transcribed:" in text
+                   and state["chunks"]["failed"] > 0, json.dumps(state["chunks"]))
+            meeting_shot("meeting-failed-light")
+            server.start()
+            call("POST", "/test/meeting/retry")
+            wait_for(lambda: meeting()["chunks"]["failed"] == 0 and meeting()["chunks"]["waiting"] == 0, 120, 2)
+            text = open(state["transcript"]).read()
+            record("Meeting S6: Retry transcribes the failed chunks", meeting()["chunks"]["failed"] == 0
+                   and "(not transcribed:" not in text, json.dumps(meeting()["chunks"]))
+            call("POST", "/test/meeting/dismiss")
+
+            # S8: Cancel deletes everything and runs no agent; a kill keeps what was transcribed.
+            set_meeting_config(autoSummary=True, summaryAgent="claude", summaryModel="haiku")
+            call("POST", "/test/meeting/start", body)
+            wait_for(lambda: meeting()["lines"], 60, 1)
+            folder = meeting()["folder"]
+            call("POST", "/test/meeting/cancel")
+            time.sleep(2)
+            state = meeting()
+            record("Meeting S8: Cancel stops, deletes the folder and runs no agent",
+                   state["phase"] == "idle" and not os.path.exists(folder) and state["summaryRan"] is False, state["phase"])
+            call("POST", "/test/meeting/start", body)
+            wait_for(lambda: meeting()["lines"], 60, 1)
+            folder = meeting()["folder"]
+            subprocess.run(["pkill", "-9", "-f", "IronPet.app/Contents/MacOS/IronPet"])
+            time.sleep(1)
+            kept = transcript_lines(f"{folder}/transcript.md")
+            record("Meeting S8: after a kill, transcribed chunks are in transcript.md", len(kept) > 0, f"{len(kept)} lines")
+            shutil.rmtree(folder, ignore_errors=True)
+            relaunch(test_mode=True)
+
+            # S7: the summary agent and model from settings.
+            call("POST", "/test/meeting/start", {**body, "chunkSeconds": 12})
+            wait_for(lambda: meeting()["lines"], 60, 1)
+            time.sleep(15)
+            call("POST", "/test/meeting/stop")
+            record("Meeting S7: summarizing starts after the transcript", bool(wait_for(lambda: meeting()["phase"] == "summarizing", 90, 1)))
+            meeting_shot("meeting-summarizing-light")
+            wait_for(lambda: meeting()["phase"] == "done", 240, 2)
+            state = meeting()
+            summary = f"{state['folder']}/summary.md"
+            text = open(summary).read() if os.path.exists(summary) else ""
+            record("Meeting S7: summary.md has summary, decisions and action items",
+                   all(h in text for h in ("## Summary", "## Decisions", "## Action items")), text[:200].replace("\n", " "))
+            record("Meeting S7: the request used the chosen agent and model",
+                   state["summaryAgent"] == "claude" and state["summaryModel"] == "haiku", f"{state['summaryAgent']} {state['summaryModel']}")
+            record("Meeting S7: 'Meeting summary ready' was posted", summary in state["notified"], str(state["notified"]))
+            meeting_shot("meeting-summary-done-light")
+            call("POST", "/test/meeting/open-in-chat")
+            time.sleep(2)
+            attached = chat()["attachments"]
+            record("Meeting: Open in chat attaches transcript and summary",
+                   any(a.endswith("transcript.md") for a in attached) and any(a.endswith("summary.md") for a in attached), str(attached))
+            call("POST", "/test/meeting/dismiss")
+        finally:
+            server.stop()
+            set_dark_mode(dark)
+
+
+def scenario_meeting_system_audio():
+    """Real ScreenCaptureKit capture of all system audio while afplay speaks; the mic track still comes from a file."""
+    dark = osa('tell application "System Events" to tell appearance preferences to get dark mode') == "true"
+    server = MlxServer()
+    with PreservedUserState():
+        try:
+            relaunch(test_mode=True)
+            me = build_track(ME_SENTENCES, 0, "meeting-me")
+            sentence = "The deployment window opens at noon. Marketing needs two more screenshots."
+            spoken = speak(sentence, "meeting-system")
+            config = read_config()
+            config["voice"] = {**config.get("voice", {}), "enabled": True, "baseUrl": f"http://localhost:{MLX_PORT}/v1",
+                               "model": "mlx-community/parakeet-tdt-0.6b-v3"}
+            config["meetings"] = {"enabled": True, "autoSummary": False}
+            json.dump(config, open(CONFIG, "w"), indent=2)
+            time.sleep(2.6)
+            record("Meeting S11: mlx-audio server started", server.start())
+            started = call("POST", "/test/meeting/start", {"mic": me, "chunkSeconds": 12, "app": "All system audio"})
+            if started.get("ok") is False:
+                return record("Meeting S11: real system audio capture", False, f"{started.get('error')} (grant Screen & System Audio Recording to IronPet once)")
+            wait_for(lambda: meeting()["phase"] == "recording", 15)
+            time.sleep(2)
+            subprocess.run(["afplay", spoken])
+            time.sleep(14)
+            call("POST", "/test/meeting/stop")
+            wait_for(lambda: meeting()["phase"] in ("done", "idle"), 90)
+            state = meeting()
+            lines = transcript_lines(state["transcript"])
+            record("Meeting S11: system audio lands on the Them track", not has_words(lines, "Them", ["deployment", "screenshots"]),
+                   "; ".join(f"{who}: {t}" for _, who, t in lines)[:200])
+            call("POST", "/test/meeting/dismiss")
+        finally:
+            server.stop()
+            set_dark_mode(dark)
+
+
 SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_session, "claude": scenario_claude, "codex": scenario_codex, "agents": scenario_agents,
              "asks": scenario_asks, "runtime": scenario_runtime, "auto": scenario_auto, "picker": scenario_picker,
              "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
              "notification": scenario_notification_approval, "github": scenario_github, "mcp": scenario_mcp,
              "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
-             "voice": scenario_voice, "voice-key": scenario_voice_key}
+             "voice": scenario_voice, "voice-key": scenario_voice_key, "meeting": scenario_meeting,
+             "meeting-system": scenario_meeting_system_audio}
 
 # Need MCP servers signed in with cursor-agent: "mcp" a Langfuse MCP (its write is denied, so nothing is created),
 # "sentry" a Sentry MCP. Run them by name, e.g. `python3 scripts/e2e.py mcp sentry`.
 # "voice" starts a local mlx-audio server with `uvx` (needs the Parakeet model in the Hugging Face cache) and flips
 # the system between light and dark mode for screenshots, saved to $IRONPET_E2E_SHOTS.
-OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks"}
+# "meeting" does the same for meeting transcripts, and also runs one Claude Code summary (haiku). "meeting-system" needs
+# Screen & System Audio Recording granted to IronPet and plays a sentence with afplay.
+OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks", "meeting", "meeting-system"}
 
 if __name__ == "__main__":
     unknown = [name for name in sys.argv[1:] if name not in SCENARIOS]

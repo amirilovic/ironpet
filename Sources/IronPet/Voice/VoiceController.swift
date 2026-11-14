@@ -175,7 +175,7 @@ final class VoiceController: ObservableObject {
         onFailure?(error.localizedDescription, true)
     }
 
-    private static func microphoneAllowed() async -> Bool {
+    static func microphoneAllowed() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return true
         case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)

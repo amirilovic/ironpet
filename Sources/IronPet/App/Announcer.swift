@@ -98,6 +98,17 @@ final class Announcer {
         if alsoSystemNotifications { notifier.announceChat(title) }
     }
 
+    /// A meeting summary was written. Clicking opens it.
+    func meetingSummary(_ url: URL) {
+        let open: () -> Void = { NSWorkspace.shared.open(url) }
+        bubbles.show(Bubble(id: "meeting-summary", symbol: "doc.text.fill", tint: .green, title: "Meeting summary ready",
+                            body: url.deletingLastPathComponent().lastPathComponent,
+                            actions: [.init(title: "Open summary", style: .primary) { open() }], onTap: open,
+                            expires: Date().addingTimeInterval(60)))
+        chime()
+        if alsoSystemNotifications { notifier.announceMeetingSummary(url) }
+    }
+
     /// Small talk from the Actions menu.
     func say(_ text: String) {
         bubbles.show(Bubble(id: "say", symbol: "pawprint.fill", tint: .accentColor, title: ConfigStore.shared.config.pet.name, body: text,

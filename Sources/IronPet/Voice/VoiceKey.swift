@@ -12,6 +12,8 @@ enum VoiceKey {
     }
 
     static func load() -> String? {
+        // An automated run must never wait on a Keychain approval dialog. The test server needs no key.
+        if CommandLine.arguments.contains("--test-mode") { return nil }
         var query = match
         query[kSecReturnData as String] = true
         var result: AnyObject?

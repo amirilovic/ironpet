@@ -10,7 +10,7 @@ final class PetController: NSObject {
     private static let originKey = "petOrigin"
 
     let panel: NSPanel
-    private let view: PetView
+    private(set) var view: PetView
     private let store: SessionStore
     private let signals: SignalStore
     private let agentsPanel = AgentsPanel()
@@ -27,6 +27,14 @@ final class PetController: NSObject {
     /// "Ask Ghost" on an alert: open the chat with this prompt ready to send.
     var onAsk: ((String) -> Void)?
     var onCapture: ((_ region: Bool) -> Void)?
+    var onRecordingClick: (() -> Void)? {
+        didSet { view.onRecordingClick = onRecordingClick }
+    }
+
+    /// The red Recording button on the pet, shown while a meeting runs and its bubble is hidden.
+    func setRecording(_ state: PetView.Recording) {
+        view.recording = state
+    }
 
     init(store: SessionStore, signals: SignalStore) {
         self.store = store

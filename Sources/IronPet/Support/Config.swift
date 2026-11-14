@@ -20,6 +20,9 @@ struct Config: Codable, Equatable {
         var captureRegion = "cmd+opt+ctrl+g"
         /// Hold to record a voice note, release to transcribe it. Only registered while voice notes are on.
         var voice = "cmd+opt+v"
+        /// Starts the meeting picker, or stops a running meeting. No default binding. Only registered while meeting
+        /// transcripts are on.
+        var meeting = ""
     }
 
     /// Voice notes: record the mic and send the audio to an OpenAI-compatible transcription server. The API key is
@@ -30,6 +33,21 @@ struct Config: Codable, Equatable {
         /// The server's base URL; `/audio/transcriptions` is added to it.
         var baseUrl = "http://localhost:8000/v1"
         var model = "mlx-community/parakeet-tdt-0.6b-v3"
+    }
+
+    /// Meeting transcripts: the mic and one app's audio go to the voice server in chunks, and an agent summarizes the
+    /// result. Uses the server in `voice` (base URL, model, Keychain key).
+    struct Meetings: Codable, Equatable {
+        /// Off by default: turning it on lets meeting audio leave the Mac and the transcript reach an agent.
+        var enabled = false
+        /// Bundle id of the app recorded last time, or `"all"` for all system audio. Empty until the first meeting.
+        var lastApp = ""
+        /// An ACP agent id from `AgentCatalog`, such as `"claude"` or `"cursor"`.
+        var summaryAgent = "claude"
+        /// nil uses the agent's default model.
+        var summaryModel: String?
+        /// Run the summary agent as soon as the transcript is final.
+        var autoSummary = true
     }
 
     struct Reminders: Codable, Equatable {
@@ -93,6 +111,7 @@ struct Config: Codable, Equatable {
     var reminders = Reminders()
     var integrations = Integrations()
     var voice = Voice()
+    var meetings = Meetings()
 
     static let file = Paths.root.appendingPathComponent("config.json")
 
@@ -133,6 +152,7 @@ struct Config: Codable, Equatable {
         c.reminders.snoozeMinutes = max(1, c.reminders.snoozeMinutes)
         c.voice.baseUrl = c.voice.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         c.voice.model = c.voice.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if c.meetings.summaryModel?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.meetings.summaryModel = nil }
         return c
     }
 

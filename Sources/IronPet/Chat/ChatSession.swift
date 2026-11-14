@@ -240,7 +240,7 @@ final class ChatSession: ObservableObject {
         if !found.contains(agent), items.isEmpty, !isRunning, let first = found.first { select(first) }
     }
 
-    private static func cachedModels(for agent: ACPAgent) -> [ChatModel] {
+    static func cachedModels(for agent: ACPAgent) -> [ChatModel] {
         (UserDefaults.standard.array(forKey: "cachedModels.\(agent.id)") as? [[String]] ?? []).compactMap {
             $0.count == 2 ? ChatModel(id: $0[0], name: $0[1]) : nil
         }

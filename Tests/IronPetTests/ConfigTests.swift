@@ -91,6 +91,30 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(config.hotkeys.voice, "cmd+opt+v")
     }
 
+    func testOldConfigWithoutMeetingKeysKeepsMeetingsOff() throws {
+        try write(#"{"voice":{"enabled":true},"hotkeys":{"chat":"cmd+opt+x"}}"#)
+        let config = Config.load(from: file).config
+        XCTAssertEqual(config.meetings, Config.Meetings())
+        XCTAssertFalse(config.meetings.enabled)
+        XCTAssertEqual(config.meetings.summaryAgent, "claude")
+        XCTAssertTrue(config.meetings.autoSummary)
+        XCTAssertEqual(config.hotkeys.meeting, "")
+    }
+
+    func testMeetingKeysRoundTrip() throws {
+        var config = Config()
+        config.meetings = Config.Meetings(enabled: true, lastApp: "us.zoom.xos", summaryAgent: "cursor",
+                                          summaryModel: "gpt-5", autoSummary: false)
+        config.hotkeys.meeting = "cmd+opt+m"
+        try config.save(to: file)
+        XCTAssertEqual(Config.load(from: file).config, config)
+    }
+
+    func testBlankSummaryModelMeansDefault() throws {
+        try write(#"{"meetings":{"summaryModel":"  "}}"#)
+        XCTAssertNil(Config.load(from: file).config.meetings.summaryModel)
+    }
+
     func testVoiceKeysRoundTrip() throws {
         var config = Config()
         config.voice = Config.Voice(enabled: true, baseUrl: "https://api.groq.com/openai/v1", model: "whisper-large-v3-turbo")
