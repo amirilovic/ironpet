@@ -4,7 +4,7 @@ Thanks for helping out! Bug reports, ideas and pull requests are all welcome. Fo
 
 ## Setup
 
-You need macOS 14+, the Xcode command line tools (Swift 5.10+), and at least one agent CLI (`cursor-agent` or `claude`) to try the chat.
+You need macOS 14+, the Xcode command line tools (Swift 5.10+), and Bun (to bundle the ACP adapters in `sidecar/`), and at least one agent CLI (for example `cursor-agent` or `claude`) to try the chat.
 
 ```bash
 git clone https://github.com/irtazahashmi/ironpet.git

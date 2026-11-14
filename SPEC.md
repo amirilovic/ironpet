@@ -17,7 +17,7 @@ A personal macOS desktop pet that floats above all windows, watches coding agent
 ## Agent watcher
 
 - Watches Cursor (IDE chats and CLI) and Claude Code via global hooks that the pet installs itself.
-  - Merges into `~/.cursor/hooks.json` and `~/.claude/settings.json`, preserving other entries (Superset, Orca).
+  - Merges into each watched agent's own config, preserving other entries (Superset, Orca): `~/.cursor/hooks.json`, `~/.claude/settings.json`, `~/.codex/hooks.json`, `~/.gemini/settings.json`. GitHub Copilot gets its own file in `~/.copilot/hooks/` and Pi gets an extension in `~/.pi/agent/extensions/` that calls the same hook script. `SessionStore` maps each agent's events (Codex uses Claude's names; Gemini's are BeforeAgent/AfterAgent/BeforeTool; Copilot's are camelCase; Pi's come from the extension). The agents offered are the ones found on this Mac.
   - Backs up each file once to `<file>.ironpet-backup` before the first write. Uninstall removes only ironpet entries.
 - Hooks POST to the pet on `127.0.0.1` with a token from `~/.ironpet/token`. The hook never blocks or fails the agent (1s timeout, always exits 0).
 - Status per session: `running`, `needsInput`, `done`, `failed`, `idle`.
@@ -45,20 +45,18 @@ Known gap: Cursor has no hook for "waiting on the user's approval", so Cursor se
 ## Quick chat (milestone 2)
 
 - ⌥⌘G (or clicking the pet when no watched agent needs attention) opens a focused chat bubble. Opening the bubble activates ironpet (and closing it reactivates the previous app), because Wispr Flow (hold fn) finds the focused text field through the frontmost app's Accessibility tree. A dictation shows up as one large insert; with "Send automatically after dictation" on, it sends after 0.8s.
-- Backends behind `CLIBackend` (`Chat/ChatBackend.swift`), chosen in the chat footer: headless `cursor-agent -p --output-format stream-json` (default) or `claude -p --output-format stream-json --verbose` (prompt on stdin). Model choice is stored per backend; threads remember their backend.
+- Agents over ACP (`Chat/ACP/`): `ACPClient` speaks newline-delimited JSON-RPC, `ACPBackend` keeps one process per chat and maps `session/update` onto the chat's events. The agent comes from the catalog in `AgentCatalogData.swift` (generated from the ACP registry) and is chosen in the chat settings. Claude Code, Codex and Pi run through the `.mjs` adapters in `Contents/Resources/acp/` on the user's Node 22+ (or a Bun downloaded on request into `~/.ironpet/runtime`), pointed at the user's own CLI by `CLAUDE_CODE_EXECUTABLE`, `CODEX_PATH` or `PI_ACP_PI_COMMAND`. Executables are found on the login-shell PATH. Model choice is stored per agent; threads store the agent id, ACP session id and folder.
 - Working directory: frontmost Cursor window (window title matched against `windowsState.openedWindows` in Cursor's `storage.json`) or iTerm session path (AppleScript `session.path`). Opened from any other app, a new chat shows a "Which project?" picker (recent folders, "No project" → `~/.ironpet/scratch`, or choose a folder) and won't send until one is picked.
-- Approvals: every write and shell command is gated by the global ironpet hook, only when `IRONPET_RUN_ID` is set (hooks inherit the agent's env). Cursor: `beforeShellExecution` + `preToolUse`; Claude Code: `PreToolUse` (`Bash`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`), answered in Claude's `hookSpecificOutput` format. Reads are auto-allowed. Identical repeated checks within a run reuse the decision (Cursor checks one write twice).
-- Wait "forever": gate hooks use a 2,000,000 s (~23 day) timeout. Cursor silently skips hooks with larger timeouts (Int32 milliseconds overflow), which fails open — verified by `scripts/e2e.py`.
-  - The hook must answer `allow` or `deny`, never `ask`: in headless mode `ask` silently runs the command.
-  - Gate shell on `beforeShellExecution` only and edits on `preToolUse` only (a shell call fires both).
-- Auto mode: per-chat toggle that adds `--force`. Destructive commands (`rm -rf`, `git reset --hard`, `git push --force`, dropping tables) still require approval.
-- Threads are kept and can be reopened. Done is detected from `sessionEnd` / the stream's `result` event (headless runs do not fire `stop`).
+- Approvals: the agent sends `session/request_permission` with the tool call (`kind`, `title`, `rawInput`) and a list of options. `ApprovalRules` decides whether ironpet answers at once (read, search, think, fetch, read-only MCP verbs, memory-file edits, and everything non-destructive in Auto mode) or shows a card. The reply picks `allow_once` or `reject_once`. Identical repeated requests within a turn share one card. ironpet cannot make an agent ask; an agent that does not send the request runs its tools unprompted.
+- Auto mode: per-chat toggle handled in ironpet. The agent stays in its asking mode, ironpet auto-allows, and destructive commands (`rm -rf`, `git reset --hard`, `git push --force`, dropping tables) still require approval.
+- Stop sends `session/cancel` and keeps the process. Threads are kept and reopened with `session/load`; the replayed transcript is ignored because the chat already holds it.
+- ACP chat runs set `IRONPET_ACP_RUN=1`; the hook script skips them so they do not show up as external sessions.
 - Memory: the agent writes editable markdown in `~/.ironpet/memory/` (`me.md` plus one file per project), injected into each chat.
 
 ## Screen-aware help (milestone 3)
 
 - ⇧⌥⌘G captures the frontmost window, ⌃⌥⌘G a dragged region (also in the pet's right-click menu). Opens quick chat with the image attached.
-- Screenshots go to `~/.ironpet/screenshots/` (last 30 kept), which is passed with `--add-dir`; the prompt names the file and cursor-agent opens it with its Read tool.
+- Screenshots go to `~/.ironpet/screenshots/` (last 30 kept), which is passed as `additionalDirectories` where the agent supports it. Images go as ACP image blocks when the agent advertises `promptCapabilities.image`; otherwise the prompt names the file.
 - The app is signed with a local self-signed identity (`scripts/make_signing_identity.sh`, run by `install.sh` when missing) so TCC permissions survive rebuilds. `scripts/uninstall.sh` removes hooks and the login item by running the installed binary with `--uninstall` (which reuses `HookInstaller`), then deletes the app, Keychain item and preferences, and asks before deleting `~/.ironpet` and the identity.
 - Needs Screen Recording permission (also unlocks Cursor window titles for workspace detection). No app exclusions.
 
@@ -81,7 +79,7 @@ Rows 11-12 are ironpet additions below the Codex v2 layout, so ironpet's sheet i
 
 Reduced motion: frame 0 only. Pet art is loaded from `pet.sprite` in config.json, else `~/.ironpet/pet/spritesheet.{webp,png}`, else the Ghost sheet bundled in the app (generated by `scripts/bundle.sh` with `tools/make_wolf.swift`), else a drawn placeholder. OpenAI's built-in pet art is never used or bundled.
 
-Status of milestone 2: built. Threads are saved to `~/.ironpet/threads/` and reopened from the history menu (resumed with `--resume <session_id>`). Memory files are created on first use, injected into the first turn of each thread, reachable via `--add-dir`, and edits to them never need approval.
+Status of milestone 2: built. Threads are saved to `~/.ironpet/threads/` and reopened from the history menu (reopened with `session/load`). Memory files are created on first use, injected into the first turn of each thread, reachable via `--add-dir`, and edits to them never need approval.
 
 ## Additions after v1
 

@@ -1,12 +1,16 @@
 import Foundation
 
 enum AgentSource: String {
-    case cursor, claude
+    case cursor, claude, codex, gemini, copilot, pi
 
     var displayName: String {
         switch self {
         case .cursor: return "Cursor"
         case .claude: return "Claude Code"
+        case .codex: return "Codex"
+        case .gemini: return "Gemini CLI"
+        case .copilot: return "GitHub Copilot"
+        case .pi: return "Pi"
         }
     }
 }

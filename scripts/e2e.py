@@ -16,17 +16,22 @@ import urllib.error
 import urllib.request
 
 HOME = os.path.expanduser("~")
-APP = "/Applications/IronPet.app"
+# IRONPET_APP and IRONPET_ROOT run a second copy of the app with its own port, token and threads, so a run does not
+# disturb the installed app. Without them the scenarios drive /Applications/IronPet.app and ~/.ironpet.
+APP = os.environ.get("IRONPET_APP", "/Applications/IronPet.app")
+ROOT = os.environ.get("IRONPET_ROOT", f"{HOME}/.ironpet")
+ISOLATED = "IRONPET_APP" in os.environ
 WS = "/tmp/ironpet-e2e-ws"
 results = []
+SHOTS = os.environ.get("IRONPET_E2E_SHOTS", "/tmp/ironpet-e2e-shots")
 
 
 def token():
-    return open(f"{HOME}/.ironpet/token").read().strip()
+    return open(f"{ROOT}/token").read().strip()
 
 
 def call(method, path, body=None, timeout=10):
-    port = open(f"{HOME}/.ironpet/port").read().strip()
+    port = open(f"{ROOT}/port").read().strip()
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data, method=method,
                                  headers={"X-Ironpet-Token": token(), "Content-Type": "application/json"})
@@ -59,20 +64,29 @@ def record(name, ok, detail=""):
     print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
 
 
-def relaunch(test_mode):
-    subprocess.run(["pkill", "-f", "IronPet.app/Contents/MacOS/IronPet"])
+def relaunch(test_mode, env=None):
+    subprocess.run(["pkill", "-f", f"{APP}/Contents/MacOS/IronPet"])
     time.sleep(1.5)
-    port_file = f"{HOME}/.ironpet/port"
+    port_file = f"{ROOT}/port"
     if os.path.exists(port_file):
         os.remove(port_file)
-    args = ["open", "-n", APP] + (["--args", "--test-mode"] if test_mode else [])
-    subprocess.run(args, check=True)
+    if ISOLATED:
+        if not test_mode:
+            return
+        full = {**os.environ, "IRONPET_ROOT": ROOT, **(env or {})}
+        # Command-line defaults hide the installed app's saved draft, attachments and open chat from this copy.
+        fresh = ["-chatAttachments", "()", "-chatDraft", "", "-chatThread", ""]
+        subprocess.Popen([f"{APP}/Contents/MacOS/IronPet", "--test-mode", *fresh], env=full, start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        args = ["open", "-n", APP] + (["--args", "--test-mode"] if test_mode else [])
+        subprocess.run(args, check=True)
     wait_for(lambda: os.path.exists(port_file), 15)
     time.sleep(1.5)
 
 
-def run_chat(prompt, backend="cursor", auto=False, workspace=WS):
-    call("POST", "/test/chat", {"newChat": True, "backend": backend, "workspace": workspace, "auto": auto, "prompt": prompt})
+def run_chat(prompt, backend="cursor", auto=False, workspace=WS, **extra):
+    call("POST", "/test/chat", {"newChat": True, "backend": backend, "workspace": workspace, "auto": auto, "prompt": prompt, **extra})
 
 
 def wait_approval_or_end(timeout=180):
@@ -97,6 +111,7 @@ def approval_flow(name, backend, prompt, allow, expect_title, check_file, should
     if not c or not c["approvals"]:
         return record(name, False, f"no approval card appeared (state={c and c['state']}, items={c and c['items'][-3:]})")
     title = c["approvals"][0]["title"]
+    shot(f"approval-{backend}-{'allow' if allow else 'deny'}")
     call("POST", "/test/approve", {"allow": allow})
     # Further approvals may follow (e.g. a retry); deny anything after the one under test.
     end = wait_for(lambda: (lambda c: c if (c["state"] in ("done", "failed") and not c["approvals"]) or c["approvals"] else None)(chat()), 180)
@@ -108,38 +123,223 @@ def approval_flow(name, backend, prompt, allow, expect_title, check_file, should
     record(name, ok, f"card='{title}' decision={'allow' if allow else 'deny'} file_exists={exists} state={end and end['state']}")
 
 
+def assistant_text(c):
+    return " ".join(i["text"] for i in c["items"] if i["kind"] == "assistant")
+
+
+def proc_command(pid):
+    return subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+
+
+def proc_env(pid):
+    return subprocess.run(["ps", "eww", "-p", str(pid)], capture_output=True, text=True).stdout
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def which(name):
+    return subprocess.run(["zsh", "-lic", f"command -v {name}"], capture_output=True, text=True).stdout.strip().splitlines()[-1:] or [""]
+
+
 def scenario_cursor():
-    approval_flow("Cursor: edit card, Allow reaches agent", "cursor",
-                  "Create a file named allow.txt in the current folder containing the word hi. Use your file editing tool, not the shell.",
-                  True, "allow.txt", "allow.txt", True)
-    approval_flow("Cursor: shell card, Deny reaches agent", "cursor",
-                  "Run exactly this shell command: touch denied.txt . If it is denied, do not retry or use any other tool; just say it was denied.",
+    """S2, S3, S11: Cursor over `cursor-agent acp`: text, tool steps, approval cards."""
+    fresh_workspace()
+    open(os.path.join(WS, "hello.txt"), "w").write("hi from e2e\n")
+    run_chat("Run the shell command `ls` and tell me the file names. Then reply with the single word pong.", "cursor")
+    end = wait_end(150)
+    tools = [i for i in end["items"] if i["kind"] == "tool"]
+    pid = end["pid"]
+    shot("cursor-turn")
+    record("S2 Cursor: text streams and tool steps finish",
+           end["state"] == "done" and "pong" in assistant_text(end).lower() and bool(tools) and all(t["ok"] == "yes" for t in tools),
+           f"state={end['state']} tools={[(t['text'], t['ok']) for t in tools]} text={assistant_text(end)[:80]!r}")
+    cmd = proc_command(pid) if pid else ""
+    record("S2 Cursor: spawned `cursor-agent acp`", "cursor-agent" in cmd and cmd.endswith(" acp"), f"pid={pid} command={cmd!r}")
+
+    sessions = [x for x in call("GET", "/status").get("sessions", []) if x["workspace"] == os.path.basename(WS)]
+    record("S11 Chat run is not listed as an external session", not sessions, f"sessions={sessions}")
+
+    # S3: a command Cursor does not allow-list asks first.
+    approval_flow("S3 Cursor: shell card, Deny reaches the agent", "cursor",
+                  "Run exactly this shell command: touch denied.txt . If it is denied, do not retry; just say it was denied.",
                   False, "command", "denied.txt", False)
+    approval_flow("S3 Cursor: shell card, Allow runs it", "cursor",
+                  "Run exactly this shell command: touch allowed.txt . Then reply OK.", True, "command", "allowed.txt", True)
+
+
+
+def scenario_cursor_session():
+    """S4, S5, S12, S14: Stop, session reuse, reopening a thread, and the model picker."""
+    # S4 + S5: Stop cancels the turn, keeps the process, and the next message reuses process and session.
+    fresh_workspace()
+    run_chat("Write the numbers from 1 to 600, one per line, with no other text and no tools.", "cursor")
+    running = wait_for(lambda: (lambda c: c if c["state"] == "running" and assistant_text(c) else None)(chat()), 90)
+    before = running or chat()
+    pid1, sid1 = before["pid"], before["sessionId"]
+    call("POST", "/test/stop")
+    time.sleep(1.5)
+    after = chat()
+    record("S4 Stop: turn ends, agent process stays alive",
+           bool(running) and after["state"] == "idle" and alive(pid1) and after["pid"] == pid1,
+           f"state={after['state']} pid={pid1} alive={alive(pid1)}")
+    call("POST", "/test/chat", {"prompt": "Reply with the single word pong. No tools."})
+    end2 = wait_end(120)
+    record("S5 Second message uses the same process and session",
+           end2["state"] == "done" and end2["pid"] == pid1 and end2["sessionId"] == sid1 and "pong" in assistant_text(end2).lower(),
+           f"pid {pid1}->{end2['pid']} session {sid1}->{end2['sessionId']} state={end2['state']}")
+
+    # S12: reopen the thread from history; session/load restores context.
+    fresh_workspace()
+    run_chat("Remember the code word BANANA42. Reply with just OK. No tools.", "cursor")
+    first = wait_end(120)
+    old_pid, sid = first["pid"], first["sessionId"]
+    call("POST", "/test/show-chat", {"newChat": True})
+    opened = call("POST", "/test/open-thread", {"id": sid})
+    call("POST", "/test/chat", {"prompt": "What was the code word? Reply with the word only. No tools."})
+    again = wait_end(120)
+    shot("cursor-reopened")
+    record("S12 Reopened thread continues through session/load",
+           opened.get("sessionId") == sid and again["state"] == "done" and "banana42" in assistant_text(again).lower().split("what was the code word")[-1]
+           and again["pid"] != old_pid and again["sessionId"] == sid,
+           f"session={sid} -> {again['sessionId']} pid {old_pid}->{again['pid']} state={again['state']} text={assistant_text(again)[-80:]!r}")
+
+    # S14: the picker lists the agent's models and a pick reaches the session.
+    c = chat()
+    models = c["models"]
+    pick = next((m for m in models if m["name"] == "Auto"), models[-1] if models else None)
+    run_chat("Reply with the single word pong. No tools.", "cursor", model=pick["id"] if pick else "")
+    picked = wait_end(120)
+    record("S14 Cursor: models come from the agent and a pick applies",
+           len(models) > 1 and bool(pick) and picked["activeModel"] == pick["id"],
+           f"models={len(models)} picked={pick and pick['id']} active={picked['activeModel']} state={picked['state']}")
 
 
 def scenario_claude():
-    approval_flow("Claude Code backend: shell card, Allow reaches agent", "claude",
-                  "Run the shell command: touch claude-allowed.txt . Then reply OK.",
-                  True, "command", "claude-allowed.txt", True)
-    approval_flow("Claude Code backend: edit card, Deny reaches agent", "claude",
-                  "Use your Write tool to create claude-denied.txt containing hi. If it is denied, do not retry; just say so.",
-                  False, "claude-denied.txt", "claude-denied.txt", False)
+    """S6, S10 and approval cards for Claude Code over the bundled adapter."""
+    fresh_workspace()
+    run_chat("Reply with the single word pong. Do not use tools.", "claude")
+    end = wait_end(150)
+    pid = end["pid"]
+    cmd = proc_command(pid) if pid else ""
+    env = proc_env(pid) if pid else ""
+    claude_path = which("claude")[0]
+    record("S6 Claude Code: turn completes", end["state"] == "done" and "pong" in assistant_text(end).lower(),
+           f"state={end['state']} text={assistant_text(end)[:60]!r} errors={[i['text'] for i in end['items'] if i['kind'] == 'error']}")
+    record("S6 Claude Code: user's node runs the bundled claude.mjs with CLAUDE_CODE_EXECUTABLE set",
+           "node" in cmd and "Resources/acp/claude.mjs" in cmd and f"CLAUDE_CODE_EXECUTABLE={claude_path}" in env,
+           f"command={cmd!r} claude={claude_path}")
+    models = chat()["models"]
+    record("S14 Claude: models come from the agent", len(models) > 0, f"models={[m['id'] for m in models][:5]}")
+    approval_flow("Claude Code: shell card, Allow reaches the agent", "claude",
+                  "Run the shell command: touch claude-allowed.txt . Then reply OK.", True, "command", "claude-allowed.txt", True)
+    # Not an edit tool: this Mac's Claude settings allow `Write(*)`, and Claude then never asks for a Write.
+    approval_flow("Claude Code: shell card, Deny reaches the agent", "claude",
+                  "Run the shell command: touch claude-denied.txt . If it is denied, do not retry; just say so.",
+                  False, "command", "claude-denied.txt", False)
+
+
+def scenario_codex():
+    """S7: Codex through the adapter with CODEX_PATH set."""
+    fresh_workspace()
+    run_chat("Reply with the single word pong. Do not use tools.", "codex")
+    end = wait_end(150)
+    pid = end["pid"]
+    codex_path = which("codex")[0]
+    env = proc_env(pid) if pid else ""
+    errors = [i["text"] for i in end["items"] if i["kind"] == "error"]
+    record("S7 Codex: adapter runs with CODEX_PATH set to the user's codex and the session starts",
+           bool(pid) and f"CODEX_PATH={codex_path}" in env and "codex.mjs" in proc_command(pid) and len(end["models"]) > 0,
+           f"codex={codex_path} models={len(end['models'])} command={proc_command(pid)!r}")
+    record("S7 Codex: turn answers",
+           end["state"] == "done" and "pong" in assistant_text(end).lower(),
+           f"state={end['state']} text={assistant_text(end)[:120]!r} errors={errors[-1:]}")
+
+
+def scenario_agents():
+    """S9: every installed agent that answers initialize is listed; Gemini and OpenCode complete a turn."""
+    c = chat()
+    ids = set(c["agents"])
+    expected = {"cursor", "claude", "codex", "gemini", "opencode"}
+    absent = {"pi", "goose", "github-copilot-cli", "kiro", "qwen-code", "kilo", "factory-droid"}
+    record("S9 Picker lists installed agents and hides missing ones", expected <= ids and not (absent & ids), f"agents={sorted(ids)}")
+    # OpenCode's default model needs a provider sign-in this Mac may not have; its free models do not.
+    free_models = {"opencode": "opencode/big-pickle"}
+    for agent in ("gemini", "opencode"):
+        fresh_workspace()
+        run_chat("Reply with the single word pong. Do not use tools.", agent, model=free_models.get(agent, ""))
+        end = wait_end(150)
+        record(f"S9 {agent}: completes a turn with no agent-specific code",
+               end["state"] == "done" and "pong" in assistant_text(end).lower(),
+               f"state={end['state']} text={assistant_text(end)[:60]!r} errors={[i['text'] for i in end['items'] if i['kind'] == 'error']}")
+
+
+def scenario_asks():
+    """Reports, per agent, whether it sends session/request_permission before a shell command (always passes; read the detail)."""
+    for agent in ("cursor", "claude", "codex", "gemini", "opencode"):
+        fresh_workspace()
+        run_chat("Run exactly this shell command: touch asked.txt . If it is denied, do not retry; just say so.", agent,
+                 model={"opencode": "opencode/big-pickle"}.get(agent, ""))
+        c = wait_approval_or_end(240)
+        asked = bool(c and c["approvals"])
+        title = c["approvals"][0]["title"] if asked else ""
+        if asked:
+            call("POST", "/test/approve", {"allow": False})
+        end = wait_end(240) if asked else c
+        ran = os.path.exists(os.path.join(WS, "asked.txt"))
+        errors = [i["text"] for i in (end or {"items": []})["items"] if i["kind"] == "error"]
+        record(f"Asks before a shell command: {agent}", True,
+               f"asked={asked} card='{title}' command_ran={ran} state={end and end['state']} errors={errors[-1:]}")
+
+
+def scenario_runtime():
+    """S6b: no usable Node and no Bun means the chat offers the Bun download, then runs on it."""
+    claude = which("claude")[0]
+    if not claude:
+        return record("S6b Runtime download", False, "claude is not installed")
+    bindir = f"/tmp/ironpet-e2e-bin"
+    runtime = f"/tmp/ironpet-e2e-runtime"
+    shutil.rmtree(bindir, ignore_errors=True)
+    shutil.rmtree(runtime, ignore_errors=True)
+    os.makedirs(bindir)
+    os.symlink(os.path.realpath(claude), f"{bindir}/claude")
+    relaunch(test_mode=True, env={"IRONPET_LOGIN_PATH": f"{bindir}:/usr/bin:/bin", "IRONPET_RUNTIME_DIR": runtime})
+    fresh_workspace()
+    run_chat("Reply with the single word pong. Do not use tools.", "claude")
+    offered = wait_for(lambda: (lambda c: c if c["runtimeOffer"] or c["state"] == "done" else None)(chat()), 60)
+    shot("runtime-offer")
+    record("S6b Without Node 22 or Bun the chat offers the download", bool(offered) and offered["runtimeOffer"] == "Claude Code" and not os.path.exists(f"{runtime}/bun"),
+           f"offer={offered and offered['runtimeOffer']!r}")
+    call("POST", "/test/install-runtime")
+    end = wait_for(lambda: (lambda c: c if c["state"] in ("done", "failed") and not c["runtimeOffer"] and not c["installingRuntime"] else None)(chat()), 300)
+    cmd = proc_command(end["pid"]) if end and end["pid"] else ""
+    record("S6b After allowing, Bun is downloaded and the turn runs on it",
+           bool(end) and end["state"] == "done" and os.path.exists(f"{runtime}/bun") and f"{runtime}/bun" in cmd,
+           f"state={end and end['state']} command={cmd!r}")
+    relaunch(test_mode=True)
 
 
 def scenario_auto():
+    """S10: in Auto mode `ls` runs without a card and `rm -rf` still asks."""
     fresh_workspace()
     os.makedirs(os.path.join(WS, "junk"))
-    run_chat("Run these two shell commands one at a time: first `touch auto-ok.txt`, then `rm -rf ./junk`. "
-             "If a command is denied, do not retry; just say so.", auto=True)
+    run_chat("Run these two shell commands one at a time: first `ls`, then `rm -rf ./junk`. "
+             "If a command is denied, do not retry; just say so.", "claude", auto=True)
     c = wait_approval_or_end()
     title = c["approvals"][0]["title"] if c and c["approvals"] else ""
+    ran_ls = any(i["kind"] == "tool" and i["text"].startswith("Ran `ls") for i in (c or {"items": []})["items"])
+    shot("auto-destructive-card")
     if title:
         call("POST", "/test/approve", {"allow": False})
     end = wait_end()
-    ok = ("destructive" in title.lower() and os.path.exists(os.path.join(WS, "auto-ok.txt"))
-          and os.path.isdir(os.path.join(WS, "junk")))
-    record("Auto mode: safe command runs, destructive one still asks", ok,
-           f"card='{title}' auto-ok.txt={os.path.exists(os.path.join(WS, 'auto-ok.txt'))} junk_kept={os.path.isdir(os.path.join(WS, 'junk'))} state={end and end['state']}")
+    ok = "destructive" in title.lower() and ran_ls and os.path.isdir(os.path.join(WS, "junk"))
+    record("S10 Auto mode: ls runs without a card, rm -rf still asks", ok,
+           f"card='{title}' ls_ran_first={ran_ls} junk_kept={os.path.isdir(os.path.join(WS, 'junk'))} state={end and end['state']}")
 
 
 def scenario_picker():
@@ -469,16 +669,6 @@ def scenario_setup():
                f"name={config.get('pet', {}).get('name')} integrations={integrations} "
                f"cursor_hooks={hooks_installed('cursor')} claude_hooks={hooks_installed('claude')}")
 
-        # A chat through a backend without hooks must refuse to start rather than run ungated.
-        fresh_workspace()
-        run_chat("Reply with OK.", backend="claude")
-        c = wait_for(lambda: (lambda c: c if c["state"] in ("done", "failed") else None)(chat()), 10) or {}
-        errors = [i["text"] for i in c.get("items", []) if i["kind"] == "error"]
-        record("Setup: chat refuses to run without its backend's hooks",
-               c.get("state") == "failed" and any("Claude Code hooks" in e for e in errors) and not any(i["kind"] == "user" for i in c.get("items", [])),
-               f"state={c.get('state')} errors={errors[-1:]}")
-        call("POST", "/test/chat", {"newChat": True, "backend": "cursor", "prompt": ""})
-
         relaunch(test_mode=True)
         record("Setup: not shown again on the next launch", not wait_for(lambda: window_open("Welcome to ironpet"), 4))
 
@@ -538,7 +728,6 @@ def scenario_settings():
         record("Settings: hand edits to config.json appear in the window", bool(shown))
 
 
-SHOTS = os.environ.get("IRONPET_E2E_SHOTS", "/tmp/ironpet-e2e-shots")
 MLX_PORT = 8000
 
 
@@ -563,7 +752,13 @@ def voice_state():
 
 
 def shot(name):
-    x, y, w, h = chat()["frame"]
+    os.makedirs(SHOTS, exist_ok=True)
+    c = chat()
+    if c.get("windowId"):
+        # By window id, so another app's window on top of the chat cannot end up in the picture.
+        subprocess.run(["screencapture", "-x", "-o", "-l", str(c["windowId"]), f"{SHOTS}/{name}.png"])
+        return
+    x, y, w, h = c["frame"]
     subprocess.run(["screencapture", "-x", "-R", f"{int(x)},{int(y)},{int(w)},{int(h)}", f"{SHOTS}/{name}.png"])
 
 
@@ -748,7 +943,8 @@ def scenario_voice_key():
             subprocess.run(["security", "delete-generic-password", "-s", "ironpet.voice"], capture_output=True)
 
 
-SCENARIOS = {"cursor": scenario_cursor, "claude": scenario_claude, "auto": scenario_auto, "picker": scenario_picker,
+SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_session, "claude": scenario_claude, "codex": scenario_codex, "agents": scenario_agents,
+             "asks": scenario_asks, "runtime": scenario_runtime, "auto": scenario_auto, "picker": scenario_picker,
              "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
              "notification": scenario_notification_approval, "github": scenario_github, "mcp": scenario_mcp,
              "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
@@ -758,7 +954,7 @@ SCENARIOS = {"cursor": scenario_cursor, "claude": scenario_claude, "auto": scena
 # "sentry" a Sentry MCP. Run them by name, e.g. `python3 scripts/e2e.py mcp sentry`.
 # "voice" starts a local mlx-audio server with `uvx` (needs the Parakeet model in the Hugging Face cache) and flips
 # the system between light and dark mode for screenshots, saved to $IRONPET_E2E_SHOTS.
-OPT_IN = {"mcp", "sentry", "voice", "voice-key"}
+OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks"}
 
 if __name__ == "__main__":
     unknown = [name for name in sys.argv[1:] if name not in SCENARIOS]

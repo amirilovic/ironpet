@@ -48,10 +48,29 @@ struct Config: Codable, Equatable {
     }
 
     struct Integrations: Codable, Equatable {
-        /// Status and approval hooks in `~/.cursor/hooks.json`.
+        /// Status hooks in `~/.cursor/hooks.json`.
         var cursorHooks = false
-        /// Status and approval hooks in `~/.claude/settings.json`.
+        /// Status hooks in `~/.claude/settings.json`.
         var claudeHooks = false
+        /// Watch switches for the other agents, by `HookInstaller.Agent` raw value (`"codex": true`).
+        var hooks: [String: Bool] = [:]
+        /// Whether ironpet watches this agent. Cursor and Claude Code keep their own keys for older config files.
+        func watches(_ agent: HookInstaller.Agent) -> Bool {
+            switch agent {
+            case .cursor: return cursorHooks
+            case .claude: return claudeHooks
+            default: return hooks[agent.rawValue] ?? false
+            }
+        }
+
+        mutating func setWatches(_ on: Bool, _ agent: HookInstaller.Agent) {
+            switch agent {
+            case .cursor: cursorHooks = on
+            case .claude: claudeHooks = on
+            default: hooks[agent.rawValue] = on
+            }
+        }
+
         /// Poll every host `gh` is logged in to for PR, CI and review alerts.
         var githubAlerts = false
         /// Copy cursor-agent MCP OAuth sign-ins between per-folder `mcp-auth.json` files before each chat.

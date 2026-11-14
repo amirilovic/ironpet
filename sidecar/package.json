@@ -1,0 +1,11 @@
+{
+  "name": "ironpet-acp-adapters",
+  "private": true,
+  "type": "module",
+  "description": "ACP adapters that scripts/bundle.sh turns into single .mjs files. They drive the user's own claude, codex and pi CLIs.",
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.107.0",
+    "@agentclientprotocol/codex-acp": "2.6.0",
+    "pi-acp": "0.0.34"
+  }
+}

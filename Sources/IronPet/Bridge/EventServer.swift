@@ -7,8 +7,6 @@ final class EventServer {
     private let onEvent: (HookEvent) -> Void
     /// JSON snapshot served at `GET /status`, for debugging.
     var status: () -> Data = { Data("{}".utf8) }
-    /// Gated hook calls from pet-started agents. The hook blocks until `respond` is called.
-    var onApproval: ((ApprovalRequest, @escaping (ApprovalDecision) -> Void) -> Void)?
     /// `/test/*` control endpoints; only set when the app runs with `--test-mode`.
     var onTest: ((HTTPRequest, @escaping (Data) -> Void) -> Void)?
     private let queue = DispatchQueue(label: "ironpet.event-server")
@@ -65,19 +63,6 @@ final class EventServer {
         if request.method == "GET", request.path == "/status" {
             return respond(connection, status: "200 OK", body: status())
         }
-        if request.method == "POST", request.path == "/approval" {
-            let payload = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] ?? [:]
-            let approval = ApprovalRequest(event: request.header("x-ironpet-event") ?? "",
-                                           runID: request.header("x-ironpet-run-id") ?? "", payload: payload)
-            let source = request.header("x-ironpet-source").flatMap(AgentSource.init(rawValue:)) ?? .cursor
-            guard let onApproval else {
-                return respond(connection, status: "200 OK", body: ApprovalDecision.deny("ironpet is not ready").json(for: source))
-            }
-            onApproval(approval) { [queue] decision in
-                queue.async { self.respond(connection, status: "200 OK", body: decision.json(for: source)) }
-            }
-            return
-        }
         if request.path.hasPrefix("/test/") {
             guard let onTest else { return respond(connection, status: "404 Not Found") }
             onTest(request) { [queue] body in
@@ -97,8 +82,7 @@ final class EventServer {
             itermSessionID: request.header("x-ironpet-iterm-session"),
             pid: request.header("x-ironpet-pid").flatMap { Int32($0) }
         )
-        let runID = request.header("x-ironpet-run-id").flatMap { $0.isEmpty ? nil : $0 }
-        onEvent(HookEvent(source: source, name: name, payload: payload, origin: origin, runID: runID))
+        onEvent(HookEvent(source: source, name: name, payload: payload, origin: origin))
         respond(connection, status: "204 No Content")
     }
 
@@ -106,35 +90,6 @@ final class EventServer {
         var response = Data("HTTP/1.1 \(status)\r\nContent-Length: \(body.count)\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n".utf8)
         response.append(body)
         connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
-    }
-}
-
-struct ApprovalRequest {
-    let event: String
-    let runID: String
-    let payload: [String: Any]
-}
-
-/// Hook permission response. Never `ask`: headless cursor-agent treats it as allow.
-struct ApprovalDecision {
-    let allow: Bool
-    let message: String
-
-    static let allow = ApprovalDecision(allow: true, message: "Approved in ironpet")
-    static func deny(_ message: String = "The user denied this in ironpet") -> ApprovalDecision {
-        ApprovalDecision(allow: false, message: message)
-    }
-
-    func json(for source: AgentSource) -> Data {
-        let object: [String: Any]
-        switch source {
-        case .cursor:
-            object = ["permission": allow ? "allow" : "deny", "user_message": message, "agent_message": message]
-        case .claude:
-            object = ["hookSpecificOutput": ["hookEventName": "PreToolUse", "permissionDecision": allow ? "allow" : "deny",
-                                             "permissionDecisionReason": message]]
-        }
-        return (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
     }
 }
 

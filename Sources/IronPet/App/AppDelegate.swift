@@ -45,6 +45,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         notifier.start()
+        // Resolving the login-shell PATH runs the user's shell, so do it before the first chat needs it.
+        Task.detached { _ = LoginShell.path }
         store.onAttention = { [weak self] session in
             self?.announcer.session(session)
             self?.testControl?.recordAttention(session)
@@ -187,10 +189,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hookAgents(in config: Config) -> [HookInstaller.Agent] {
-        HookInstaller.Agent.allCases.filter { $0 == .cursor ? config.integrations.cursorHooks : config.integrations.claudeHooks }
+        HookInstaller.Agent.allCases.filter { config.integrations.watches($0) }
     }
 
     private func setHooks(installed agents: [HookInstaller.Agent], quietly: Bool = false) {
+        // A copy of the app with its own IRONPET_ROOT must not rewrite the user's real Cursor and Claude Code configs.
+        guard !Paths.isIsolated else { return }
         do {
             try installer.install(agents)
         } catch {
@@ -199,6 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setHooks(removed agents: [HookInstaller.Agent]) {
+        guard !Paths.isIsolated else { return }
         do { try installer.uninstall(agents) } catch { showError("Could not remove agent hooks", error) }
     }
 
@@ -219,8 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         config.update {
             $0.pet.name = choices.name
-            $0.integrations.cursorHooks = choices.agents.contains(.cursor)
-            $0.integrations.claudeHooks = choices.agents.contains(.claude)
+            for agent in HookInstaller.Agent.allCases { $0.integrations.setWatches(choices.agents.contains(agent), agent) }
             $0.integrations.githubAlerts = choices.githubAlerts
             $0.reminders.paused = !choices.reminders
         }
@@ -228,8 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Hooks left by an older version that the user unticked.
         setHooks(removed: HookInstaller.Agent.allCases.filter { !choices.agents.contains($0) && installer.isInstalled($0) })
         if choices.launchAtLogin != LoginItem.isEnabled { LoginItem.set(choices.launchAtLogin) }
-        // Chat defaults to Cursor; switch when only Claude Code is installed.
-        if CursorAgentBackend.executable() == nil, ClaudeCodeBackend.executable() != nil { chat.setBackend(.claude) }
+        Task { await chat.refreshAgents() }
     }
 
     @objc func showSettings(_ sender: Any?) {
@@ -238,6 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         chat.persistForRelaunch()
+        chat.shutdown()
         try? FileManager.default.removeItem(at: Paths.portFile)
     }
 
@@ -261,11 +265,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if TestControl.isEnabled {
             let control = TestControl(chat: chat, actions: TestControl.Actions(
                 showChat: { [weak self] in self?.showChat() },
+                chatWindowID: { [weak self] in self?.chatPanel.windowNumber ?? 0 },
                 chatFrame: { [weak self] in
                     guard let frame = self?.chatPanel.frame, let screen = NSScreen.screens.first else { return .zero }
                     return CGRect(x: frame.minX, y: screen.frame.height - frame.maxY, width: frame.width, height: frame.height)
                 },
                 openSession: { [weak self] id in self?.openSession(id) },
+                showSettings: { [weak self] snapshot in
+                    self?.settingsWindow.show()
+                    if let snapshot { _ = self?.settingsWindow.snapshot(to: URL(fileURLWithPath: snapshot)) }
+                    return self?.settingsWindow.windowNumber ?? 0
+                },
                 capture: { [weak self] region in self?.captureScreen(region: region) },
                 notificationAction: { [weak self] id, allow in self?.notifier.onApprovalAction?(id, allow) },
                 signals: signals,
@@ -276,12 +286,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async { respond(control.handle(request)) }
             }
             NSLog("ironpet: test mode enabled")
-        }
-        server.onApproval = { [weak self] request, respond in
-            DispatchQueue.main.async {
-                guard let self else { return respond(.deny("ironpet is shutting down")) }
-                self.chat.handleApproval(request, respond: respond)
-            }
         }
         let snapshot = StatusSnapshot()
         server.status = { snapshot.data }
@@ -296,8 +300,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handle(_ event: HookEvent) {
-        // Chats started by the pet itself are tracked by the quick chat runner, not the watcher.
-        guard event.runID == nil else { return }
         // Cursor replays its events through Claude Code hooks too; keep only the Cursor copy.
         if event.source == .claude, event.payload["cursor_version"] != nil { return }
         store.apply(event)
