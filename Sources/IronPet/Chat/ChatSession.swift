@@ -19,6 +19,12 @@ final class ChatSession: ObservableObject {
         var date: Date? = Date()
     }
 
+    struct QueuedMessage: Identifiable {
+        let id = UUID()
+        let text: String
+        let attachments: [URL]
+    }
+
     struct Approval: Identifiable {
         let id = UUID()
         let title: String
@@ -66,6 +72,8 @@ final class ChatSession: ObservableObject {
     @Published var attachments: [URL] = [] {
         didSet { if persists { UserDefaults.standard.set(attachments.map(\.path), forKey: Self.attachmentsKey) } }
     }
+    /// Messages typed while a turn runs. Each keeps the attachments present when it was queued.
+    @Published private(set) var queue: [QueuedMessage] = []
     /// What the agent is doing right now, e.g. "Running `npm test`".
     @Published private(set) var activity: String?
     @Published private(set) var runStartedAt: Date?
@@ -111,6 +119,8 @@ final class ChatSession: ObservableObject {
     /// Ignores events from a turn the user stopped.
     private var turnID: UUID?
     private var lastTurn: ACPTurn?
+    /// Replaces the agent turn in tests: receives the turn and the callback that delivers its events.
+    var turnRunner: ((ACPTurn, @escaping (AgentEvent) -> Void) async -> Void)?
     private var toolItems: [String: UUID] = [:]
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
     private var decided: [String: Bool] = [:]
@@ -374,21 +384,35 @@ final class ChatSession: ObservableObject {
 
     func send() {
         dictationTimer?.invalidate()
-        var prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty || !attachments.isEmpty, !isRunning else { return }
-        guard !needsWorkspace, let workspace else {
-            needsWorkspace = true
+        let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty || !attachments.isEmpty else { return }
+        if isRunning {
+            queue.append(QueuedMessage(text: prompt, attachments: attachments))
+            input = ""
+            attachments = []
             return
         }
+        if start(prompt: prompt, shots: attachments) {
+            input = ""
+            attachments = []
+        }
+    }
+
+    /// Starts a turn. Returns false, without sending, when no folder is chosen or the hooks are missing.
+    @discardableResult
+    private func start(prompt: String, shots: [URL]) -> Bool {
+        var prompt = prompt
+        guard !needsWorkspace, let workspace else {
+            needsWorkspace = true
+            return false
+        }
         if prompt.isEmpty { prompt = "Help me with what's on my screen." }
-        input = ""
-        let shots = attachments
-        attachments = []
         items += shots.map { Item(kind: .screenshot($0.path)) }
         items.append(Item(kind: .user(prompt)))
         let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
         run(ACPTurn(prompt: prompt, preamble: preamble, workspace: workspace, resume: threadID, model: model,
                     images: shots.filter(ImageIntake.isImageFile), files: shots.filter { !ImageIntake.isImageFile($0) }))
+        return true
     }
 
     private func run(_ turn: ACPTurn) {
@@ -400,12 +424,42 @@ final class ChatSession: ObservableObject {
         runStartedAt = Date()
         lastRunDuration = nil
         decided = [:]
-        if agent.id == "cursor", Config.load().config.integrations.shareMCPSignIns { MCPAuthSharing.prepare(workspace: turn.workspace) }
-        let backend = acp?.agent == agent ? acp! : makeBackend()
         let id = UUID()
         turnID = id
+        if let turnRunner {
+            Task { [weak self] in await turnRunner(turn) { event in self?.handle(event, turn: id) } }
+            return
+        }
+        if agent.id == "cursor", Config.load().config.integrations.shareMCPSignIns { MCPAuthSharing.prepare(workspace: turn.workspace) }
+        let backend = acp?.agent == agent ? acp! : makeBackend()
         Task { [weak self] in
             await backend.runTurn(turn) { event in self?.handle(event, turn: id) }
+        }
+    }
+
+    func removeQueued(_ id: UUID) {
+        queue.removeAll { $0.id == id }
+    }
+
+    /// Puts queued messages back in the input, after any text already there, so nothing is lost.
+    private func restoreQueue() {
+        guard !queue.isEmpty else { return }
+        let text = queue.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
+        let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let combined = existing.isEmpty ? text : existing + "\n\n" + text
+        if combined != input { prefilling = true }
+        input = combined
+        attachments += queue.flatMap(\.attachments)
+        queue = []
+    }
+
+    /// Sends the oldest queued message through the normal path.
+    private func sendNextQueued() {
+        guard let next = queue.first else { return }
+        if start(prompt: next.text, shots: next.attachments) {
+            queue.removeFirst()
+        } else {
+            restoreQueue()
         }
     }
 
@@ -428,6 +482,7 @@ final class ChatSession: ObservableObject {
     var activeModel: String? { acp?.activeModel }
 
     func stop() {
+        restoreQueue()
         turnID = nil
         acp?.cancel()
         for approval in approvals {
@@ -584,11 +639,13 @@ final class ChatSession: ObservableObject {
             signInOptions = methods
             items.append(Item(kind: .error("\(agent.name) needs you to sign in.")))
             state = .failed
+            restoreQueue()
         case .needsRuntime:
             endTurn()
             // Not a failure: the chat waits for the user to allow the download.
             runtimeOffer = agent.name
             state = .idle
+            restoreQueue()
         case .assistant(let text):
             activity = "Writing"
             if case .assistant(let previous) = items.last?.kind {
@@ -612,6 +669,7 @@ final class ChatSession: ObservableObject {
             if let error { items.append(Item(kind: .error(error))) }
             state = error == nil ? .done : .failed
             saveThread()
+            if error == nil { sendNextQueued() } else { restoreQueue() }
             if !isVisible {
                 let name = ConfigStore.shared.config.pet.name
                 onAttention?(error == nil ? "\(name) finished your task" : "\(name)'s task failed")

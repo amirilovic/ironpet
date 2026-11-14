@@ -443,6 +443,7 @@ struct ChatView: View {
 
     private var composerInput: some View {
         VStack(alignment: .leading, spacing: 6) {
+            queueRows
             if !session.attachments.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(session.attachments, id: \.self) { url in
@@ -466,7 +467,7 @@ struct ChatView: View {
                 }
                 .buttonStyle(HoverIconStyle())
                 .help("Attach files")
-                TextField(session.isRunning ? "\(ConfigStore.shared.config.pet.name) is working…" : "Ask \(ConfigStore.shared.config.pet.name)…", text: $session.input, axis: .vertical)
+                TextField(session.isRunning ? "\(ConfigStore.shared.config.pet.name) is working. Enter queues your message." : "Ask \(ConfigStore.shared.config.pet.name)…", text: $session.input, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13.5))
                     .lineLimit(1...8)
@@ -490,9 +491,38 @@ struct ChatView: View {
                 }
                 if session.isRunning {
                     sendButton("stop.fill", color: .red, help: "Stop (Esc)", action: session.stop)
-                } else {
-                    sendButton("arrow.up", color: .accentColor, help: "Send (Enter)", action: session.send)
-                        .disabled(session.input.trimmingCharacters(in: .whitespaces).isEmpty && session.attachments.isEmpty)
+                }
+                sendButton("arrow.up", color: .accentColor, help: session.isRunning ? "Queue (Enter)" : "Send (Enter)", action: session.send)
+                    .disabled(session.input.trimmingCharacters(in: .whitespaces).isEmpty && session.attachments.isEmpty)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var queueRows: some View {
+        if !session.queue.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(session.queue) { message in
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock").font(.system(size: 10)).foregroundStyle(.secondary)
+                        Text(message.text.isEmpty ? "Screenshot" : (message.text.components(separatedBy: .newlines).first ?? message.text))
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                        if !message.attachments.isEmpty {
+                            Label("\(message.attachments.count)", systemImage: "photo")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Button { session.removeQueued(message.id) } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove from queue")
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
                 }
             }
         }
