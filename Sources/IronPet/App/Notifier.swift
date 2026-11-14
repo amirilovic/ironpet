@@ -17,7 +17,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let snooze = UNNotificationAction(identifier: "snooze", title: "Snooze 10 min", options: [])
         center.setNotificationCategories([
             UNNotificationCategory(identifier: "approval", actions: [allow, deny], intentIdentifiers: []),
-            UNNotificationCategory(identifier: "reminder", actions: [done, snooze], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "automation", actions: [done, snooze], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "automation-plain", actions: [], intentIdentifiers: []),
         ])
         center.requestAuthorization(options: [.alert, .sound]) { granted, error in
             if !granted { NSLog("ironpet: notifications not authorized \(error?.localizedDescription ?? "")") }
@@ -57,27 +58,27 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     func announceSignal(_ signal: Signal) {
         guard let center else { return }
         let content = UNMutableNotificationContent()
-        content.title = "\(signal.kind.label): \(signal.title)"
+        content.title = "\(signal.label): \(signal.title)"
         content.body = signal.subtitle
-        content.sound = signal.kind.mood == .done ? nil : .default
-        content.userInfo = ["url": signal.url.absoluteString]
+        content.sound = signal.mood == .done ? nil : .default
+        if let url = signal.url { content.userInfo = ["url": url.absoluteString] }
         center.add(UNNotificationRequest(identifier: signal.id, content: content, trigger: nil))
     }
 
-    var onReminderAction: ((_ kinds: [ReminderScheduler.Kind], _ snooze: Bool) -> Void)?
+    var onAutomationAction: ((_ ids: [String], _ snooze: Bool) -> Void)?
 
-    /// Water / stretch / eye break, with Done and Snooze buttons. Several due at once share one notification.
-    func announceReminder(_ kinds: [ReminderScheduler.Kind], agentWorking: Bool) {
-        guard let center, let first = kinds.first else { return }
+    /// An automation's bubble as a notification. With Done and Snooze buttons when the bubble has them.
+    func announceAutomation(_ notice: AutomationNotice) {
+        guard let center else { return }
         let content = UNMutableNotificationContent()
-        content.title = "\(Config.load().config.pet.name): " + (kinds.count == 1 ? first.title : "Time for a short break")
-        content.body = kinds.count == 1 ? first.body : kinds.map { "\($0.title): \($0.body)" }.joined(separator: "\n")
-        if agentWorking { content.subtitle = "Your agent is still working, good moment for it." }
+        content.title = notice.title
+        if let subtitle = notice.subtitle { content.subtitle = subtitle }
+        content.body = notice.body ?? ""
         content.sound = .default
-        content.categoryIdentifier = "reminder"
-        content.userInfo = ["reminder": kinds.map(\.rawValue).joined(separator: ",")]
-        center.removeDeliveredNotifications(withIdentifiers: ["reminder"])
-        center.add(UNNotificationRequest(identifier: "reminder", content: content, trigger: nil))
+        content.categoryIdentifier = notice.buttons.contains { $0.title == "Done" } ? "automation" : "automation-plain"
+        content.userInfo = ["automation": notice.automationIDs.joined(separator: ",")]
+        center.removeDeliveredNotifications(withIdentifiers: [notice.id])
+        center.add(UNNotificationRequest(identifier: notice.id, content: content, trigger: nil))
     }
 
     /// Clicking opens `summary.md`.
@@ -122,10 +123,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 default: self.onOpenChat?()
                 }
             }
-        } else if let raw = info["reminder"] as? String {
-            let kinds = raw.split(separator: ",").compactMap { ReminderScheduler.Kind(rawValue: String($0)) }
+        } else if let raw = info["automation"] as? String {
+            let ids = raw.split(separator: ",").map(String.init)
             let snooze = response.actionIdentifier == "snooze"
-            DispatchQueue.main.async { self.onReminderAction?(kinds, snooze) }
+            DispatchQueue.main.async { self.onAutomationAction?(ids, snooze) }
         } else if let path = info["file"] as? String {
             DispatchQueue.main.async { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
         } else if let link = info["url"] as? String, let url = URL(string: link) {

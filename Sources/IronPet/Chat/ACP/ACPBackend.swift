@@ -98,6 +98,9 @@ final class ACPBackend {
     /// A restricted run gets only its own working folder: no memory or screenshot folders. Meeting summaries use it.
     var restricted = false
 
+    /// MCP servers every unrestricted session gets, as ACP `mcpServers` entries. ironpet's own automation tools go here.
+    nonisolated(unsafe) static var defaultMCPServers: () -> [JSON] = { [] }
+
     /// Called when the agent asks to run something. Answer once.
     var onPermission: ((ACPToolCall, @escaping (ApprovalDecision) -> Void) -> Void)?
 
@@ -288,7 +291,7 @@ final class ACPBackend {
     private func ensureSession(_ turn: ACPTurn) async throws {
         guard let client else { throw ACPError(code: -1, message: "The agent stopped") }
         if sessionReady, sessionID != nil { return }
-        var params: JSON = ["cwd": turn.workspace.path, "mcpServers": [JSON]()]
+        var params: JSON = ["cwd": turn.workspace.path, "mcpServers": restricted ? [JSON]() : Self.defaultMCPServers()]
         let sessionCapabilities = capabilities["sessionCapabilities"] as? JSON ?? [:]
         if sessionCapabilities["additionalDirectories"] != nil, !restricted {
             for dir in [Memory.directory, ScreenCapture.directory] { try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }

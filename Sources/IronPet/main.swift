@@ -1,7 +1,16 @@
 import AppKit
 import SwiftUI
 
-let app = NSApplication.shared
+// `IronPet automations …` and `IronPet mcp` talk to the running app and never open a window.
+if CommandLine.arguments.dropFirst().first == "automations" {
+    exit(AutomationCLI.run(Array(CommandLine.arguments.dropFirst(2))))
+}
+if CommandLine.arguments.dropFirst().first == "skills" {
+    exit(SkillCLI.run(Array(CommandLine.arguments.dropFirst(2))))
+}
+if ["mcp", "mcp-stdio"].contains(CommandLine.arguments.dropFirst().first ?? "") {
+    exit(AutomationCLI.stdioBridge())
+}
 
 if CommandLine.arguments.contains("--uninstall") {
     // Used by scripts/uninstall.sh: removes only ironpet's hooks and its login item, then exits.
@@ -24,6 +33,7 @@ if CommandLine.arguments.contains("--render-previews") {
     exit(0)
 }
 
+let app = NSApplication.shared
 let delegate = MainActor.assumeIsolated { AppDelegate() }
 app.delegate = delegate
 app.setActivationPolicy(.regular)

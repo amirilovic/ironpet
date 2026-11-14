@@ -47,7 +47,7 @@ enum PreviewRenderer {
                               body: "npm test -- login --runInBand",
                               actions: [.init(title: "Allow", style: .primary) {}, .init(title: "Deny", style: .destructive) {},
                                         .init(title: "Open chat") {}])
-        let water = ReminderScheduler.Kind.water
+        let water = AutomationMigration.reminders[0]
         let reminder = Bubble(id: "reminder", symbol: water.symbol, tint: .cyan, title: water.title,
                               subtitle: "Your agent is still working, good moment for it.", body: water.body,
                               actions: [.init(title: "Done", style: .primary) {}, .init(title: "Snooze 10 min") {}])
@@ -148,12 +148,12 @@ enum PreviewRenderer {
     private static var sampleSignals: [Signal] {
         let url = URL(string: "https://github.com/you/web-app/pull/42")!
         return [
-            Signal(id: "1", kind: .ciFailed, title: "Make the settings page responsive", subtitle: "you/web-app #42 · build",
-                   url: url, date: Date().addingTimeInterval(-119.5)),
-            Signal(id: "2", kind: .reviewRequested, title: "Add rate limiting to public endpoints", subtitle: "you/api-server #17",
-                   url: url, date: Date().addingTimeInterval(-899.5)),
-            Signal(id: "3", kind: .approved, title: "Fix flaky login test", subtitle: "you/demo-app #8",
-                   url: url, date: Date().addingTimeInterval(-1799.5)),
+            Signal(id: "1", title: "Make the settings page responsive", subtitle: "you/web-app #42 · build", url: url,
+                   date: Date().addingTimeInterval(-119.5), label: "CI failed", symbol: "xmark.octagon.fill", mood: .failed, ask: "Why is CI failing?"),
+            Signal(id: "2", title: "Add rate limiting to public endpoints", subtitle: "you/api-server #17", url: url,
+                   date: Date().addingTimeInterval(-899.5), label: "Review requested", symbol: "eye.fill", mood: .needsInput, ask: "Summarize this PR."),
+            Signal(id: "3", title: "Fix flaky login test", subtitle: "you/demo-app #8", url: url,
+                   date: Date().addingTimeInterval(-1799.5), label: "Approved", symbol: "hand.thumbsup.fill", mood: .done),
         ].reversed()
     }
 }

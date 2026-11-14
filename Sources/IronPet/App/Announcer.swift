@@ -13,7 +13,7 @@ final class Announcer {
     var openChat: () -> Void = {}
     var ask: (String) -> Void = { _ in }
     var decide: (UUID, Bool) -> Void = { _, _ in }
-    var reminderAction: (_ kinds: [ReminderScheduler.Kind], _ snooze: Bool) -> Void = { _, _ in }
+    var automationAction: (_ ids: [String], _ snooze: Bool) -> Void = { _, _ in }
 
     var alsoSystemNotifications: Bool {
         get { UserDefaults.standard.bool(forKey: Self.systemKey) }
@@ -25,7 +25,7 @@ final class Announcer {
         notifier.onOpen = { [weak self] id in self?.openSession(id) }
         notifier.onOpenChat = { [weak self] in self?.openChat() }
         notifier.onApprovalAction = { [weak self] id, allow in self?.decide(id, allow) }
-        notifier.onReminderAction = { [weak self] kinds, snooze in self?.reminderAction(kinds, snooze) }
+        notifier.onAutomationAction = { [weak self] ids, snooze in self?.automationAction(ids, snooze) }
     }
 
     func session(_ session: AgentSession) {
@@ -61,32 +61,39 @@ final class Announcer {
 
     func signal(_ signal: Signal) {
         let url = signal.url
-        var actions = [Bubble.Action(title: "Open", style: .primary) { NSWorkspace.shared.open(url) }]
-        if let prompt = signal.kind.prompt(for: signal) {
+        var actions: [Bubble.Action] = []
+        if let url { actions.append(.init(title: "Open", style: .primary) { NSWorkspace.shared.open(url) }) }
+        if let prompt = signal.ask {
             actions.append(.init(title: "Ask \(ConfigStore.shared.config.pet.name)") { [weak self] in self?.ask(prompt) })
         }
-        let quiet = signal.kind.mood == .done
-        bubbles.show(Bubble(id: "signal:\(signal.id)", symbol: signal.kind.symbol, tint: quiet ? .green : signal.kind.mood == .failed ? .red : .orange,
-                            title: signal.kind.label, subtitle: signal.subtitle, body: signal.title, actions: actions,
-                            onTap: { NSWorkspace.shared.open(url) },
+        let quiet = signal.mood == .done
+        bubbles.show(Bubble(id: "signal:\(signal.id)", symbol: signal.symbol, tint: quiet ? .green : signal.mood == .failed ? .red : .orange,
+                            title: signal.label, subtitle: signal.subtitle, body: signal.title, actions: actions,
+                            onTap: url.map { link in { NSWorkspace.shared.open(link) } },
                             expires: Date().addingTimeInterval(quiet ? 15 : 40)))
         if !quiet { chime() }
         if alsoSystemNotifications { notifier.announceSignal(signal) }
     }
 
-    func reminder(_ kinds: [ReminderScheduler.Kind], agentWorking: Bool) {
-        guard let first = kinds.first else { return }
-        bubbles.show(Bubble(id: "reminder", symbol: first.symbol, tint: .cyan,
-                            title: kinds.count == 1 ? first.title : "Time for a short break",
-                            subtitle: agentWorking ? "Your agent is still working, good moment for it." : nil,
-                            body: kinds.count == 1 ? first.body : kinds.map { "\($0.title): \($0.body)" }.joined(separator: "\n"),
-                            actions: [
-                                .init(title: "Done", style: .primary) { [weak self] in self?.reminderAction(kinds, false) },
-                                .init(title: "Snooze 10 min") { [weak self] in self?.reminderAction(kinds, true) },
-                            ],
-                            expires: Date().addingTimeInterval(3 * 60)))
+    /// A bubble from an automation: a reminder, a poll result, a shell or prompt answer, or an approval question.
+    func automation(_ notice: AutomationNotice) {
+        let tint: Color
+        switch notice.tint {
+        case .info: tint = .cyan
+        case .good: tint = .green
+        case .bad: tint = .red
+        case .warn: tint = .orange
+        }
+        let actions = notice.buttons.map { button in
+            Bubble.Action(title: button.title, style: button.primary ? .primary : button.destructive ? .destructive : .normal) { [weak self] in
+                self?.bubbles.dismiss(notice.id)
+                button.run()
+            }
+        }
+        bubbles.show(Bubble(id: notice.id, symbol: notice.symbol, tint: tint, title: notice.title, subtitle: notice.subtitle, body: notice.body,
+                            actions: actions, expires: notice.expires.map { Date().addingTimeInterval($0) }))
         chime()
-        if alsoSystemNotifications { notifier.announceReminder(kinds, agentWorking: agentWorking) }
+        if alsoSystemNotifications || notice.systemNotification { notifier.announceAutomation(notice) }
     }
 
     func chat(_ title: String, detail: String = "Click to open the chat.") {
