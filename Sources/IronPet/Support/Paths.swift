@@ -11,6 +11,8 @@ enum Paths {
     static let hookScript = bin.appendingPathComponent("ironpet-hook")
     static let portFile = root.appendingPathComponent("port")
     static let tokenFile = root.appendingPathComponent("token")
+    /// One folder per meeting: the chunk WAVs, `transcript.md` and `summary.md`.
+    static let meetings = root.appendingPathComponent("meetings")
     static let petDir = root.appendingPathComponent("pet")
     static let cursorHooks = home.appendingPathComponent(".cursor/hooks.json")
     static let claudeSettings = home.appendingPathComponent(".claude/settings.json")

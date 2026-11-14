@@ -67,7 +67,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSHighResolutionCapable</key><true/>
   <key>NSAppleEventsUsageDescription</key><string>ironpet switches to the iTerm tab where an agent is waiting.</string>
   <key>NSMicrophoneUsageDescription</key><string>ironpet records your voice when you start a voice note, and sends it to the transcription server you set in Settings.</string>
-  <key>NSScreenCaptureUsageDescription</key><string>ironpet captures a window or region when you ask it for help with your screen.</string>
+  <key>NSScreenCaptureUsageDescription</key><string>ironpet captures a window or region when you ask it for help with your screen, and, only when you start a meeting transcript, the audio of the app you pick.</string>
 </dict>
 </plist>
 PLIST

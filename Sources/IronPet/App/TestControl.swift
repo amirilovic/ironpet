@@ -19,6 +19,15 @@ final class TestControl {
         let notificationAction: (UUID, Bool) -> Void
         let signals: SignalStore
         let github: GitHubWatcher
+        let meeting: MeetingController
+        /// The meeting panel's frame in top-left screen coordinates, or `.zero` while it is hidden.
+        let meetingFrame: () -> CGRect
+        /// The title of the pet menu's meeting item, or "" when the menu has none.
+        let meetingMenuTitle: () -> String
+        /// Whether the meeting bubble is on screen, and whether the pet shows its Recording button.
+        let meetingUI: () -> (bubble: Bool, button: Bool)
+        /// Closes the meeting bubble as the user would (`false`), or clicks the pet's Recording button (`true`).
+        let meetingBubble: (_ show: Bool) -> Void
     }
 
     private let chat: ChatSession
@@ -113,12 +122,101 @@ final class TestControl {
             chat.voice.cancel()
         case ("POST", "/test/voice/retry"):
             chat.retryVoice()
+        case ("GET", "/test/meeting"):
+            return meetingSnapshot()
+        case ("POST", "/test/meeting/picker"):
+            actions.meeting.showPicker()
+            return meetingSnapshot()
+        case ("POST", "/test/meeting/start"):
+            return startMeeting(body)
+        case ("POST", "/test/meeting/stop"):
+            actions.meeting.stop()
+            return meetingSnapshot()
+        case ("POST", "/test/meeting/cancel"):
+            // The panel's Cancel button asks first; the test goes straight to what a confirmed Cancel does.
+            actions.meeting.discard()
+            return meetingSnapshot()
+        case ("POST", "/test/meeting/retry"):
+            actions.meeting.retryFailed()
+            return meetingSnapshot()
+        case ("POST", "/test/meeting/hide-bubble"):
+            actions.meetingBubble(false)
+            return meetingSnapshot()
+        case ("POST", "/test/meeting/show-bubble"):
+            actions.meetingBubble(true)
+            return meetingSnapshot()
+        case ("POST", "/test/meeting/dismiss"):
+            actions.meeting.dismiss()
+            return meetingSnapshot()
+        case ("POST", "/test/meeting/open-in-chat"):
+            actions.meeting.openInChat()
+            return meetingSnapshot()
         case ("GET", "/test/signals"):
             return signalsSnapshot()
         default:
             return Self.encode(["ok": false, "error": "unknown test endpoint \(request.method) \(request.path)"])
         }
         return snapshot()
+    }
+
+    /// Files named by `mic` and `them` stand in for the microphone and the app's audio.
+    private func startMeeting(_ body: [String: Any]) -> Data {
+        let meeting = actions.meeting
+        guard ConfigStore.shared.config.meetings.enabled else { return Self.encode(["ok": false, "error": "meetings are off"]) }
+        let them = body["them"] as? String
+        guard let mic = body["mic"] as? String, FileManager.default.fileExists(atPath: mic),
+              them == nil || FileManager.default.fileExists(atPath: them!) else {
+            return Self.encode(["ok": false, "error": "mic or them file is missing"])
+        }
+        var lengths = MeetingController.ChunkLengths()
+        if let seconds = (body["chunkSeconds"] as? NSNumber)?.doubleValue, seconds > 0 { lengths = .test(seconds) }
+        if let delay = (body["retrySeconds"] as? NSNumber)?.doubleValue { meeting.backoff = { _ in delay } }
+        do {
+            try meeting.startTest(mic: URL(fileURLWithPath: mic), them: them.map { URL(fileURLWithPath: $0) },
+                                  appName: body["app"] as? String ?? "Test audio", lengths: lengths)
+        } catch {
+            return Self.encode(["ok": false, "error": error.localizedDescription])
+        }
+        return meetingSnapshot()
+    }
+
+    private(set) var meetingNotified: [String] = []
+
+    func recordMeetingNotified(_ url: URL) {
+        meetingNotified.append(url.path)
+    }
+
+    private func meetingSnapshot() -> Data {
+        let meeting = actions.meeting
+        let counts = meeting.counts
+        let summary: String = switch meeting.summary {
+        case .none: "none"
+        case .running: "running"
+        case .ready: "ready"
+        case .failed(let message): "failed: \(message)"
+        }
+        let frame = actions.meetingFrame()
+        return Self.encode([
+            "ok": true,
+            "phase": meeting.phase.rawValue,
+            "chunks": ["done": counts.done, "waiting": counts.waiting, "failed": counts.failed],
+            "folder": meeting.folder?.path ?? "",
+            "transcript": meeting.transcriptURL?.path ?? "",
+            "summary": summary,
+            "summaryAgent": meeting.lastSummaryRequest?.agent.rawValue ?? "",
+            "summaryModel": meeting.lastSummaryRequest?.model ?? "",
+            "summaryRan": meeting.lastSummaryRequest != nil,
+            "notified": meetingNotified,
+            "lines": meeting.recentLines.map { "\($0.track.rawValue): \($0.text)" },
+            "notice": meeting.notice ?? "",
+            "app": meeting.appName,
+            "choices": meeting.apps.map(\.name) + ["All system audio"],
+            "selected": meeting.choice.name,
+            "frame": [frame.minX, frame.minY, frame.width, frame.height],
+            "menuTitle": actions.meetingMenuTitle(),
+            "bubbleShown": actions.meetingUI().bubble,
+            "recordingButton": actions.meetingUI().button,
+        ])
     }
 
     private func signalsSnapshot() -> Data {

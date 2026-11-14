@@ -188,3 +188,108 @@ final class VoiceSettingsTests: XCTestCase {
         XCTAssertGreaterThan(PCMConverter.level(of: [Float](repeating: 0.5, count: 100)[...]), 0.8)
     }
 }
+
+final class MeetingTranscriptionTests: XCTestCase {
+    private let wav = WAV.encode([0, 100, -100, 200])
+
+    private func transcriber() -> Transcriber {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubProtocol.self]
+        return Transcriber(baseURL: "http://stub.test/v1", model: "some/model", apiKey: nil, session: URLSession(configuration: configuration))
+    }
+
+    private func formats() -> [String] {
+        StubProtocol.bodies.map { body in
+            let text = String(decoding: body, as: UTF8.self)
+            guard let range = text.range(of: "name=\"response_format\"\r\n\r\n") else { return "" }
+            return text[range.upperBound...].components(separatedBy: "\r\n")[0]
+        }
+    }
+
+    override func setUp() {
+        StubProtocol.requests = []
+        StubProtocol.bodies = []
+    }
+
+    func testWhisperSegmentsAreTimed() async throws {
+        StubProtocol.respond = { _ in
+            (200, Data(#"{"text":"Hello there. Bye.","segments":[{"id":0,"start":0.0,"end":1.5,"text":" Hello there."},{"id":1,"start":2.25,"end":3,"text":" Bye."}]}"#.utf8), nil)
+        }
+        let segments = try await transcriber().transcribeSegments(wav: wav)
+        XCTAssertEqual(segments, [TimedSegment(start: 0, end: 1.5, text: "Hello there."),
+                                  TimedSegment(start: 2.25, end: 3, text: "Bye.")])
+        XCTAssertEqual(formats(), ["verbose_json"])
+        XCTAssertTrue(String(decoding: StubProtocol.bodies[0], as: UTF8.self).contains("filename=\"meeting.wav\""))
+    }
+
+    func testParakeetSentencesAreTimed() async throws {
+        // The shape mlx-audio prints for Parakeet: `sentences`, each with tokens that are not needed here.
+        StubProtocol.respond = { _ in
+            (200, Data(#"{"text":"Can we ship it? Yes.","sentences":[{"text":" Can we ship it?","start":0.0,"end":1.52,"duration":1.52,"tokens":[{"id":1,"text":" Can","start":0,"end":0.24}]},{"text":" Yes.","start":1.52,"end":2.0,"duration":0.48,"tokens":[]}]}"#.utf8), nil)
+        }
+        let segments = try await transcriber().transcribeSegments(wav: wav)
+        XCTAssertEqual(segments.map(\.text), ["Can we ship it?", "Yes."])
+        XCTAssertEqual(segments.map(\.start), [0, 1.52])
+        XCTAssertEqual(segments.map(\.end), [1.52, 2.0])
+    }
+
+    func testNewlineDelimitedSentencesAreRead() throws {
+        let body = #"{"text":"Hi."}"# + "\n" + #"{"text":"Hi.","sentences":[{"text":" Hi.","start":0.5,"end":0.9}]}"#
+        let segments = try Transcriber.parseSegments(Data(body.utf8))
+        XCTAssertEqual(segments, [TimedSegment(start: 0.5, end: 0.9, text: "Hi.")])
+    }
+
+    func testTextOnlyBecomesOneSegmentAtTheStart() async throws {
+        StubProtocol.respond = { _ in (200, Data(#"{"text":" All of it. In one go. "}"#.utf8), nil) }
+        let segments = try await transcriber().transcribeSegments(wav: wav)
+        XCTAssertEqual(segments, [TimedSegment(start: 0, end: 0, text: "All of it. In one go.")])
+    }
+
+    func testEmptyTextGivesNoSegments() async throws {
+        StubProtocol.respond = { _ in (200, Data(#"{"text":"  "}"#.utf8), nil) }
+        let segments = try await transcriber().transcribeSegments(wav: wav)
+        XCTAssertEqual(segments, [])
+    }
+
+    func testRejectedVerboseJSONRetriesOnceWithPlainJSON() async throws {
+        StubProtocol.respond = { request in
+            let body = String(decoding: request.httpBodyStream.map { stream -> Data in
+                stream.open()
+                defer { stream.close() }
+                var data = Data()
+                var buffer = [UInt8](repeating: 0, count: 8192)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    data.append(buffer, count: count)
+                }
+                return data
+            } ?? Data(), as: UTF8.self)
+            if body.contains("verbose_json") {
+                return (400, Data(#"{"error":{"message":"response_format 'verbose_json' is not compatible with model"}}"#.utf8), nil)
+            }
+            return (200, Data(#"{"text":"plain answer"}"#.utf8), nil)
+        }
+        let segments = try await transcriber().transcribeSegments(wav: wav)
+        XCTAssertEqual(segments.map(\.text), ["plain answer"])
+        XCTAssertEqual(formats(), ["verbose_json", "json"])
+    }
+
+    func testOtherErrorsAreNotRetried() async {
+        StubProtocol.respond = { _ in (500, Data("boom".utf8), nil) }
+        do {
+            _ = try await transcriber().transcribeSegments(wav: wav)
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? TranscriptionError, .http(status: 500, detail: "boom"))
+        }
+        XCTAssertEqual(formats(), ["verbose_json"])
+    }
+
+    func testVoiceNotesStillSendPlainJSON() async throws {
+        StubProtocol.respond = { _ in (200, Data(#"{"text":"hello"}"#.utf8), nil) }
+        _ = try await transcriber().transcribe(wav: wav)
+        XCTAssertEqual(formats(), ["json"])
+        XCTAssertTrue(String(decoding: StubProtocol.bodies[0], as: UTF8.self).contains("filename=\"voice-note.wav\""))
+    }
+}

@@ -85,6 +85,7 @@ struct SettingsView: View {
                 RemindersSettings().tabItem { Label("Reminders", systemImage: "drop") }
                 IntegrationsSettings().tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }
                 VoiceSettings(model: model).tabItem { Label("Voice", systemImage: "mic") }
+                MeetingSettings(model: model).tabItem { Label("Meetings", systemImage: "person.2.wave.2") }
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
@@ -270,7 +271,7 @@ private struct ShortcutRow: View {
                 message = "Use ⌘, ⌥ or ⌃ (Shift alone isn't enough), or a function key."
                 return nil
             }
-            let others = [\Config.Hotkeys.chat, \.captureWindow, \.captureRegion, \.voice].filter { $0 != path }
+            let others = [\Config.Hotkeys.chat, \.captureWindow, \.captureRegion, \.voice, \.meeting].filter { $0 != path }
             if others.contains(where: { Shortcut(store.config.hotkeys[keyPath: $0]) == shortcut }) {
                 message = "\(shortcut.display) is already used for another action."
                 return nil
@@ -390,10 +391,125 @@ private struct VoiceSettings: View {
         }
     }
 
-    private static let testClip: Data = {
+    static let testClip: Data = {
         let samples = (0..<WAV.sampleRate).map { Int16(sin(Double($0) * 2 * .pi * 440 / Double(WAV.sampleRate)) * 3000) }
         return WAV.encode(samples)
     }()
+}
+
+// MARK: - Meetings
+
+private struct MeetingSettings: View {
+    @ObservedObject var model: SettingsModel
+    @ObservedObject private var store = ConfigStore.shared
+    @State private var testing = false
+    @State private var enableError: String?
+    @State private var cursorModels = ModelCatalog.cached
+
+    private var meetings: Config.Meetings { store.config.meetings }
+
+    /// The agents turned on under General, plus the saved one so the picker never shows a blank.
+    private var agents: [BackendKind] {
+        var list = BackendKind.allCases.filter { $0 == .cursor ? store.config.integrations.cursorHooks : store.config.integrations.claudeHooks }
+        if !list.contains(meetings.summaryAgent) { list.append(meetings.summaryAgent) }
+        return list
+    }
+
+    private var models: [ChatModel] {
+        meetings.summaryAgent == .cursor ? cursorModels : ClaudeCodeBackend.models
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Meeting transcripts", isOn: Binding(get: { meetings.enabled }, set: setEnabled))
+                    .disabled(testing)
+                if testing {
+                    HStack { ProgressView().controlSize(.small); Text("Testing the voice server…").font(.caption) }
+                }
+                if let enableError {
+                    Text(enableError).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                }
+            } footer: {
+                Text("Off by default. Turning it on needs a voice server under Settings → Voice that passes Test connection. When on, \"Start meeting transcript\" appears in the pet's menu. It records your microphone as Me and one app's audio as Them, sends both to that server in chunks, and keeps the audio and transcript in ~/.ironpet/meetings. macOS asks for Screen & System Audio Recording the first time you start one. Tell everyone on the call.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Summary") {
+                Toggle("Summarize automatically when a meeting ends", isOn: Binding(
+                    get: { meetings.autoSummary }, set: { on in store.update { $0.meetings.autoSummary = on } }))
+                Picker("Summary agent", selection: Binding(get: { meetings.summaryAgent }, set: setAgent)) {
+                    ForEach(agents, id: \.self) { agent in
+                        Text(agent.displayName + (isOn(agent) ? "" : " (off in General)")).tag(agent)
+                    }
+                }
+                Picker("Summary model", selection: Binding(get: { meetings.summaryModel ?? "" },
+                                                          set: { id in store.update { $0.meetings.summaryModel = id.isEmpty ? nil : id } })) {
+                    Text("Default").tag("")
+                    ForEach(modelChoices, id: \.id) { Text($0.name).tag($0.id) }
+                }
+                if !isOn(meetings.summaryAgent) {
+                    Text("Turn on Watch \(meetings.summaryAgent.displayName) under General so this agent can run.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+            Section {
+                ShortcutRow(title: "Start or stop", path: \.meeting, model: model)
+            } footer: {
+                Text("No shortcut is set by default, and none is registered while meeting transcripts are off. Pressing it starts the app picker, or stops a meeting that is recording.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                EmptyView()
+            } footer: {
+                Text("When a meeting ends, the transcript is sent to the summary agent, which runs with no tools: it can read the transcript and answer, and it cannot change files or run commands. ironpet writes summary.md itself. The server, model and key are the ones under Voice.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .task { cursorModels = await ModelCatalog.refresh() }
+    }
+
+    /// The model list plus the saved id, so a model that left the list still shows.
+    private var modelChoices: [ChatModel] {
+        var list = models
+        if let saved = meetings.summaryModel, !list.contains(where: { $0.id == saved }) { list.append(ChatModel(id: saved, name: saved)) }
+        return list
+    }
+
+    private func isOn(_ agent: BackendKind) -> Bool {
+        agent == .cursor ? store.config.integrations.cursorHooks : store.config.integrations.claudeHooks
+    }
+
+    private func setAgent(_ agent: BackendKind) {
+        // A model id from one agent means nothing to the other.
+        store.update {
+            if $0.meetings.summaryAgent != agent { $0.meetings.summaryModel = nil }
+            $0.meetings.summaryAgent = agent
+        }
+    }
+
+    /// Turning meetings on sends the voice settings' test clip first, so a wrong URL or key shows up here and not in
+    /// the middle of a call.
+    private func setEnabled(_ on: Bool) {
+        guard on else {
+            enableError = nil
+            store.update { $0.meetings.enabled = false }
+            return
+        }
+        let voice = store.config.voice
+        let transcriber = Transcriber(baseURL: voice.baseUrl, model: voice.model, apiKey: VoiceKey.load(), timeout: 30)
+        testing = true
+        enableError = nil
+        Task {
+            do {
+                _ = try await transcriber.transcribe(wav: VoiceSettings.testClip)
+                store.update { $0.meetings.enabled = true }
+            } catch {
+                enableError = "Not turned on. The voice server failed Test connection: \(error.localizedDescription)"
+            }
+            testing = false
+        }
+    }
 }
 
 // MARK: - Reminders

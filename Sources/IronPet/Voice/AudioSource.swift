@@ -11,6 +11,12 @@ protocol AudioSource: AnyObject {
     func cancel()
 }
 
+/// A source that can hand over its samples as they arrive, so a long recording never sits in memory (meetings).
+/// With `sink` set, `finish()` returns an empty WAV.
+protocol StreamingSource: AudioSource {
+    var sink: (@Sendable ([Int16]) -> Void)? { get set }
+}
+
 enum VoiceError: LocalizedError {
     case noInput
     case unreadable(String)
@@ -67,7 +73,8 @@ final class PCMConverter: @unchecked Sendable {
 }
 
 /// The default input device through AVAudioEngine.
-final class MicrophoneSource: AudioSource, @unchecked Sendable {
+final class MicrophoneSource: StreamingSource, @unchecked Sendable {
+    var sink: (@Sendable ([Int16]) -> Void)?
     private let engine = AVAudioEngine()
     private let lock = NSLock()
     private var samples: [Int16] = []
@@ -91,6 +98,10 @@ final class MicrophoneSource: AudioSource, @unchecked Sendable {
     }
 
     private func append(_ chunk: [Int16]) {
+        if let sink {
+            sink(chunk)
+            return
+        }
         lock.lock()
         samples += chunk
         lock.unlock()
@@ -116,7 +127,8 @@ final class MicrophoneSource: AudioSource, @unchecked Sendable {
 }
 
 /// Plays a WAV file as if it were being spoken: levels follow the file in real time, and `finish` returns all of it.
-final class FileSource: AudioSource, @unchecked Sendable {
+final class FileSource: StreamingSource, @unchecked Sendable {
+    var sink: (@Sendable ([Int16]) -> Void)?
     private let samples: [Float]
     private var timer: DispatchSourceTimer?
     private static let tick = 0.04
@@ -135,9 +147,10 @@ final class FileSource: AudioSource, @unchecked Sendable {
         var position = 0
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInteractive))
         timer.schedule(deadline: .now(), repeating: Self.tick)
-        timer.setEventHandler { [samples] in
+        timer.setEventHandler { [samples, sink] in
             let end = min(position + window, samples.count)
             level(position < end ? PCMConverter.level(of: samples[position..<end]) : 0)
+            if position < end { sink?(PCMConverter.int16(Array(samples[position..<end]))) }
             position = end
         }
         timer.resume()

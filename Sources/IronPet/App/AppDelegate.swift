@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Carbon
 import Combine
 
@@ -17,6 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var server: EventServer?
     private var pet: PetController!
     private var chatPanel: ChatPanel!
+    private let meeting = MeetingController()
+    private var meetingPanel: MeetingPanel!
+    private var meetingBubbleHidden = false
+    private var meetingBubbleRemoving = false
     private var hotKeys: [HotKey] = []
     private var previousApp: NSRunningApplication?
     private let wispr = WisprBridge()
@@ -76,6 +81,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.chat.isVisible = false
             self?.pet.refreshMood()
             self?.restorePreviousApp()
+        }
+        meetingPanel = MeetingPanel(controller: meeting)
+        meeting.onChange = { [weak self] in self?.syncMeetingPanel() }
+        announcer.bubbles.onDismissed = { [weak self] id in self?.meetingBubbleClosed(id) }
+        pet.onRecordingClick = { [weak self] in self?.showMeetingBubble() }
+        meeting.onSummaryReady = { [weak self] url in
+            self?.announcer.meetingSummary(url)
+            self?.testControl?.recordMeetingNotified(url)
+        }
+        meeting.onOpenInChat = { [weak self] folder, files in self?.openMeetingInChat(folder, files) }
+        if TestControl.isEnabled {
+            // No dialog may block an automated run.
+            meeting.confirmConsent = { true }
         }
         chat.onAttention = { [weak self] title in self?.announcer.chat(title) }
         chat.onApprovalNeeded = { [weak self] approval in
@@ -140,8 +158,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let (newAgents, oldAgents) = (hookAgents(in: new), hookAgents(in: old))
         setHooks(installed: newAgents.filter { !oldAgents.contains($0) })
         setHooks(removed: oldAgents.filter { !newAgents.contains($0) })
-        if new.hotkeys != old.hotkeys || new.voice.enabled != old.voice.enabled { registerHotKeys() }
+        if new.hotkeys != old.hotkeys || new.voice.enabled != old.voice.enabled
+            || new.meetings.enabled != old.meetings.enabled { registerHotKeys() }
         if !new.voice.enabled { chat.voice.cancel() }
+        if !new.meetings.enabled { meeting.dismiss() }
         if new.integrations.githubAlerts != old.integrations.githubAlerts {
             new.integrations.githubAlerts ? github.start() : github.stop()
         }
@@ -180,6 +200,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if hotKey.isRegistered { hotKeys.append(hotKey) } else { failed.insert(text) }
         } else if config.config.voice.enabled, !config.config.hotkeys.voice.isEmpty {
             failed.insert(config.config.hotkeys.voice)
+        }
+        // Start or stop a meeting transcript. Only registered with meetings on, and unbound by default.
+        if let text = MeetingController.hotkey(in: config.config) {
+            if let shortcut = Shortcut(text) {
+                let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, id: 5) { [weak self] in
+                    MainActor.assumeIsolated { self?.toggleMeeting() }
+                }
+                if hotKey.isRegistered { hotKeys.append(hotKey) } else { failed.insert(text) }
+            } else {
+                failed.insert(text)
+            }
         }
         settingsModel.failedHotKeys = failed
     }
@@ -240,6 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        meeting.prepareForQuit()
         chat.persistForRelaunch()
         chat.shutdown()
         try? FileManager.default.removeItem(at: Paths.portFile)
@@ -279,7 +311,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 capture: { [weak self] region in self?.captureScreen(region: region) },
                 notificationAction: { [weak self] id, allow in self?.notifier.onApprovalAction?(id, allow) },
                 signals: signals,
-                github: github
+                github: github,
+                meeting: meeting,
+                meetingFrame: { [weak self] in
+                    guard let screen = NSScreen.screens.first else { return .zero }
+                    let showsBubble = self?.announcer.bubbles.bubbles.contains { $0.id == Self.meetingBubbleID } == true
+                    let window: NSWindow? = self?.meetingPanel.isVisible == true ? self?.meetingPanel
+                        : showsBubble && self?.bubblePanel.panel.isVisible == true ? self?.bubblePanel.panel : nil
+                    guard let frame = window?.frame else { return .zero }
+                    return CGRect(x: frame.minX, y: screen.frame.height - frame.maxY, width: frame.width, height: frame.height)
+                },
+                meetingMenuTitle: { [weak self] in self?.meetingMenuItem()?.title ?? "" },
+                meetingUI: { [weak self] in
+                    ((self?.announcer.bubbles.bubbles.contains { $0.id == Self.meetingBubbleID }) == true,
+                     self?.pet.view.recording == .hidden)
+                },
+                meetingBubble: { [weak self] show in
+                    if show { self?.showMeetingBubble() } else { self?.announcer.bubbles.dismiss(Self.meetingBubbleID) }
+                }
             ))
             testControl = control
             server.onTest = { request, respond in
@@ -375,6 +424,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chat.prefill(prompt)
     }
 
+    // MARK: Meetings
+
+    /// Shows the panel while a meeting is being set up, recorded or wrapped up, and hides it otherwise.
+    ///
+    /// The picker is a small window. Once recording starts, the status lives in a pet bubble. The user can hide that
+    /// bubble, and the pet then shows a Recording button that brings it back.
+    private func syncMeetingPanel() {
+        let bubbles = announcer.bubbles
+        switch meeting.phase {
+        case .idle:
+            meetingPanel.dismiss()
+            meetingBubbleHidden = false
+            removeMeetingBubble()
+        case .choosing:
+            meetingBubbleHidden = false
+            removeMeetingBubble()
+            meetingPanel.present(near: pet.panel.frame)
+        default:
+            meetingPanel.dismiss()
+            if !meetingBubbleHidden, !bubbles.bubbles.contains(where: { $0.id == Self.meetingBubbleID }) {
+                bubbles.show(Bubble(id: Self.meetingBubbleID, symbol: "record.circle", tint: .red, title: "Meeting",
+                                    content: AnyView(MeetingView(controller: meeting, embedded: true))))
+            }
+        }
+        pet.setRecording(meeting.phase == .recording || meeting.phase == .finishing || meeting.phase == .summarizing
+                         ? (meetingBubbleHidden ? .hidden : .shown) : .none)
+        pet.refreshMood()
+    }
+
+    static let meetingBubbleID = "meeting"
+
+    private func removeMeetingBubble() {
+        meetingBubbleRemoving = true
+        announcer.bubbles.dismiss(Self.meetingBubbleID)
+        meetingBubbleRemoving = false
+    }
+
+    /// The user closed the meeting bubble. Closing "Meeting saved" ends the meeting view; closing it while recording
+    /// only hides it, and the pet's Recording button shows it again.
+    private func meetingBubbleClosed(_ id: String) {
+        guard id == Self.meetingBubbleID, !meetingBubbleRemoving else { return }
+        if meeting.phase == .done {
+            meeting.dismiss()
+        } else {
+            meetingBubbleHidden = true
+            syncMeetingPanel()
+        }
+    }
+
+    private func showMeetingBubble() {
+        meetingBubbleHidden = false
+        syncMeetingPanel()
+    }
+
+    private func toggleMeeting() {
+        if meeting.phase == .recording {
+            meeting.stop()
+        } else {
+            meeting.showPicker()
+        }
+    }
+
+    @objc private func startMeeting(_ sender: Any?) {
+        meeting.showPicker()
+    }
+
+    @objc private func stopMeeting(_ sender: Any?) {
+        meeting.stop()
+    }
+
+    private func meetingMenuItem() -> NSMenuItem? {
+        guard config.config.meetings.enabled else { return nil }
+        if meeting.phase == .recording {
+            let item = NSMenuItem(title: "Stop meeting transcript", action: #selector(stopMeeting), keyEquivalent: "")
+            item.target = self
+            return item
+        }
+        let item = NSMenuItem(title: "Start meeting transcript…", action: #selector(startMeeting), keyEquivalent: "")
+        item.target = self
+        item.isEnabled = !meeting.isBusy
+        return item
+    }
+
+    /// A new chat in the meeting folder with the transcript, and the summary if there is one, attached.
+    private func openMeetingInChat(_ folder: URL, _ files: [URL]) {
+        chat.newChat()
+        showChat()
+        chat.use(folder)
+        chat.attachments = files
+    }
+
     private func hookMenuItems() -> [NSMenuItem] {
         let system = NSMenuItem(title: "Also show macOS notifications", action: #selector(toggleSystemNotifications), keyEquivalent: "")
         system.state = announcer.alsoSystemNotifications ? .on : .off
@@ -382,7 +522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         login.state = LoginItem.isEnabled ? .on : .off
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",")
         for item in [system, login, settings] { item.target = self }
-        return [settings, reminders.menuItem(), integrationsMenuItem(), system, login]
+        return [meetingMenuItem(), settings, reminders.menuItem(), integrationsMenuItem(), system, login].compactMap { $0 }
     }
 
     private func integrationsMenuItem() -> NSMenuItem {

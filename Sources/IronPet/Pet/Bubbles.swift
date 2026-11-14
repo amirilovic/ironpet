@@ -23,6 +23,8 @@ struct Bubble: Identifiable {
     var onTap: (() -> Void)?
     /// nil stays until answered or closed.
     var expires: Date?
+    /// Replaces the icon, title and text, for a bubble that shows live state (the meeting status).
+    var content: AnyView?
 }
 
 @MainActor
@@ -32,18 +34,22 @@ final class BubbleStore: ObservableObject {
     @Published var petOnLeft = false
     private var hovering = false
     static let limit = 4
+    /// Called when a bubble goes away through `dismiss`, whether the user closed it or code did.
+    var onDismissed: ((String) -> Void)?
 
     func show(_ bubble: Bubble) {
         var next = bubbles.filter { $0.id != bubble.id }
         next.append(bubble)
         while next.count > Self.limit {
-            next.remove(at: next.firstIndex { $0.expires != nil } ?? 0)
+            next.remove(at: next.firstIndex { $0.expires != nil } ?? next.firstIndex { $0.content == nil } ?? 0)
         }
         bubbles = next
     }
 
     func dismiss(_ id: String) {
+        guard bubbles.contains(where: { $0.id == id }) else { return }
         bubbles.removeAll { $0.id == id }
+        onDismissed?(id)
     }
 
     /// Bubbles don't expire under the pointer, and get a few more seconds after it leaves.
@@ -99,8 +105,12 @@ final class BubblePanel {
                 DispatchQueue.main.async { self?.update() }
             }
             .store(in: &cancellables)
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak store] _ in
-            MainActor.assumeIsolated { store?.sweep() }
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self, weak store] _ in
+            MainActor.assumeIsolated {
+                store?.sweep()
+                // A bubble with live content changes height without the stack changing.
+                if let self, self.panel.isVisible, abs(self.host.fittingSize.height - self.panel.frame.height) > 0.5 { self.update() }
+            }
         }
     }
 
@@ -163,6 +173,38 @@ private struct BubbleView: View {
     @State private var hovering = false
 
     var body: some View {
+        Group {
+            if let content = bubble.content {
+                content.overlay(alignment: .topTrailing) { closeButton }
+            } else {
+                standard
+            }
+        }
+        .padding(12)
+        .frame(width: 300, alignment: .leading)
+        .background(BubbleShape(tail: tail).fill(Color(nsColor: .windowBackgroundColor)))
+        .overlay(BubbleShape(tail: tail).stroke(Color.primary.opacity(0.12), lineWidth: 1))
+        .shadow(color: .black.opacity(0.28), radius: 8, y: 3)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard let tap = bubble.onTap else { return }
+            tap()
+            dismiss()
+        }
+        .onHover { hovering = $0 }
+    }
+
+    private var closeButton: some View {
+        Button(action: dismiss) {
+            Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).frame(width: 16, height: 16)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .opacity(hovering ? 1 : 0)
+        .help("Hide")
+    }
+
+    private var standard: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: bubble.symbol)
                 .font(.system(size: 15, weight: .semibold))
@@ -202,18 +244,6 @@ private struct BubbleView: View {
                 }
             }
         }
-        .padding(12)
-        .frame(width: 300, alignment: .leading)
-        .background(BubbleShape(tail: tail).fill(Color(nsColor: .windowBackgroundColor)))
-        .overlay(BubbleShape(tail: tail).stroke(Color.primary.opacity(0.12), lineWidth: 1))
-        .shadow(color: .black.opacity(0.28), radius: 8, y: 3)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard let tap = bubble.onTap else { return }
-            tap()
-            dismiss()
-        }
-        .onHover { hovering = $0 }
     }
 
     @ViewBuilder private func button(_ action: Bubble.Action) -> some View {

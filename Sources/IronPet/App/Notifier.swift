@@ -80,6 +80,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.add(UNNotificationRequest(identifier: "reminder", content: content, trigger: nil))
     }
 
+    /// Clicking opens `summary.md`.
+    func announceMeetingSummary(_ url: URL) {
+        guard let center else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Meeting summary ready"
+        content.body = url.deletingLastPathComponent().lastPathComponent
+        content.sound = .default
+        content.userInfo = ["file": url.path]
+        center.add(UNNotificationRequest(identifier: "meeting-summary:\(url.path)", content: content, trigger: nil))
+    }
+
     func clearApproval(id: UUID) {
         center?.removeDeliveredNotifications(withIdentifiers: ["approval:\(id.uuidString)"])
     }
@@ -115,6 +126,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             let kinds = raw.split(separator: ",").compactMap { ReminderScheduler.Kind(rawValue: String($0)) }
             let snooze = response.actionIdentifier == "snooze"
             DispatchQueue.main.async { self.onReminderAction?(kinds, snooze) }
+        } else if let path = info["file"] as? String {
+            DispatchQueue.main.async { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
         } else if let link = info["url"] as? String, let url = URL(string: link) {
             DispatchQueue.main.async { NSWorkspace.shared.open(url) }
         } else if let id = info["session"] as? String {

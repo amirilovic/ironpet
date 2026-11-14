@@ -37,6 +37,7 @@ Please use GitHub's **Report a vulnerability** button on the repository's Securi
 - `~/.ironpet/sentry.json` and its Keychain token, only after you've configured Sentry.
 - Cursor's `storage.json` and iTerm2 via AppleScript, to find the project you're working in.
 - The microphone, only while you record a voice note with voice notes on (off by default). macOS asks for permission the first time you record, not before.
+- The microphone and one app's audio (or all system audio, through ScreenCaptureKit), only while a meeting transcript is recording, with meeting transcripts on (off by default). macOS asks for microphone and Screen & System Audio Recording access the first time you start one.
 - Wispr Flow's local database, to pick up dictation while the chat is open.
 
 ## Data in `~/.ironpet`
@@ -49,6 +50,7 @@ Please use GitHub's **Report a vulnerability** button on the repository's Securi
 | `memory/` | Markdown notes Ghost keeps about you and your projects (you can edit them) |
 | `screenshots/` | Screen captures you attached to chats |
 | `scratch/` | Working folder for chats that aren't about a project |
+| `meetings/` | One folder per meeting transcript: the recorded audio as WAV chunks, `transcript.md`, `summary.md`. Kept until you delete them |
 | `token`, `port` | Local server credentials |
 
 The chat that was open when the app quit is reopened on launch. Its id, its Auto switch, your unsent draft and the paths of attached screenshots are kept in the app's preferences (`dev.ironpet.app`), which `uninstall.sh` deletes.
@@ -59,6 +61,17 @@ Delete the folder to erase all of it, or run `./scripts/uninstall.sh` to remove 
 
 With voice notes on (Settings → Voice, off by default), each recording is uploaded as a WAV file to the base URL you set, along with the model name and, if you saved one, an `Authorization: Bearer` header carrying your API key. That may be a service such as OpenAI or Groq, or a server on your own Mac. ironpet does not choose the server or fall back to another. While the feature is off, the microphone is never opened and nothing is sent, apart from the one-second test tone that the Test connection button uploads when you press it. The key lives in the Keychain item `ironpet.voice` and is never written to `~/.ironpet`. Recordings are held in memory only: the last one is kept until its transcription succeeds, so Retry can send it again, and none is written to disk. A plain `http://` base URL sends audio and the key unencrypted, so use it only for `localhost`.
 
+## Meeting transcripts record other people
+
+With meeting transcripts on (Settings → Meetings, off by default), starting a meeting records two tracks until you stop: your microphone ("Me") and the audio of the app you picked, or all system audio ("Them"). ironpet's own sound is excluded. Both are written as 16 kHz mono WAV chunks to `~/.ironpet/meetings/<date-time>/` and stay there after the meeting. They are your recording, so ironpet never deletes them; remove the folder when you no longer need it. At most one chunk (up to 5 minutes per track) is held in memory at a time.
+
+- **Audio goes to the configured server.** Every chunk is uploaded to the base URL under Settings → Voice, with the model name and your API key if you saved one. A plain `http://` URL sends it unencrypted, so use it only for `localhost`. Chunks that fail are retried against the same server.
+- **The transcript goes to the chosen agent.** When a meeting ends and "Summarize automatically" is on, the full text of `transcript.md` is sent to `cursor-agent` or `claude`, whichever is set as the summary agent, and from there to that agent's model provider. Turn the setting off and no agent runs.
+- **The summary agent cannot change anything.** It runs in the meeting folder with the most restricted mode each backend offers: Claude Code with `--tools ""` (no tools at all) and `--no-session-persistence`, and cursor-agent with `--mode ask` (read-only), `--sandbox enabled` and no `--force`. Neither gets ironpet's extra folders. ironpet itself writes `summary.md` from the agent's text answer.
+- **Consent.** Recording people without their consent is illegal in many places (for example §201 StGB in Germany). The first meeting shows a notice, the picker repeats it, and the recording status shows in the pet's bubble. You can close that bubble, but the pet then shows a red Recording button for as long as ironpet records, and clicking it brings the bubble back.
+- **Permissions are asked late.** Microphone and Screen & System Audio Recording access are requested when you press Start recording for the first time, never at launch and never with the feature off.
+- **Quitting.** Quitting ironpet during a meeting writes the audio captured so far and what is already transcribed. Chunks not yet transcribed are marked as such in `transcript.md`.
+
 ## Integrations are off by default
 
 | Integration | Default | Turn on |
@@ -67,3 +80,4 @@ With voice notes on (Settings → Voice, off by default), each recording is uplo
 | Share MCP sign-ins across folders | Off | Right-click → Integrations (shows a warning first) |
 | Sentry alerts | Off | `./scripts/configure_sentry.sh` |
 | Voice notes (audio sent to a server you choose) | Off | Settings → Voice |
+| Meeting transcripts (microphone and app audio sent to that server, transcript sent to an agent) | Off | Settings → Meetings |
