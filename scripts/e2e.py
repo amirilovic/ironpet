@@ -683,6 +683,18 @@ def scenario_voice():
                 time.sleep(3.5)
                 record(f"Voice: recording state ({mode})", voice_state() == "recording")
                 shot(f"voice-recording-{mode}")
+                # The waveform moves while recording. Capture only its strip (above the bottom edge, between the cancel
+                # button and the timer) so the timer text cannot make two frames differ.
+                x, y, w, h = chat()["frame"]
+                strip = f"{int(x) + 60},{int(y + h) - 56},{int(w) - 190},40"
+                frames = set()
+                for n in range(4):
+                    path = f"{SHOTS}/voice-recording-live-{mode}-{n}.png"
+                    subprocess.run(["screencapture", "-x", "-R", strip, path])
+                    with open(path, "rb") as f:
+                        frames.add(hash(f.read()))
+                    time.sleep(0.2)
+                record(f"Voice: waveform animates while recording ({mode})", len(frames) >= 3, f"{len(frames)} distinct frames")
                 call("POST", "/test/voice/stop")
                 time.sleep(0.8)
                 record(f"Voice: transcribing state ({mode})", voice_state() == "transcribing")
