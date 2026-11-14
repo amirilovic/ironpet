@@ -537,7 +537,7 @@ def scenario_sentry_mcp():
 # Driven through macOS accessibility (System Events), so the terminal needs Accessibility permission.
 # These scenarios edit config.json and the hook files for real; the user's copies are restored afterwards.
 
-CONFIG = f"{HOME}/.ironpet/config.json"
+CONFIG = f"{ROOT}/config.json"
 HOOK_FILES = {"cursor": f"{HOME}/.cursor/hooks.json", "claude": f"{HOME}/.claude/settings.json"}
 DEFAULTS_DOMAIN = "dev.ironpet.app"
 
