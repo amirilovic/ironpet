@@ -77,7 +77,7 @@ struct Config: Codable, Equatable {
     }
 
     struct Skills: Codable, Equatable {
-        /// Update installed skills when ironpet ships a newer text, without asking or telling.
+        /// Install the skills that are missing for the agents found on this Mac, and update installed ones when ironpet ships a newer text.
         var autoUpdate = true
     }
 

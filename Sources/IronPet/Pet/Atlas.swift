@@ -65,12 +65,17 @@ struct Atlas {
                        Paths.petDir.appendingPathComponent("spritesheet.png")]
         if let bundled = Bundle.main.url(forResource: "spritesheet", withExtension: "png") { candidates.append(bundled) }
         for url in candidates {
-            guard let image = NSImage(contentsOf: url),
-                  let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
-                  let atlas = Atlas(image: cg) else { continue }
+            guard let atlas = load(url) else { continue }
             NSLog("ironpet: loaded pet atlas \(url.path)")
             return atlas
         }
         return nil
+    }
+
+    /// The atlas in a PNG or WebP file, or nil when the file is missing, unreadable or not in the atlas layout.
+    static func load(_ url: URL) -> Atlas? {
+        guard let image = NSImage(contentsOf: url),
+              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        return Atlas(image: cg)
     }
 }

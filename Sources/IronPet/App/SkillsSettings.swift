@@ -1,5 +1,10 @@
 import SwiftUI
 
+extension Notification.Name {
+    /// Posted after the app installs or updates skills on its own.
+    static let skillsChanged = Notification.Name("ironpet.skillsChanged")
+}
+
 /// The Skills section of the General tab: every skill that ships with ironpet, whether agents have it, and a switch to keep
 /// the installed ones up to date without asking.
 struct SkillsSettings: View {
@@ -20,15 +25,26 @@ struct SkillsSettings: View {
                     if entry.status.isInstalledAnywhere { Button("Remove") { remove(entry.skill) } }
                 }
             }
-            Toggle("Update skills automatically", isOn: Binding(
+            Toggle("Install and update skills automatically", isOn: Binding(
                 get: { store.config.skills.autoUpdate },
                 set: { on in
                     store.update { $0.skills.autoUpdate = on }
-                    if on { SkillManager.standard.updateInstalled(); reload() }
+                    if on {
+                        let manager = SkillManager.standard
+                        manager.updateInstalled()
+                        let missing = SkillPrompt.pending(manager.entries(), dismissed: [])
+                        _ = try? manager.install(names: missing.map(\.skill.name))
+                        reload()
+                    }
                 }))
             if let note, !note.isEmpty { Text(note).font(.caption).foregroundStyle(.secondary) }
         }
         .onAppear(perform: reload)
+        // The app installs and updates skills in the background, and the window stays open or is reused, so reload
+        // when that happens and whenever the window or the app comes to the front.
+        .onReceive(NotificationCenter.default.publisher(for: .skillsChanged)) { _ in reload() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in reload() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in reload() }
     }
 
     private func reload() { entries = SkillManager.standard.entries() }

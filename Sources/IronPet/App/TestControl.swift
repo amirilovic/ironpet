@@ -9,6 +9,8 @@ final class TestControl {
 
     struct Actions {
         let showChat: () -> Void
+        /// Sends the "build a new pet" request as the gallery tile does.
+        let buildPet: (String) -> Void
         /// The chat panel's frame in top-left screen coordinates, for `screencapture -R`.
         let chatWindowID: () -> Int
         let chatFrame: () -> CGRect
@@ -75,6 +77,11 @@ final class TestControl {
             if let auto = body["auto"] as? Bool { chat.autoMode = auto }
             chat.input = body["prompt"] as? String ?? ""
             chat.send()
+        case ("POST", "/test/build-pet"):
+            let description = (body["description"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !description.isEmpty else { return Self.encode(["ok": false, "error": "description is required"]) }
+            actions.buildPet(description)
+            return Self.encode(["ok": true])
         case ("POST", "/test/approve"):
             guard let first = chat.approvals.first else { return Self.encode(["ok": false, "error": "no pending approval"]) }
             chat.decide(first, allow: body["allow"] as? Bool ?? false)

@@ -39,7 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let config = ConfigStore.shared
     private var setupWindow: SetupWindow?
     private lazy var settingsModel = SettingsModel(actions: .init(
-        suspendHotKeys: { [weak self] suspended in suspended ? self?.unregisterHotKeys() : self?.registerHotKeys() }
+        suspendHotKeys: { [weak self] suspended in suspended ? self?.unregisterHotKeys() : self?.registerHotKeys() },
+        buildPet: { [weak self] description in self?.requestPet(description) }
     ), announcer: announcer)
     private lazy var settingsWindow = SettingsWindow(model: settingsModel)
 
@@ -193,13 +194,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Updates the installed skills quietly when the switch is on, then offers to install or update the rest.
+    /// With the switch on, installs and updates the skills for the agents found on this Mac and says so in one bubble. With it off, offers instead.
     private func checkSkills() {
         let manager = SkillManager.standard
         if config.config.skills.autoUpdate { manager.updateInstalled() }
+        NotificationCenter.default.post(name: .skillsChanged, object: nil)
         guard setupWindow == nil else { return }
         let pending = SkillPrompt.pending(manager.entries(), dismissed: SkillPrompt.dismissed())
         guard !pending.isEmpty else { return }
+        // The switch in Settings → Skills also covers skills that are not installed yet, for the agents found on this Mac.
+        if config.config.skills.autoUpdate {
+            installSkills(pending)
+            return
+        }
         let message = SkillPrompt.message(pending)
         announcer.automation(AutomationNotice(
             id: "skill-install", symbol: "sparkles", tint: .info, title: message.title, body: message.body,
@@ -208,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installSkills(_ pending: [SkillManager.Entry]) {
+        defer { NotificationCenter.default.post(name: .skillsChanged, object: nil) }
         do {
             let results = try SkillManager.standard.install(names: pending.map(\.skill.name))
             let outcomes = results.flatMap { $0.outcomes }
@@ -390,6 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if TestControl.isEnabled {
             let control = TestControl(chat: chat, actions: TestControl.Actions(
                 showChat: { [weak self] in self?.showChat() },
+                buildPet: { [weak self] description in self?.requestPet(description) },
                 chatWindowID: { [weak self] in self?.chatPanel.windowNumber ?? 0 },
                 chatFrame: { [weak self] in
                     guard let frame = self?.chatPanel.frame, let screen = NSScreen.screens.first else { return .zero }
@@ -486,10 +495,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chatPanel.isVisible && chatPanel.isKeyWindow && NSApp.isActive ? chatPanel.close() : showChat()
     }
 
-    private func showChat() {
+    /// `keepThread`: leave the chat's session and folder as they are instead of following the app the user came from.
+    private func showChat(keepThread: Bool = false) {
         let front = NSWorkspace.shared.frontmostApplication
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
-        chat.prepareForShow(detected: WorkspaceDetector.workspace(of: previousApp ?? front))
+        if !keepThread { chat.prepareForShow(detected: WorkspaceDetector.workspace(of: previousApp ?? front)) }
         chat.isVisible = true
         wispr.start()
         NSApp.activate()
@@ -560,6 +570,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chat.newChat()
         showChat()
         chat.prefill(prompt)
+    }
+
+    /// "Build a new pet": opens the chat and sends the request in the current thread. The session and folder stay as
+    /// they are. A draft the user was typing comes back after the send. While the agent is running, or before a folder
+    /// is chosen, the request waits in the input box instead.
+    private func requestPet(_ description: String) {
+        showChat(keepThread: true)
+        PetPrompt.ensureSkillInstalled()
+        let draft = chat.input
+        let staged = chat.attachments
+        chat.attachments = []
+        chat.input = PetPrompt.build(description: description)
+        chat.send()
+        chat.attachments = staged
+        if chat.input.isEmpty {
+            chat.input = draft
+        } else {
+            // The send did not go through. Keep the draft above the waiting request, and use prefill so the
+            // dictation auto-send does not fire on the larger input.
+            chat.prefill(draft.isEmpty ? chat.input : draft + "\n\n" + chat.input)
+        }
     }
 
     // MARK: Meetings
