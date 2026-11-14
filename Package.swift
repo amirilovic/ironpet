@@ -10,7 +10,8 @@ let package = Package(
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.18.3"),
     ],
     targets: [
-        .executableTarget(name: "IronPet", dependencies: [.product(name: "JMESPath", package: "jmespath.swift"), .product(name: "QuickJS", package: "QuickJS-Swift"), .product(name: "FluidAudio", package: "FluidAudio")], path: "Sources/IronPet"),
+        .target(name: "IronPetObjC", path: "Sources/IronPetObjC"),
+        .executableTarget(name: "IronPet", dependencies: ["IronPetObjC", .product(name: "JMESPath", package: "jmespath.swift"), .product(name: "QuickJS", package: "QuickJS-Swift"), .product(name: "FluidAudio", package: "FluidAudio")], path: "Sources/IronPet"),
         .testTarget(name: "IronPetTests", dependencies: ["IronPet"], path: "Tests/IronPetTests", resources: [.copy("Fixtures")]),
     ]
 )
