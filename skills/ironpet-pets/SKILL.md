@@ -9,8 +9,15 @@ A pet is one PNG sprite sheet. ironpet shows every valid sheet in `~/.ironpet/pe
 
 ## Steps
 
-1. Work out a short kebab-case name from the description, without a leading "a", "an" or "the": "a red fox with a scarf" becomes `red-fox-with-a-scarf`. The output is `~/.ironpet/pets/<name>.png`. If that file exists, pick another name. Never overwrite a sheet.
-2. Find the reference generator, `make_pet.swift`. The request gives its path. Otherwise it is `tools/make_pet.swift` in the ironpet repository, or `Contents/Resources/make_pet.swift` inside `IronPet.app`. Copy it to a scratch folder and edit the copy. Never edit the original.
+The user's request is the text after the command, for example `/ironpet-pets red fox with a scarf`.
+
+1. Work out a short kebab-case name from the description, without a leading "a", "an" or "the": "a red fox with a scarf" becomes `red-fox-with-a-scarf`. The output is `~/.ironpet/pets/<name>.png`, with `~` expanded to the user's home folder. If that file exists, or the name is one of the built-in pets (ghost, mochi, hamster, panda, bunny, cat), pick another name. Never overwrite a sheet.
+2. Find the reference generator, `make_pet.swift`. It is in one of these places, and the request may name one:
+   - `/Applications/IronPet.app/Contents/Resources/make_pet.swift`
+   - `tools/make_pet.swift` in the ironpet repository
+   - `Contents/Resources/make_pet.swift` in any other copy of `IronPet.app` (`mdfind "kMDItemFSName == 'make_pet.swift'"` lists them)
+
+   Copy it to a scratch folder and edit the copy. Never edit the original.
 3. In your copy, add a theme for the new pet to the `themes` dictionary. A theme sets the colors (`fur`, `furShade`, `outline`, `cream`, `earPink`, `blush`, `iris`), markings, `tail`, `cloak`, `muzzle` and so on. The `species` value (`wolf`, `hamster`, `panda`, `bunny`, `cat`) picks the ears, tail and face in the `switch theme.species` blocks. Reuse the closest species and recolor it. Add a new `Species` case and a branch in each switch only when no existing one comes close, for example for a fox, long pointed ears and a bushy tail.
 4. Run `swift make_pet.swift <theme> <scratch>/<name>.png`. The first argument is the theme name from the dictionary.
 5. Open the PNG and look at it. Check that the character matches the description in the idle, waving, jumping and running rows, and that no cell is cropped. Fix the theme and run again until it does.

@@ -199,6 +199,12 @@ final class PetLibraryTests: XCTestCase {
         XCTAssertLessThan(prompt.count, 600)
     }
 
+    func testInstalledSkillIsCalledByName() {
+        let prompt = PetPrompt.build(description: "  red fox with a scarf ", library: library, generatorPath: "/x/make_pet.swift",
+                                     skillPath: "/x/SKILL.md", skillInstalled: true)
+        XCTAssertEqual(prompt, "/ironpet-pets red fox with a scarf")
+    }
+
     func testPromptWithoutABundleNamesTheRepoFiles() {
         let prompt = PetPrompt.build(description: "cat", generatorPath: nil, skillPath: nil)
         XCTAssertTrue(prompt.contains("tools/make_pet.swift"))

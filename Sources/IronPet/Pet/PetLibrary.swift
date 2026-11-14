@@ -180,8 +180,14 @@ enum PetPrompt {
         Bundle.main.url(forResource: "SKILL", withExtension: "md", subdirectory: "skills/ironpet-pets")?.path
     }
 
+    /// Whether an agent on this Mac has the ironpet-pets skill, so the request can be the bare slash command.
+    static var isSkillInstalled: Bool {
+        SkillManager.standard.entries().first { $0.skill.name == "ironpet-pets" }?.status.isInstalledAnywhere ?? false
+    }
+
+    /// `skillInstalled`: send `/ironpet-pets <description>`. Otherwise the request names the bundled skill file and the paths.
     static func build(description: String, library: URL = PetLibrary.folder, generatorPath: String? = bundledGenerator,
-                      skillPath: String? = bundledSkill) -> String {
+                      skillPath: String? = bundledSkill, skillInstalled: Bool = false) -> String {
         let sheetExtensions = PetLibrary.sheetExtensions
         let description = description.trimmingCharacters(in: .whitespacesAndNewlines)
         let base = kebab(description)
@@ -194,6 +200,8 @@ enum PetPrompt {
         while taken(name) { name = "\(base)-\(n)"; n += 1 }
         let output = library.appendingPathComponent("\(name).png")
         let shortOutput = PetLibrary.tildePath(output)
+        // Installed, the skill runs from its name alone. The skill finds the output folder and the generator itself.
+        if skillInstalled { return "/ironpet-pets \(description)" }
         let skill = skillPath.map { "the ironpet-pets skill at \($0)" } ?? "the ironpet-pets skill (skills/ironpet-pets/SKILL.md in the ironpet repository)"
         let generator = generatorPath ?? "tools/make_pet.swift in the ironpet repository"
         return """

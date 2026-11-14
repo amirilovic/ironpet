@@ -565,7 +565,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let draft = chat.input
         let staged = chat.attachments
         chat.attachments = []
-        chat.input = PetPrompt.build(description: description)
+        chat.input = PetPrompt.build(description: description, skillInstalled: PetPrompt.isSkillInstalled)
         chat.send()
         chat.attachments = staged
         if chat.input.isEmpty {

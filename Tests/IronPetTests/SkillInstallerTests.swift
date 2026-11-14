@@ -151,7 +151,8 @@ final class SkillInstallerTests: XCTestCase {
     }
 
     func testPromptOnlyWhenSomethingIsMissingAndNotAlreadyDeclined() throws {
-        let manager = SkillManager(home: home)
+        // One skill, so the singular wording is under test whatever else the app bundles.
+        let manager = SkillManager(home: home, skills: [BundledSkills.all[0]])
         XCTAssertTrue(SkillPrompt.pending(manager.entries(), dismissed: []).isEmpty, "no agent on this Mac, nothing to offer")
         try mkdir(".claude")
         let missing = SkillPrompt.pending(manager.entries(), dismissed: [])
