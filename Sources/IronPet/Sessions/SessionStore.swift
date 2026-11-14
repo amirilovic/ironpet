@@ -5,7 +5,6 @@ struct HookEvent {
     let name: String
     let payload: [String: Any]
     let origin: SessionOrigin
-    let runID: String?
 }
 
 /// Folds hook events into per-session status and a single pet-level summary.
@@ -45,7 +44,11 @@ final class SessionStore: ObservableObject {
 
         switch event.source {
         case .cursor: applyCursor(event, to: &session)
-        case .claude: applyClaude(event, to: &session)
+        // Codex sends Claude Code's event names and fields.
+        case .claude, .codex: applyClaude(event, to: &session)
+        case .gemini: applyGemini(event, to: &session)
+        case .copilot: applyCopilot(event, to: &session)
+        case .pi: applyPi(event, to: &session)
         }
 
         if session.ended, session.status == .idle {
@@ -88,6 +91,7 @@ final class SessionStore: ObservableObject {
 
     private static func sessionID(_ event: HookEvent) -> String? {
         (event.payload["conversation_id"] as? String) ?? (event.payload["session_id"] as? String)
+            ?? (event.payload["sessionId"] as? String)
     }
 
     private func applyCursor(_ event: HookEvent, to session: inout AgentSession) {
@@ -171,8 +175,101 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    /// Gemini CLI: BeforeAgent and AfterAgent bracket a turn; tools report as BeforeTool and AfterTool.
+    private func applyGemini(_ event: HookEvent, to session: inout AgentSession) {
+        let p = event.payload
+        if let cwd = p["cwd"] as? String { session.origin.workspace = cwd }
+        switch event.name {
+        case "BeforeAgent":
+            session.status = .running
+            session.prompt = (p["prompt"] as? String).map(Self.snippet) ?? session.prompt
+            session.detail = nil
+            session.startTurn()
+        case "BeforeTool", "AfterTool":
+            if session.status != .needsInput { session.status = .running }
+            if let tool = p["tool_name"] as? String {
+                session.detail = tool
+                if event.name == "AfterTool", Self.geminiEditTools.contains(tool) { session.noteEdit(Self.path(in: p["tool_input"])) }
+            }
+        case "Notification":
+            session.status = .needsInput
+            session.detail = p["message"] as? String ?? session.detail
+        case "AfterAgent":
+            session.status = .done
+            session.lastResponse = (p["prompt_response"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? session.lastResponse
+        case "SessionEnd":
+            session.ended = true
+            if session.status == .running || session.status == .needsInput { session.status = .idle }
+        default:
+            break
+        }
+    }
+
+    /// GitHub Copilot CLI (camelCase payloads: `sessionId`, `toolName`, `prompt`).
+    private func applyCopilot(_ event: HookEvent, to session: inout AgentSession) {
+        let p = event.payload
+        if let cwd = p["cwd"] as? String { session.origin.workspace = cwd }
+        switch event.name {
+        case "userPromptSubmitted":
+            session.status = .running
+            session.prompt = (p["prompt"] as? String).map(Self.snippet) ?? session.prompt
+            session.detail = nil
+            session.startTurn()
+        case "preToolUse", "postToolUse":
+            if session.status != .needsInput { session.status = .running }
+            if let tool = p["toolName"] as? String {
+                session.detail = tool
+                if event.name == "postToolUse", Self.copilotEditTools.contains(tool) {
+                    session.noteEdit(Self.path(in: p["toolArgs"] ?? (p["toolArgs"] as? String).flatMap(Self.parseJSON)))
+                }
+            }
+        case "permissionRequest":
+            session.status = .needsInput
+            if let tool = p["toolName"] as? String { session.detail = "Wants to use \(tool)" }
+        case "errorOccurred":
+            session.status = .failed
+            session.detail = ((p["error"] as? [String: Any])?["message"] as? String) ?? session.detail
+        case "agentStop":
+            if session.status != .failed { session.status = .done }
+        case "sessionEnd":
+            session.ended = true
+            if session.status == .running || session.status == .needsInput { session.status = .idle }
+        default:
+            break
+        }
+    }
+
+    /// Pi: events come from ironpet's own extension (see `HookInstaller.piExtension`), which names them itself.
+    private func applyPi(_ event: HookEvent, to session: inout AgentSession) {
+        let p = event.payload
+        if let cwd = p["cwd"] as? String { session.origin.workspace = cwd }
+        switch event.name {
+        case "agent_start":
+            session.status = .running
+            session.prompt = (p["prompt"] as? String).map(Self.snippet) ?? session.prompt
+            session.detail = nil
+            session.startTurn()
+        case "tool":
+            if session.status != .needsInput { session.status = .running }
+            session.detail = p["tool_name"] as? String ?? session.detail
+        case "agent_settled":
+            session.status = .done
+        case "session_shutdown":
+            session.ended = true
+            if session.status == .running || session.status == .needsInput { session.status = .idle }
+        default:
+            break
+        }
+    }
+
+    private static func parseJSON(_ text: String) -> Any? {
+        try? JSONSerialization.jsonObject(with: Data(text.utf8))
+    }
+
+    static let geminiEditTools: Set<String> = ["write_file", "replace"]
+    static let copilotEditTools: Set<String> = ["edit", "create", "write", "str_replace_editor"]
     static let cursorEditTools: Set<String> = ["Write", "Edit", "StrReplace", "MultiEdit", "Delete", "EditNotebook"]
-    static let claudeEditTools: Set<String> = ["Edit", "MultiEdit", "Write", "NotebookEdit"]
+    static let claudeEditTools: Set<String> = ["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"]
 
     private static func path(in input: Any?) -> String? {
         guard let input = input as? [String: Any] else { return nil }

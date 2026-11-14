@@ -10,8 +10,10 @@ final class TestControl {
     struct Actions {
         let showChat: () -> Void
         /// The chat panel's frame in top-left screen coordinates, for `screencapture -R`.
+        let chatWindowID: () -> Int
         let chatFrame: () -> CGRect
         let openSession: (String) -> Void
+        let showSettings: (String?) -> Int
         let capture: (Bool) -> Void
         /// The handler a notification's Allow / Deny button calls.
         let notificationAction: (UUID, Bool) -> Void
@@ -47,7 +49,8 @@ final class TestControl {
         case ("POST", "/test/chat"):
             actions.showChat()
             if body["newChat"] as? Bool == true { chat.newChat() }
-            if let raw = body["backend"] as? String, let kind = BackendKind(rawValue: raw) { chat.setBackend(kind) }
+            if let raw = (body["agent"] ?? body["backend"]) as? String, let agent = AgentCatalog.agent(id: raw) { chat.setAgent(agent) }
+            if let raw = body["model"] as? String { chat.model = raw.isEmpty ? nil : raw }
             if body["noProject"] as? Bool == true { chat.useNoProject() }
             if let path = body["workspace"] as? String { chat.use(URL(fileURLWithPath: path)) }
             if let auto = body["auto"] as? Bool { chat.autoMode = auto }
@@ -92,8 +95,20 @@ final class TestControl {
             chat.voice.start(.file(URL(fileURLWithPath: path)))
         case ("POST", "/test/voice/stop"):
             chat.voice.stop()
+        case ("POST", "/test/show-settings"):
+            return Self.encode(["windowId": actions.showSettings(body["snapshot"] as? String)])
         case ("POST", "/test/stop"):
             chat.stop()
+        case ("POST", "/test/open-thread"):
+            guard let thread = chat.history.first(where: { $0.id == body["id"] as? String }) ?? (body["id"] == nil ? chat.history.first : nil) else {
+                return Self.encode(["ok": false, "error": "no such thread"])
+            }
+            actions.showChat()
+            chat.open(thread)
+        case ("POST", "/test/install-runtime"):
+            chat.installRuntime()
+        case ("POST", "/test/retry"):
+            chat.retryAfterFix()
         case ("POST", "/test/voice/cancel"):
             chat.voice.cancel()
         case ("POST", "/test/voice/retry"):
@@ -143,9 +158,21 @@ final class TestControl {
             "visible": chat.isVisible,
             "workspace": chat.workspace?.path ?? "",
             "needsWorkspace": chat.needsWorkspace,
-            "backend": chat.backend.rawValue,
+            "backend": chat.agent.id,
+            "agent": chat.agent.id,
+            "agents": chat.agents.map(\.id),
+            "models": chat.models.map { ["id": $0.id, "name": $0.name] },
+            "model": chat.model ?? "",
+            "sessionId": chat.sessionID ?? "",
+            "activeModel": chat.activeModel ?? "",
+            "installingRuntime": chat.installingRuntime,
+            "history": chat.history.map { ["id": $0.id, "title": $0.title, "agent": $0.agent] },
+            "pid": chat.processID.map { Int($0) } ?? 0,
+            "runtimeOffer": chat.runtimeOffer ?? "",
+            "signIn": chat.signInOptions.map(\.name),
             "attachments": chat.attachments.map(\.path),
             "input": chat.input,
+            "windowId": actions.chatWindowID(),
             "frame": { let f = actions.chatFrame(); return [f.minX, f.minY, f.width, f.height] }(),
             "voice": chat.voice.phase.rawValue,
             "voiceRetry": chat.voiceRetryItem != nil,

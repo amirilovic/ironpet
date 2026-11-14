@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-/// One quick-chat thread with the pet, backed by headless agent CLI turns (cursor-agent or Claude Code).
+/// One quick-chat thread with the pet, driven over ACP by whichever coding agent the user picked.
 @MainActor
 final class ChatSession: ObservableObject {
     enum State { case idle, running, done, failed }
@@ -23,8 +23,7 @@ final class ChatSession: ObservableObject {
         let id = UUID()
         let title: String
         let detail: String
-        /// Cursor checks some tool calls twice (e.g. one file write fires preToolUse twice); identical
-        /// requests share one card and one decision.
+        /// Identical requests share one card and one decision.
         var responders: [(ApprovalDecision) -> Void]
 
         var key: String { title + "\u{0}" + detail }
@@ -58,15 +57,21 @@ final class ChatSession: ObservableObject {
     @Published private(set) var activity: String?
     @Published private(set) var runStartedAt: Date?
     @Published private(set) var lastRunDuration: TimeInterval?
-    @Published private var cursorModels: [ChatModel] = ModelCatalog.cached
-    @Published private(set) var backend: BackendKind =
-        BackendKind(rawValue: UserDefaults.standard.string(forKey: "chatBackend") ?? "") ?? .cursor
-    /// nil uses the CLI's default model. Stored per backend.
+    /// Models the agent offered in its last session. Empty hides the picker.
+    @Published private(set) var models: [ChatModel] = []
+    @Published private(set) var agent: ACPAgent =
+        AgentCatalog.agent(id: UserDefaults.standard.string(forKey: "chatAgent")) ?? AgentCatalog.agent(id: "cursor")!
+    /// Installed agents that answer `initialize`. Starts as just the current one until the check finishes.
+    @Published private(set) var agents: [ACPAgent] = []
+    /// nil uses the agent's default model. Stored per agent.
     @Published var model: String? {
-        didSet { UserDefaults.standard.set(model, forKey: "chatModel.\(backend.rawValue)") }
+        didSet { UserDefaults.standard.set(model, forKey: "chatModel.\(agent.id)") }
     }
-
-    var models: [ChatModel] { backend == .cursor ? cursorModels : ClaudeCodeBackend.models }
+    /// Set when an adapter has no runtime: the chat offers a one-time Bun download.
+    @Published private(set) var runtimeOffer: String?
+    @Published private(set) var installingRuntime = false
+    /// Set when the agent asks the user to sign in.
+    @Published private(set) var signInOptions: [AuthMethod] = []
 
     var modelName: String {
         guard let model else { return "Default" }
@@ -89,7 +94,10 @@ final class ChatSession: ObservableObject {
     private static let draftKey = "chatDraft"
     private static let attachmentsKey = "chatAttachments"
     private static let autoKey = "chatAutoMode"
-    private var runner: CLIBackend?
+    private var acp: ACPBackend?
+    /// Ignores events from a turn the user stopped.
+    private var turnID: UUID?
+    private var lastTurn: ACPTurn?
     private var toolItems: [String: UUID] = [:]
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
     private var decided: [String: Bool] = [:]
@@ -99,15 +107,6 @@ final class ChatSession: ObservableObject {
     private var voiceChanges: AnyCancellable?
     /// The transcription error that offers Retry, so only that card shows the button.
     @Published private(set) var voiceRetryItem: UUID?
-
-    /// Cursor preToolUse tools allowed without asking. Shell is gated on beforeShellExecution, MCP on beforeMCPExecution.
-    static let cursorUngated: Set<String> = ["Read", "Grep", "Glob", "LS", "SemanticSearch", "ReadLints", "WebSearch",
-                                             "WebFetch", "TodoWrite", "Shell"]
-    /// Claude Code tools that change files; Bash is handled as a shell command. Everything else is allowed.
-    static let claudeEditTools: Set<String> = ["Edit", "MultiEdit", "Write", "NotebookEdit"]
-    static let destructive = try! NSRegularExpression(pattern: #"""
-        \brm\s+-[a-zA-Z]*(rf|fr)|\brm\s+-[a-zA-Z]*r[a-zA-Z]*\s+-[a-zA-Z]*f|git\s+reset\s+--hard|git\s+push\b.*(--force|\s-f\b)|git\s+clean\s+-[a-zA-Z]*f|\bdrop\s+(table|database|schema)\b|\btruncate\s+table\b|\bmkfs\b|\bdd\s+if=
-        """#, options: [.caseInsensitive])
 
     static let scratchWorkspace = Paths.root.appendingPathComponent("scratch")
 
@@ -120,9 +119,10 @@ final class ChatSession: ObservableObject {
             .map(URL.init(fileURLWithPath:))
             .filter { FileManager.default.fileExists(atPath: $0.path) && $0 != Self.scratchWorkspace }
         workspace = recents.first
-        model = UserDefaults.standard.string(forKey: "chatModel.\(backend.rawValue)")
-            ?? (backend == .cursor ? UserDefaults.standard.string(forKey: "chatModel") : nil)
-        Task { cursorModels = await ModelCatalog.refresh() }
+        model = UserDefaults.standard.string(forKey: "chatModel.\(agent.id)")
+        models = Self.cachedModels(for: agent)
+        agents = [agent]
+        if restore { Task { await refreshAgents() } }
         if restore { restoreLastChat() }
         // Phase changes are rare (start, stop, result), so forwarding them re-renders the composer only then.
         voiceChanges = voice.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
@@ -218,12 +218,32 @@ final class ChatSession: ObservableObject {
         return workspace == Self.scratchWorkspace ? "No project" : workspace.lastPathComponent
     }
 
-    func setBackend(_ kind: BackendKind) {
-        guard kind != backend, !isRunning else { return }
-        backend = kind
-        UserDefaults.standard.set(kind.rawValue, forKey: "chatBackend")
-        model = UserDefaults.standard.string(forKey: "chatModel.\(kind.rawValue)")
+    func setAgent(_ next: ACPAgent) {
+        guard next != agent, !isRunning else { return }
+        select(next)
         if !items.isEmpty { newChat() }
+    }
+
+    private func select(_ next: ACPAgent) {
+        agent = next
+        UserDefaults.standard.set(next.id, forKey: "chatAgent")
+        model = UserDefaults.standard.string(forKey: "chatModel.\(next.id)")
+        models = Self.cachedModels(for: next)
+        if !agents.contains(next) { agents.append(next) }
+    }
+
+    /// Lists the installed agents that speak ACP. The first launch switches to an installed one if the saved choice is missing.
+    func refreshAgents() async {
+        let found = await ACPProbe.installed()
+        guard !found.isEmpty else { return }
+        agents = found
+        if !found.contains(agent), items.isEmpty, !isRunning, let first = found.first { select(first) }
+    }
+
+    private static func cachedModels(for agent: ACPAgent) -> [ChatModel] {
+        (UserDefaults.standard.array(forKey: "cachedModels.\(agent.id)") as? [[String]] ?? []).compactMap {
+            $0.count == 2 ? ChatModel(id: $0[0], name: $0[1]) : nil
+        }
     }
 
     /// Sample conversations for `--render-previews`.
@@ -296,6 +316,7 @@ final class ChatSession: ObservableObject {
 
     func newChat() {
         stop()
+        shutdownAgent()
         items = []
         threadID = nil
         autoMode = false
@@ -305,16 +326,12 @@ final class ChatSession: ObservableObject {
 
     func open(_ thread: ChatThread) {
         stop()
+        shutdownAgent()
         apply(thread)
     }
 
     private func apply(_ thread: ChatThread) {
-        let kind = thread.backend ?? .cursor
-        if kind != backend {
-            backend = kind
-            UserDefaults.standard.set(kind.rawValue, forKey: "chatBackend")
-            model = UserDefaults.standard.string(forKey: "chatModel.\(kind.rawValue)")
-        }
+        if let saved = AgentCatalog.agent(id: thread.agent), saved != agent { select(saved) }
         items = thread.items
         threadID = thread.id
         autoMode = false
@@ -332,7 +349,7 @@ final class ChatSession: ObservableObject {
         }.first ?? "Chat"
         let title = firstPrompt.count > 60 ? String(firstPrompt.prefix(57)) + "…" : firstPrompt
         ThreadStore.save(ChatThread(id: threadID, title: title, workspace: workspace.path, updatedAt: Date(),
-                                    items: items, backend: backend))
+                                    items: items, agent: agent.id))
         history = ThreadStore.recent()
     }
 
@@ -344,58 +361,56 @@ final class ChatSession: ObservableObject {
             needsWorkspace = true
             return
         }
-        // Approvals (and the destructive-command guard in Auto mode) run through the agent's hooks; without them the
-        // agent could edit and run things unchecked, so don't start.
-        let hookAgent: HookInstaller.Agent = backend == .cursor ? .cursor : .claude
-        guard HookInstaller().isInstalled(hookAgent) else {
-            items.append(Item(kind: .error(
-                "\(ConfigStore.shared.config.pet.name) needs the \(hookAgent.displayName) hooks to ask before editing files or running commands. Turn on Watch \(hookAgent.displayName) in Settings (⌘,), then send again.")))
-            state = .failed
-            return
-        }
         if prompt.isEmpty { prompt = "Help me with what's on my screen." }
         input = ""
         let shots = attachments
         attachments = []
         items += shots.map { Item(kind: .screenshot($0.path)) }
         items.append(Item(kind: .user(prompt)))
+        let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
+        run(ACPTurn(prompt: prompt, preamble: preamble, workspace: workspace, resume: threadID, model: model,
+                    images: shots.filter(ImageIntake.isImageFile), files: shots.filter { !ImageIntake.isImageFile($0) }))
+    }
+
+    private func run(_ turn: ACPTurn) {
+        lastTurn = turn
+        runtimeOffer = nil
+        signInOptions = []
         state = .running
         activity = "Thinking"
         runStartedAt = Date()
         lastRunDuration = nil
         decided = [:]
-        let runner = backend.make()
-        self.runner = runner
-        var request = prompt
-        let images = shots.filter(ImageIntake.isImageFile)
-        let files = shots.filter { !ImageIntake.isImageFile($0) }
-        var context: [String] = []
-        if !images.isEmpty {
-            context.append("Screenshot\(images.count > 1 ? "s" : "") of my screen (open and look at \(images.count > 1 ? "them" : "it") first): "
-                + images.map(\.path).joined(separator: ", "))
-        }
-        if !files.isEmpty {
-            context.append("Attached file\(files.count > 1 ? "s" : "") (read \(files.count > 1 ? "them" : "it") first): "
-                + files.map(\.path).joined(separator: ", "))
-        }
-        if !context.isEmpty { request = context.joined(separator: "\n") + "\n\n" + prompt }
-        let fullPrompt = threadID == nil ? Memory.preamble(for: workspace) + "\n" + request : request
-        do {
-            try runner.start(RunRequest(prompt: fullPrompt, workspace: workspace, resume: threadID, auto: autoMode, model: model)) {
-                [weak self] event in self?.handle(event, from: runner)
-            }
-        } catch {
-            self.runner = nil
-            items.append(Item(kind: .error(error.localizedDescription)))
-            activity = nil
-            runStartedAt = nil
-            state = .failed
+        if agent.id == "cursor", Config.load().config.integrations.shareMCPSignIns { MCPAuthSharing.prepare(workspace: turn.workspace) }
+        let backend = acp?.agent == agent ? acp! : makeBackend()
+        let id = UUID()
+        turnID = id
+        Task { [weak self] in
+            await backend.runTurn(turn) { event in self?.handle(event, turn: id) }
         }
     }
 
+    private func makeBackend() -> ACPBackend {
+        acp?.shutdown()
+        let backend = ACPBackend(agent: agent)
+        backend.onPermission = { [weak self] call, respond in self?.handlePermission(call, respond: respond) }
+        acp = backend
+        return backend
+    }
+
+    private func shutdownAgent() {
+        acp?.shutdown()
+        acp = nil
+    }
+
+    /// For the test endpoints: which process and session the chat is using.
+    var processID: Int32? { acp?.processID }
+    var sessionID: String? { acp?.sessionID ?? threadID }
+    var activeModel: String? { acp?.activeModel }
+
     func stop() {
-        runner?.stop()
-        runner = nil
+        turnID = nil
+        acp?.cancel()
         for approval in approvals {
             approval.respond(.deny("Stopped in ironpet"))
             onApprovalResolved?(approval.id)
@@ -404,6 +419,12 @@ final class ChatSession: ObservableObject {
         activity = nil
         runStartedAt = nil
         if state == .running { state = .idle }
+    }
+
+    /// Stops the agent process for good, e.g. when the app quits.
+    func shutdown() {
+        stop()
+        shutdownAgent()
     }
 
     /// Text delivered by the Wispr Flow bridge. Skipped if Wispr managed to type it into the field itself.
@@ -448,69 +469,60 @@ final class ChatSession: ObservableObject {
         onApprovalResolved?(id)
     }
 
-    func handleApproval(_ request: ApprovalRequest, respond: @escaping (ApprovalDecision) -> Void) {
-        guard let runner, request.runID == runner.runID else { return respond(.deny("Unknown ironpet run")) }
-        let input = request.payload["tool_input"] as? [String: Any] ?? [:]
-        let tool = request.payload["tool_name"] as? String ?? "a tool"
-
-        switch request.event {
-        case "beforeShellExecution":
-            gateShell(request.payload["command"] as? String ?? "", respond: respond)
-        case "beforeMCPExecution":
-            gateMCP(tool: tool, input: request.payload["tool_input"], server: (request.payload["url"] ?? request.payload["command"]) as? String,
-                    respond: respond)
-        case "PreToolUse" where tool.hasPrefix("mcp__"):
-            let parts = tool.components(separatedBy: "__")
-            gateMCP(tool: parts.last ?? tool, input: request.payload["tool_input"], server: parts.count > 2 ? parts[1] : nil,
-                    respond: respond)
-        case "PreToolUse" where tool == "Bash":
-            gateShell(input["command"] as? String ?? "", respond: respond)
-        case "PreToolUse" where !Self.claudeEditTools.contains(tool):
+    /// Answers the agent's `session/request_permission`: either straight away or through an approval card.
+    func handlePermission(_ call: ACPToolCall, respond: @escaping (ApprovalDecision) -> Void) {
+        switch ApprovalRules.policy(for: call, auto: autoMode) {
+        case .allow:
             respond(.allow)
-        case "preToolUse" where Self.cursorUngated.contains(tool) || tool.hasPrefix("MCP:"):
-            // Cursor reports MCP calls as "MCP:<tool>" here and again on beforeMCPExecution, which gates them.
-            respond(.allow)
-        default:
-            let path = (input["file_path"] ?? input["path"] ?? input["target_file"] ?? input["notebook_path"]) as? String
-            if autoMode || path.map(Memory.contains) == true { return respond(.allow) }
-            let preview = ((input["content"] ?? input["new_string"] ?? input["new_source"]) as? String)?
-                .split(separator: "\n", omittingEmptySubsequences: false).prefix(8).joined(separator: "\n")
-            let title = path.map { "\(tool) \(URL(fileURLWithPath: $0).lastPathComponent)?" } ?? "Use \(tool)?"
-            ask(title: title, detail: [path, preview].compactMap { $0 }.joined(separator: "\n\n"), respond: respond)
+        case .ask(let title, let detail):
+            ask(title: title, detail: detail, respond: respond)
         }
     }
 
-    /// MCP tool name prefixes treated as read-only (e.g. Sentry `search_issues`, Langfuse `getHealth`).
-    static let readOnlyMCPVerbs = ["get", "list", "search", "find", "fetch", "read", "describe", "whoami", "lookup", "show", "count"]
-
-    static func isReadOnlyMCP(_ tool: String) -> Bool {
-        let name = tool.lowercased()
-        return readOnlyMCPVerbs.contains { name == $0 || name.hasPrefix($0 + "_") || name.hasPrefix($0) && tool.dropFirst($0.count).first?.isUppercase == true }
+    func retryAfterFix() {
+        guard let turn = lastTurn, !isRunning else { return }
+        items.removeAll { if case .error = $0.kind { return true } else { return false } }
+        run(turn)
     }
 
-    /// MCP servers can change real systems (databases, issue trackers), so anything not read-only asks first.
-    private func gateMCP(tool: String, input: Any?, server: String?, respond: @escaping (ApprovalDecision) -> Void) {
-        if Self.isReadOnlyMCP(tool) { return respond(.allow) }
-        let arguments: String
-        if let text = input as? String {
-            arguments = text
-        } else if let object = input, JSONSerialization.isValidJSONObject(object),
-                  let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) {
-            arguments = String(decoding: data, as: UTF8.self)
-        } else {
-            arguments = ""
+    /// The user allowed the one-time Bun download.
+    func installRuntime() {
+        guard runtimeOffer != nil, !installingRuntime else { return }
+        installingRuntime = true
+        Task {
+            defer { installingRuntime = false }
+            do {
+                try await BunRuntime.install()
+                runtimeOffer = nil
+                retryAfterFix()
+            } catch {
+                runtimeOffer = nil
+                items.append(Item(kind: .error(error.localizedDescription)))
+                state = .failed
+            }
         }
-        let dangerous = Self.destructive.firstMatch(in: arguments, range: NSRange(arguments.startIndex..., in: arguments)) != nil
-        if autoMode, !dangerous { return respond(.allow) }
-        let host = server.map { URL(string: $0)?.host ?? $0 }
-        let title = (dangerous ? "Run a destructive tool: " : "Use ") + tool + (host.map { " (\($0))" } ?? "") + "?"
-        ask(title: title, detail: String(arguments.prefix(600)), respond: respond)
     }
 
-    private func gateShell(_ command: String, respond: @escaping (ApprovalDecision) -> Void) {
-        let dangerous = Self.destructive.firstMatch(in: command, range: NSRange(command.startIndex..., in: command)) != nil
-        if autoMode, !dangerous { return respond(.allow) }
-        ask(title: dangerous ? "Run a destructive command?" : "Run this command?", detail: command, respond: respond)
+    func declineRuntime() {
+        runtimeOffer = nil
+        items.append(Item(kind: .error("\(agent.name) needs Node 22 or newer, or the Bun download. Install Node, then send again.")))
+        state = .failed
+    }
+
+    func signIn(_ method: AuthMethod) {
+        if method.type == "terminal" {
+            TerminalLauncher.open(agent: agent, method: method)
+            return
+        }
+        Task {
+            do {
+                try await acp?.authenticate(method)
+                signInOptions = []
+                retryAfterFix()
+            } catch {
+                items.append(Item(kind: .error("Sign-in failed: \(error.localizedDescription)")))
+            }
+        }
     }
 
     private static func presentTense(_ summary: String) -> String {
@@ -532,13 +544,32 @@ final class ChatSession: ObservableObject {
         if !isVisible { onApprovalNeeded?(approval) }
     }
 
-    private func handle(_ event: AgentEvent, from source: CLIBackend) {
-        guard source === runner else { return }
+    private func handle(_ event: AgentEvent, turn: UUID) {
+        guard turn == turnID else { return }
         switch event {
         case .session(let id):
             threadID = id
             // Saved now, not only when the turn ends, so quitting mid-run keeps the question.
             saveThread()
+        case .models(_, let list):
+            models = list
+            UserDefaults.standard.set(list.map { [$0.id, $0.name] }, forKey: "cachedModels.\(agent.id)")
+            if let model, !list.isEmpty, !list.contains(where: { $0.id == model }) { self.model = nil }
+        case .toolUpdated(let id, let summary):
+            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
+               case .tool(_, let ok) = items[index].kind {
+                items[index].kind = .tool(summary, ok: ok)
+            }
+        case .needsSignIn(let methods):
+            endTurn()
+            signInOptions = methods
+            items.append(Item(kind: .error("\(agent.name) needs you to sign in.")))
+            state = .failed
+        case .needsRuntime:
+            endTurn()
+            // Not a failure: the chat waits for the user to allow the download.
+            runtimeOffer = agent.name
+            state = .idle
         case .assistant(let text):
             activity = "Writing"
             if case .assistant(let previous) = items.last?.kind {
@@ -558,15 +589,7 @@ final class ChatSession: ObservableObject {
                 items[index].kind = .tool(summary, ok: ok)
             }
         case .finished(let error):
-            runner = nil
-            activity = nil
-            lastRunDuration = runStartedAt.map { Date().timeIntervalSince($0) }
-            runStartedAt = nil
-            for approval in approvals {
-                approval.respond(.deny("The run ended"))
-                onApprovalResolved?(approval.id)
-            }
-            approvals = []
+            endTurn()
             if let error { items.append(Item(kind: .error(error))) }
             state = error == nil ? .done : .failed
             saveThread()
@@ -575,5 +598,17 @@ final class ChatSession: ObservableObject {
                 onAttention?(error == nil ? "\(name) finished your task" : "\(name)'s task failed")
             }
         }
+    }
+
+    private func endTurn() {
+        turnID = nil
+        activity = nil
+        lastRunDuration = runStartedAt.map { Date().timeIntervalSince($0) }
+        runStartedAt = nil
+        for approval in approvals {
+            approval.respond(.deny("The run ended"))
+            onApprovalResolved?(approval.id)
+        }
+        approvals = []
     }
 }

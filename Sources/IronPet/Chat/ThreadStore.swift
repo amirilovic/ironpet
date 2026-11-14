@@ -1,14 +1,15 @@
 import Foundation
 
-/// A saved quick-chat thread. `id` is the cursor-agent chat id, so a thread resumes with `--resume`.
+/// A saved quick-chat thread. `id` is the agent's ACP session id and `workspace` its cwd, so a thread reopens with
+/// `session/load`. Threads saved before ACP have no `agent` and are skipped.
 struct ChatThread: Codable, Identifiable {
     let id: String
     var title: String
     var workspace: String
     var updatedAt: Date
     var items: [ChatSession.Item]
-    /// nil for threads saved before Claude Code support (they are cursor-agent threads).
-    var backend: BackendKind?
+    /// The catalog id of the agent that owns the session.
+    var agent: String
 }
 
 extension ChatThread {

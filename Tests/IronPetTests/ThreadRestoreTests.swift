@@ -4,7 +4,7 @@ import XCTest
 final class ThreadRestoreTests: XCTestCase {
     private func thread(_ kinds: [ChatSession.Item.Kind]) -> ChatThread {
         ChatThread(id: "t1", title: "Chat", workspace: "/tmp", updatedAt: Date(),
-                   items: kinds.map { ChatSession.Item(kind: $0) }, backend: .claude)
+                   items: kinds.map { ChatSession.Item(kind: $0) }, agent: "claude")
     }
 
     func testRunningStepsShowAsFailedAfterQuit() {
@@ -20,7 +20,7 @@ final class ThreadRestoreTests: XCTestCase {
         let original = thread([.user("hi"), .assistant("hello"), .tool("Edited b.ts", ok: false)])
         let restored = original.restoredAfterQuit()
         XCTAssertEqual(restored.id, original.id)
-        XCTAssertEqual(restored.backend, .claude)
+        XCTAssertEqual(restored.agent, "claude")
         XCTAssertEqual(restored.items.map(\.id), original.items.map(\.id))
         guard case .assistant(let text) = restored.items[1].kind else { return XCTFail("assistant item expected") }
         XCTAssertEqual(text, "hello")

@@ -2,7 +2,11 @@ import Foundation
 
 enum Paths {
     static let home = FileManager.default.homeDirectoryForCurrentUser
-    static let root = home.appendingPathComponent(".ironpet")
+    /// `~/.ironpet`. `IRONPET_ROOT` moves it so a second copy of the app, such as an end-to-end test run, keeps its own port,
+    /// token, settings and threads.
+    static let root = ProcessInfo.processInfo.environment["IRONPET_ROOT"].map { URL(fileURLWithPath: $0) }
+        ?? home.appendingPathComponent(".ironpet")
+    static let isIsolated = ProcessInfo.processInfo.environment["IRONPET_ROOT"] != nil
     static let bin = root.appendingPathComponent("bin")
     static let hookScript = bin.appendingPathComponent("ironpet-hook")
     static let portFile = root.appendingPathComponent("port")

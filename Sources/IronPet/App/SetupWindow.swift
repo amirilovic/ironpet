@@ -72,7 +72,7 @@ private struct SetupView: View {
     @State private var githubAlerts = false
 
     private let present: Set<HookInstaller.Agent>
-    private let hasChatCLI = CursorAgentBackend.executable() != nil || ClaudeCodeBackend.executable() != nil
+    private let hasChatCLI = !AgentCatalog.present().isEmpty
     private let hasGitHubCLI = GitHubWatcher.ghExecutable != nil
 
     init(installer: HookInstaller, finish: @escaping (SetupWindow.Choices?) -> Void) {
@@ -101,11 +101,12 @@ private struct SetupView: View {
                     TextField("Name", text: $name)
                 }
                 Section {
-                    ForEach(HookInstaller.Agent.allCases, id: \.self) { agent in
+                    ForEach(HookInstaller.Agent.allCases.filter { present.contains($0) }, id: \.self) { agent in
                         Toggle(isOn: binding(agent)) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(agent.displayName + (present.contains(agent) ? "" : " (not found)"))
-                                Text("Adds hooks to \(tilde(agent.configFile)) (backed up first). Also needed to chat with me through \(agent.displayName), so I can ask before editing or running anything.")
+                                Text(agent.displayName)
+                                Text("Adds hooks to \(tilde(agent.configFile)) (backed up first) so I see sessions you start yourself. Chatting with me does not need this."
+                                     + (agent.watchNote.map { " " + $0 } ?? ""))
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -113,8 +114,11 @@ private struct SetupView: View {
                 } header: {
                     Text("Watch my agents")
                 } footer: {
+                    if present.isEmpty {
+                        Text("No supported agent found on this Mac yet.").font(.caption).foregroundStyle(.secondary)
+                    }
                     if !hasChatCLI {
-                        Label("To chat, install cursor-agent or Claude Code (claude) and sign in.", systemImage: "exclamationmark.triangle.fill")
+                        Label("To chat, install an agent that speaks ACP (for example cursor-agent, claude, codex or gemini) and sign in.", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption).foregroundStyle(.orange)
                     }
                 }

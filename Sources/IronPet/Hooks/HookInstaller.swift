@@ -1,37 +1,85 @@
 import Foundation
 
-/// Merges ironpet's status hooks into the global Cursor and Claude Code configs,
-/// leaving every other tool's hooks untouched.
+/// Adds ironpet's status hooks to the global config of each agent the user chose to watch, leaving every other
+/// tool's hooks untouched. The agents differ in file and format, so each `Agent` names its own way in; they all run
+/// the same `ironpet-hook <source> <event>` script, and `SessionStore` turns the events into session status.
 struct HookInstaller {
-    static let cursorEvents = ["sessionStart", "beforeSubmitPrompt", "postToolUse", "afterAgentResponse", "stop", "sessionEnd",
-                               "beforeShellExecution", "preToolUse", "beforeMCPExecution"]
-    static let cursorGateEvents: Set<String> = ["beforeShellExecution", "preToolUse", "beforeMCPExecution"]
-    /// Approval gates wait for the user; hooks need a finite timeout. Cursor silently skips a hook whose
-    /// timeout overflows (somewhere above ~24.8 days, i.e. Int32 milliseconds), which fails open, so stay below it.
-    /// Gates return immediately for agents the pet did not start.
-    static let gateTimeout = 2_000_000
+    static let cursorEvents = ["sessionStart", "beforeSubmitPrompt", "postToolUse", "afterAgentResponse", "stop", "sessionEnd"]
+    /// Events that older versions installed for chat approvals. Installing removes them.
+    static let retiredCursorEvents = ["beforeShellExecution", "preToolUse", "beforeMCPExecution"]
     static let claudeEvents = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest",
                                "Notification", "Stop", "StopFailure", "SessionEnd"]
     static let claudeToolEvents: Set<String> = ["PreToolUse", "PostToolUse"]
+    /// Codex reads `~/.codex/hooks.json` in Claude's layout. It only runs hooks the user has trusted in its `/hooks` screen.
+    static let codexEvents = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "SessionEnd"]
+    static let geminiEvents = ["SessionStart", "BeforeAgent", "BeforeTool", "AfterTool", "Notification", "AfterAgent", "SessionEnd"]
+    static let copilotEvents = ["sessionStart", "userPromptSubmitted", "preToolUse", "postToolUse", "permissionRequest",
+                                "agentStop", "errorOccurred", "sessionEnd"]
+    /// First line of the Pi extension, so uninstall only removes a file ironpet wrote.
+    static let piMarker = "// ironpet status hook (managed by ironpet; removed when you turn off Watch Pi)"
 
     enum Agent: String, CaseIterable {
-        case cursor, claude
+        case cursor, claude, codex, gemini, copilot, pi
 
-        var displayName: String { self == .cursor ? "Cursor" : "Claude Code" }
+        var displayName: String {
+            switch self {
+            case .cursor: return "Cursor"
+            case .claude: return "Claude Code"
+            case .codex: return "Codex"
+            case .gemini: return "Gemini CLI"
+            case .copilot: return "GitHub Copilot"
+            case .pi: return "Pi"
+            }
+        }
 
         /// The default config file, for display.
-        var configFile: URL { self == .cursor ? Paths.cursorHooks : Paths.claudeSettings }
+        var configFile: URL {
+            switch self {
+            case .cursor: return Paths.cursorHooks
+            case .claude: return Paths.claudeSettings
+            case .codex: return Paths.home.appendingPathComponent(".codex/hooks.json")
+            case .gemini: return Paths.home.appendingPathComponent(".gemini/settings.json")
+            case .copilot: return Paths.home.appendingPathComponent(".copilot/hooks/ironpet.json")
+            case .pi: return Paths.home.appendingPathComponent(".pi/agent/extensions/ironpet.ts")
+            }
+        }
+
+        /// The command the agent is started with, and the folder it keeps its settings in.
+        private var command: String {
+            switch self {
+            case .cursor: return "cursor-agent"
+            case .claude: return "claude"
+            case .codex: return "codex"
+            case .gemini: return "gemini"
+            case .copilot: return "copilot"
+            case .pi: return "pi"
+            }
+        }
+
+        private var settingsFolder: String {
+            switch self {
+            case .cursor: return ".cursor"
+            case .claude: return ".claude"
+            case .codex: return ".codex"
+            case .gemini: return ".gemini"
+            case .copilot: return ".copilot"
+            case .pi: return ".pi"
+            }
+        }
 
         /// Whether the tool looks installed: its config folder, app or CLI exists.
         var isPresent: Bool {
             let fm = FileManager.default
+            if fm.fileExists(atPath: Paths.home.appendingPathComponent(settingsFolder).path) || LoginShell.find(command) != nil { return true }
+            return self == .cursor && fm.fileExists(atPath: "/Applications/Cursor.app")
+        }
+
+        /// A note shown next to the switch when watching needs a step in the agent itself.
+        var watchNote: String? {
             switch self {
-            case .cursor:
-                return fm.fileExists(atPath: Paths.home.appendingPathComponent(".cursor").path)
-                    || fm.fileExists(atPath: "/Applications/Cursor.app") || CursorAgentBackend.executable() != nil
-            case .claude:
-                return fm.fileExists(atPath: Paths.home.appendingPathComponent(".claude").path)
-                    || ClaudeCodeBackend.executable() != nil
+            case .codex: return "Codex asks you to trust new hooks: open /hooks in Codex once and approve ironpet's."
+            case .pi: return "Adds an extension file; restart Pi or run /reload."
+            default: return nil
             }
         }
     }
@@ -41,6 +89,22 @@ struct HookInstaller {
         var cursorHooks = Paths.cursorHooks
         var claudeSettings = Paths.claudeSettings
         var hookScript = Paths.hookScript
+        var codexHooks = Agent.codex.configFile
+        var geminiSettings = Agent.gemini.configFile
+        var copilotHooks = Agent.copilot.configFile
+        var piExtension = Agent.pi.configFile
+
+        init(cursorHooks: URL = Paths.cursorHooks, claudeSettings: URL = Paths.claudeSettings, hookScript: URL = Paths.hookScript,
+             codexHooks: URL = Agent.codex.configFile, geminiSettings: URL = Agent.gemini.configFile,
+             copilotHooks: URL = Agent.copilot.configFile, piExtension: URL = Agent.pi.configFile) {
+            self.cursorHooks = cursorHooks
+            self.claudeSettings = claudeSettings
+            self.hookScript = hookScript
+            self.codexHooks = codexHooks
+            self.geminiSettings = geminiSettings
+            self.copilotHooks = copilotHooks
+            self.piExtension = piExtension
+        }
     }
 
     let locations: Locations
@@ -51,7 +115,14 @@ struct HookInstaller {
     }
 
     func file(for agent: Agent) -> URL {
-        agent == .cursor ? locations.cursorHooks : locations.claudeSettings
+        switch agent {
+        case .cursor: return locations.cursorHooks
+        case .claude: return locations.claudeSettings
+        case .codex: return locations.codexHooks
+        case .gemini: return locations.geminiSettings
+        case .copilot: return locations.copilotHooks
+        case .pi: return locations.piExtension
+        }
     }
 
     /// Adds (or refreshes) the hooks for these agents. Returns the config files that changed.
@@ -74,7 +145,14 @@ struct HookInstaller {
     }
 
     private func update(_ agent: Agent, install: Bool) throws -> Bool {
-        agent == .cursor ? try updateCursor(install: install) : try updateClaude(install: install)
+        switch agent {
+        case .cursor: return try updateCursor(install: install)
+        case .claude: return try updateGroups(.claude, events: Self.claudeEvents, matchAllTools: true, timeout: 5, named: false, install: install)
+        case .codex: return try updateGroups(.codex, events: Self.codexEvents, matchAllTools: false, timeout: 5, named: false, install: install)
+        case .gemini: return try updateGroups(.gemini, events: Self.geminiEvents, matchAllTools: false, timeout: 5_000, named: true, install: install)
+        case .copilot: return try updateCopilot(install: install)
+        case .pi: return try updatePi(install: install)
+        }
     }
 
     private func writeScript() throws {
@@ -105,18 +183,21 @@ struct HookInstaller {
         if install {
             for event in Self.cursorEvents {
                 var entries = hooks[event] as? [[String: Any]] ?? []
-                entries.append(["command": command("cursor", event), "timeout": Self.cursorGateEvents.contains(event) ? Self.gateTimeout : 5])
+                entries.append(["command": command("cursor", event), "timeout": 5])
                 hooks[event] = entries
             }
         }
-        for event in Self.cursorEvents where (hooks[event] as? [Any])?.isEmpty == true { hooks[event] = nil }
+        for event in Self.cursorEvents + Self.retiredCursorEvents where (hooks[event] as? [Any])?.isEmpty == true { hooks[event] = nil }
         root["hooks"] = hooks
         return try writeIfChanged(root, to: locations.cursorHooks)
     }
 
-    private func updateClaude(install: Bool) throws -> Bool {
-        guard install || fm.fileExists(atPath: locations.claudeSettings.path) else { return false }
-        var root = try readJSON(locations.claudeSettings) ?? [:]
+    /// Claude Code, Codex and Gemini CLI share a layout: `hooks.<Event>` is a list of groups, each with a `hooks` list of
+    /// commands. Gemini wants a name and a timeout in milliseconds; Claude wants tool events matched with `*`.
+    private func updateGroups(_ agent: Agent, events: [String], matchAllTools: Bool, timeout: Int, named: Bool, install: Bool) throws -> Bool {
+        let url = file(for: agent)
+        guard install || fm.fileExists(atPath: url.path) else { return false }
+        var root = try readJSON(url) ?? [:]
         var hooks = root["hooks"] as? [String: Any] ?? [:]
         for (event, value) in hooks {
             guard let groups = value as? [[String: Any]] else { continue }
@@ -125,18 +206,79 @@ struct HookInstaller {
             }
         }
         if install {
-            for event in Self.claudeEvents {
+            for event in events {
                 var groups = hooks[event] as? [[String: Any]] ?? []
-                let timeout = event == "PreToolUse" ? Self.gateTimeout : 5
-                var group: [String: Any] = ["hooks": [["type": "command", "command": command("claude", event), "timeout": timeout]]]
-                if Self.claudeToolEvents.contains(event) { group["matcher"] = "*" }
+                var entry: [String: Any] = ["type": "command", "command": command(agent.rawValue, event), "timeout": timeout]
+                if named { entry["name"] = "ironpet" }
+                var group: [String: Any] = ["hooks": [entry]]
+                if matchAllTools, Self.claudeToolEvents.contains(event) { group["matcher"] = "*" }
                 groups.append(group)
                 hooks[event] = groups
             }
         }
-        for event in Self.claudeEvents where (hooks[event] as? [Any])?.isEmpty == true { hooks[event] = nil }
+        for event in events where (hooks[event] as? [Any])?.isEmpty == true { hooks[event] = nil }
         if hooks.isEmpty { root["hooks"] = nil } else { root["hooks"] = hooks }
-        return try writeIfChanged(root, to: locations.claudeSettings)
+        return try writeIfChanged(root, to: url)
+    }
+
+    /// Copilot CLI loads every file in `~/.copilot/hooks/`, so ironpet owns one file there and deletes it on uninstall.
+    private func updateCopilot(install: Bool) throws -> Bool {
+        let url = locations.copilotHooks
+        if !install {
+            guard fm.fileExists(atPath: url.path), isInstalled(.copilot) else { return false }
+            try fm.removeItem(at: url)
+            return true
+        }
+        var hooks: [String: Any] = [:]
+        for event in Self.copilotEvents {
+            hooks[event] = [["type": "command", "bash": command("copilot", event), "timeoutSec": 5] as [String: Any]]
+        }
+        return try writeIfChanged(["version": 1, "hooks": hooks], to: url)
+    }
+
+    /// Pi has no hook list; extensions are TypeScript files it loads from `~/.pi/agent/extensions/`. The extension
+    /// hands each event to the same hook script, so Pi is one more `source` to the rest of the app.
+    private func updatePi(install: Bool) throws -> Bool {
+        let url = locations.piExtension
+        if !install {
+            guard fm.fileExists(atPath: url.path), isInstalled(.pi) else { return false }
+            try fm.removeItem(at: url)
+            return true
+        }
+        let script = locations.hookScript.path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let text = Self.piExtension(script: script)
+        if let existing = fm.contents(atPath: url.path), existing == Data(text.utf8) { return false }
+        try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: url, options: .atomic)
+        return true
+    }
+
+    static func piExtension(script: String) -> String {
+        """
+        \(piMarker)
+        import { spawn } from "node:child_process";
+
+        const HOOK = "\(script)";
+
+        function send(event: string, ctx: any, extra: Record<string, unknown> = {}) {
+          try {
+            const child = spawn(HOOK, ["pi", event], { stdio: ["pipe", "ignore", "ignore"], detached: true });
+            child.on("error", () => {});
+            child.stdin.on("error", () => {});
+            child.stdin.end(JSON.stringify({ session_id: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...extra }));
+            child.unref();
+          } catch {}
+        }
+
+        export default function (pi: any) {
+          pi.on("session_start", (_event: any, ctx: any) => send("session_start", ctx));
+          pi.on("before_agent_start", (event: any, ctx: any) => send("agent_start", ctx, { prompt: event?.prompt }));
+          pi.on("tool_execution_start", (event: any, ctx: any) => send("tool", ctx, { tool_name: event?.toolName ?? event?.tool_name }));
+          pi.on("agent_settled", (_event: any, ctx: any) => send("agent_settled", ctx));
+          pi.on("session_shutdown", (_event: any, ctx: any) => send("session_shutdown", ctx));
+        }
+
+        """
     }
 
     private func readJSON(_ url: URL) throws -> [String: Any]? {

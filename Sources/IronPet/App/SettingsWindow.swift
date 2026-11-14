@@ -49,6 +49,16 @@ final class SettingsWindow {
         self.model = model
     }
 
+    var windowNumber: Int { window?.windowNumber ?? 0 }
+
+    /// Draws the window's own contents to a PNG, for tests; needs no screen-recording permission.
+    func snapshot(to url: URL) -> Bool {
+        guard let view = window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
+        return (try? data.write(to: url)) != nil
+    }
+
     func show() {
         model.refresh()
         if window == nil {
@@ -154,18 +164,24 @@ private struct GeneralSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
-                Toggle("Watch Cursor", isOn: Binding(get: { store.config.integrations.cursorHooks },
-                                                     set: { on in store.update { $0.integrations.cursorHooks = on } }))
-                Toggle("Watch Claude Code", isOn: Binding(get: { store.config.integrations.claudeHooks },
-                                                          set: { on in store.update { $0.integrations.claudeHooks = on } }))
+                ForEach(watchableAgents, id: \.self) { agent in
+                    Toggle("Watch \(agent.displayName)", isOn: Binding(get: { store.config.integrations.watches(agent) },
+                                                                     set: { on in store.update { $0.integrations.setWatches(on, agent) } }))
+                        .help(agent.watchNote ?? "Adds ironpet's hooks to \(agent.configFile.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
+                }
             } header: {
                 Text("Agents")
             } footer: {
-                Text("Adds hooks to ~/.cursor/hooks.json and ~/.claude/settings.json so \(store.config.pet.name) sees your agents. Chatting through a backend needs its hooks too: that's how every edit and command waits for Allow / Deny. Turning one off removes only ironpet's hooks; the original file is backed up as *.ironpet-backup the first time.")
+                Text("Lists the agents found on this Mac. Watching adds ironpet's hooks to the agent's own config so \(store.config.pet.name) sees sessions you start yourself. Turning one off removes only ironpet's hooks; an existing file is backed up as *.ironpet-backup the first time. Codex asks you to trust new hooks in its /hooks screen.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Agents found on this Mac, plus any already watched, so a switch never disappears while it is on.
+    private var watchableAgents: [HookInstaller.Agent] {
+        HookInstaller.Agent.allCases.filter { $0.isPresent || store.config.integrations.watches($0) }
     }
 
     /// Installed editors, plus the saved choice when that app is gone, so the picker never shows a blank.

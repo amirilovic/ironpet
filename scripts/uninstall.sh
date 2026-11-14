@@ -31,7 +31,7 @@ if [ -x "$APP/Contents/MacOS/IronPet" ]; then
   "$APP/Contents/MacOS/IronPet" --uninstall | while read -r line; do ok "$line"; done
 else
   warn "$APP not found, so its hooks can't be removed automatically."
-  warn "Delete the entries containing .ironpet/bin/ironpet-hook from ~/.cursor/hooks.json and ~/.claude/settings.json."
+  warn "Delete the entries containing .ironpet/bin/ironpet-hook from the agents' configs (~/.cursor/hooks.json, ~/.claude/settings.json, ~/.codex/hooks.json, ~/.gemini/settings.json) and delete ~/.copilot/hooks/ironpet.json and ~/.pi/agent/extensions/ironpet.ts."
 fi
 for backup in "$HOME/.cursor/hooks.json.ironpet-backup" "$HOME/.claude/settings.json.ironpet-backup"; do
   [ -e "$backup" ] && warn "Kept $backup (your file from before ironpet was installed; delete it if you don't need it)."

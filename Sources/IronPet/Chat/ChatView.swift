@@ -79,8 +79,8 @@ struct ChatView: View {
         VStack(spacing: 10) {
             SettingsCard {
                 SettingsRow("Project") { projectMenu }
-                SettingsRow("Agent") { backendMenu }
-                SettingsRow("Model", last: true) { modelMenu }
+                SettingsRow("Agent", last: session.models.isEmpty) { backendMenu }
+                if !session.models.isEmpty { SettingsRow("Model", last: true) { modelMenu } }
             }
             SettingsCard {
                 SettingsRow("Auto") {
@@ -174,7 +174,7 @@ struct ChatView: View {
                 } else {
                     VStack(spacing: 4) {
                         Text("What can I help with?").font(.system(size: 17, weight: .semibold))
-                        Text("Working in **\(session.workspaceLabel)** with \(session.backend.displayName)")
+                        Text("Working in **\(session.workspaceLabel)** with \(session.agent.name)")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
@@ -247,6 +247,8 @@ struct ChatView: View {
                         TypingIndicator(started: session.runStartedAt).id("typing")
                     }
                     ForEach(session.approvals) { approval in approvalCard(approval).id(approval.id) }
+                    if let agent = session.runtimeOffer { runtimeCard(agent).id("runtime") }
+                    if !session.signInOptions.isEmpty { signInCard.id("signin") }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(14)
@@ -369,6 +371,48 @@ struct ChatView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.orange.opacity(0.5)))
     }
 
+    private func runtimeCard(_ agent: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("\(agent) needs a JavaScript runtime", systemImage: "arrow.down.circle")
+                .font(.system(size: 13, weight: .semibold))
+            Text("ironpet runs \(agent) through a small adapter. It needs Node 22 or newer, which it did not find. It can download Bun \(BunRuntime.version) (\(BunRuntime.sizeDescription)) from github.com/oven-sh/bun, check it against the published SHA-256 and keep it in ~/.ironpet/runtime.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            HStack {
+                Button { session.installRuntime() } label: {
+                    Text(session.installingRuntime ? "Downloading…" : "Download Bun").frame(minWidth: 110)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(session.installingRuntime)
+                Button("Not now") { session.declineRuntime() }
+                    .buttonStyle(.bordered)
+                    .disabled(session.installingRuntime)
+            }
+        }
+        .padding(12)
+        .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor.opacity(0.4)))
+    }
+
+    private var signInCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Sign in to \(session.agent.name)", systemImage: "person.crop.circle.badge.exclamationmark")
+                .font(.system(size: 13, weight: .semibold))
+            HStack {
+                ForEach(session.signInOptions) { method in
+                    Button(method.name) { session.signIn(method) }
+                        .buttonStyle(.borderedProminent)
+                        .help(method.detail)
+                }
+                Button("Try again") { session.retryAfterFix() }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(12)
+        .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor.opacity(0.4)))
+    }
+
     // MARK: Composer
 
     private var composer: some View {
@@ -468,13 +512,13 @@ struct ChatView: View {
 
     private var backendMenu: some View {
         Menu {
-            ForEach(BackendKind.allCases, id: \.self) { kind in
-                Button { session.setBackend(kind) } label: {
-                    if session.backend == kind { Label(kind.displayName, systemImage: "checkmark") } else { Text(kind.displayName) }
+            ForEach(session.agents) { agent in
+                Button { session.setAgent(agent) } label: {
+                    if session.agent == agent { Label(agent.name, systemImage: "checkmark") } else { Text(agent.name) }
                 }
             }
         } label: {
-            Text(session.backend.displayName)
+            Text(session.agent.name)
         }
         .settingsValueMenu()
         .disabled(session.isRunning)
@@ -493,7 +537,7 @@ struct ChatView: View {
             Button {
                 session.model = nil
             } label: {
-                if session.model == nil { Label("Default (CLI setting)", systemImage: "checkmark") } else { Text("Default (CLI setting)") }
+                if session.model == nil { Label("Default (agent setting)", systemImage: "checkmark") } else { Text("Default (agent setting)") }
             }
             Divider()
             ForEach(families, id: \.0) { family, models in

@@ -30,6 +30,23 @@ if [ -f "$MERMAID_JS" ]; then
   cp "$MERMAID_JS" "$APP/Contents/Resources/mermaid.min.js"
   cp Resources/mermaid.html "$APP/Contents/Resources/mermaid.html"
 fi
+# ACP adapters for Claude Code, Codex and Pi: one self-contained .mjs per adapter (no node_modules, no agent binaries),
+# run on the user's Node 22+ or a Bun they allow ironpet to download. Building needs Bun here, not on the user's Mac.
+# `--omit=optional` keeps the agents' own platform binaries out of the install.
+if ! command -v bun >/dev/null 2>&1; then
+  echo "error: bun is required to bundle the ACP adapters (https://bun.sh)" >&2
+  exit 1
+fi
+(
+  cd sidecar
+  npm ci --omit=optional --ignore-scripts --no-audit --no-fund >/dev/null
+  rm -rf out
+  for adapter in claude codex pi; do
+    bun build --minify --target=node --format=esm "$adapter.mjs" --outfile "out/$adapter.mjs" >/dev/null
+  done
+)
+mkdir -p "$APP/Contents/Resources/acp"
+cp sidecar/out/claude.mjs sidecar/out/codex.mjs sidecar/out/pi.mjs "$APP/Contents/Resources/acp/"
 # Ghost's sprite sheet is drawn in code; bundle it so the pet works without any setup.
 swift tools/make_wolf.swift ghost "$APP/Contents/Resources/spritesheet.png" >/dev/null
 
@@ -55,7 +72,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-IDENTITY="-"
-if security find-identity -p codesigning 2>/dev/null | grep -q '"ironpet-dev"'; then IDENTITY="ironpet-dev"; fi
+# IRONPET_SIGN_IDENTITY=- forces ad-hoc signing, e.g. when the keychain would prompt for the ironpet-dev key.
+IDENTITY="${IRONPET_SIGN_IDENTITY:-}"
+if [ -z "$IDENTITY" ]; then
+  IDENTITY="-"
+  if security find-identity -p codesigning 2>/dev/null | grep -q '"ironpet-dev"'; then IDENTITY="ironpet-dev"; fi
+fi
 codesign --force --sign "$IDENTITY" --timestamp=none "$APP"
 echo "Built $APP"
