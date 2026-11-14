@@ -212,8 +212,8 @@ Turn it on under **Settings → Meetings**. The switch only turns on after the v
 | Setting | `config.json` key | Notes |
 | --- | --- | --- |
 | Meeting transcripts | `meetings.enabled` | Default off |
-| Summary agent | `meetings.summaryAgent` | `"cursor"` or `"claude"`. Settings lists the agents that are on under General |
-| Summary model | `meetings.summaryModel` | A model id for that agent. Unset uses the agent's default |
+| Summary agent | `meetings.summaryAgent` | An ACP agent id such as `"claude"` or `"cursor"`. Settings lists the installed agents |
+| Summary model | `meetings.summaryModel` | A model id the agent reported in the chat. Unset uses the agent's default. Settings offers the models the agent listed the last time it ran in the chat |
 | Summarize automatically | `meetings.autoSummary` | Default on. Off means no agent runs |
 | Start or stop shortcut | `hotkeys.meeting` | No default. Registered only while meetings are on |
 | Last recorded app | `meetings.lastApp` | Written by ironpet: a bundle id, or `"all"` |
