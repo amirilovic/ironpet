@@ -99,8 +99,21 @@ final class ChatSession: ObservableObject {
     @Published var findOpen = false
     @Published var findFocusTick = 0
     @Published var input = "" {
-        didSet { if persists { UserDefaults.standard.set(input, forKey: Self.draftKey) } }
+        didSet {
+            if DraftPolicy.exceedsLimit(input) {
+                let result = DraftPolicy.apply(input, into: draftDirectory)
+                if let file = result.attachment { attachments.append(file) }
+                // Assigning inside didSet does not re-run it, so save the shortened draft here.
+                // Otherwise the huge text stays in UserDefaults and is split off again on every launch.
+                input = result.input
+                if persists { UserDefaults.standard.set(input, forKey: Self.draftKey) }
+                return
+            }
+            if persists { UserDefaults.standard.set(input, forKey: Self.draftKey) }
+        }
     }
+    /// Where text over `DraftPolicy.limit` is saved. Tests point it at a temporary folder.
+    var draftDirectory = FileIntake.directory
     @Published var workspace: URL?
     /// Set when the chat opened outside a coding app; the user picks a folder before sending.
     @Published private(set) var needsWorkspace = false
@@ -277,10 +290,11 @@ final class ChatSession: ObservableObject {
         if let id = defaults.string(forKey: Self.threadKey), let thread = ThreadStore.load(id) {
             apply(thread.restoredAfterQuit(), reason: "restore after launch")
         }
-        input = defaults.string(forKey: Self.draftKey) ?? ""
         attachments = (defaults.stringArray(forKey: Self.attachmentsKey) ?? [])
             .map(URL.init(fileURLWithPath:))
             .filter { FileManager.default.fileExists(atPath: $0.path) }
+        // A draft saved by an older version may be huge; the input's didSet turns it into an attachment.
+        input = defaults.string(forKey: Self.draftKey) ?? ""
     }
 
     /// Writes the open thread to disk, e.g. when the app quits mid-run.
