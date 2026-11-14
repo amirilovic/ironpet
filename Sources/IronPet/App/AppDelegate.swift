@@ -473,7 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let meetings = config.config.meetings
         let on = meetings.enabled && meetings.offerToRecordCalls
         if on, callMonitor == nil {
-            let detector = CallDetector(source: { CallMonitor.micClients() })
+            let detector = CallDetector(source: { [] })
             detector.onStarted = { [weak self] app in self?.callEvent(app, started: true) }
             detector.onEnded = { [weak self] app in self?.callEvent(app, started: false) }
             callMonitor = CallMonitor(detector: detector)
