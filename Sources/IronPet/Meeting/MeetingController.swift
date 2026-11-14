@@ -183,7 +183,11 @@ final class MeetingController: ObservableObject {
             system.onStop = { [weak self] error in
                 Task { @MainActor in self?.sourceStopped(.them, error) }
             }
-            await begin(mic: LocalTrack(MicrophoneSource()), them: system, appName: picked.name, lengths: ChunkLengths(), expected: expected)
+            let mic = LocalTrack(MicrophoneSource())
+            mic.onFailure = { [weak self] message in
+                Task { @MainActor in self?.micFailed(message) }
+            }
+            await begin(mic: mic, them: system, appName: picked.name, lengths: ChunkLengths(), expected: expected)
             if phase == .recording { rememberChoice(picked.key) }
         }
     }
@@ -268,6 +272,14 @@ final class MeetingController: ObservableObject {
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
         setPhase(.recording)
+    }
+
+    /// The microphone died mid-meeting. The other track keeps recording, and the notice tells the user.
+    private func micFailed(_ message: String) {
+        guard phase == .recording else { return }
+        notice = "Your side of the call stopped recording. " + message
+        objectWillChange.send()
+        onChange?()
     }
 
     private func fail(_ message: String) {

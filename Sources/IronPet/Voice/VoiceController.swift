@@ -72,6 +72,9 @@ final class VoiceController: ObservableObject {
             }
             levels.reset()
             let levels = levels
+            source.onFailure = { [weak self] message in
+                Task { @MainActor in self?.recordingFailed(message) }
+            }
             try source.start { levels.record($0) }
         } catch {
             return onFailure?("Could not start recording: \(error.localizedDescription)", false) ?? ()
@@ -126,6 +129,16 @@ final class VoiceController: ObservableObject {
         case .idle:
             break
         }
+    }
+
+    /// The source lost its input mid-recording and could not recover. Ends the recording and says so.
+    private func recordingFailed(_ message: String) {
+        guard phase == .recording else { return }
+        endRecording()
+        source?.cancel()
+        source = nil
+        phase = .idle
+        onFailure?(message, false)
     }
 
     /// Sends the kept recording again.

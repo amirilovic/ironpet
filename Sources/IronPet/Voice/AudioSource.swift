@@ -9,6 +9,8 @@ protocol AudioSource: AnyObject {
     func finish() -> Data
     /// Stops and drops the audio.
     func cancel()
+    /// Called, from any thread, when capture dies mid-recording and could not be recovered.
+    var onFailure: (@Sendable (String) -> Void)? { get set }
 }
 
 /// A source that can hand over its samples as they arrive, so a long recording never sits in memory (meetings).
@@ -88,28 +90,70 @@ final class AdaptiveConverter: @unchecked Sendable {
     }
 }
 
-/// The default input device through AVAudioEngine.
+/// The default input device through AVAudioEngine. Opening a Bluetooth headset's microphone switches it from its
+/// stereo profile to the hands-free one. AVAudioEngine then posts a configuration change and stops itself, so the
+/// source reinstalls the tap at the new format and starts the engine again, keeping the samples captured so far.
 final class MicrophoneSource: StreamingSource, @unchecked Sendable {
+    static let restartDelay: TimeInterval = 0.2
+    static let retryDelay: TimeInterval = 0.5
+    static let silenceLimit: TimeInterval = 1.5
+    static let watchdogInterval: TimeInterval = 0.5
+    static let maxFailedRestarts = 3
+
     var sink: (@Sendable ([Int16]) -> Void)?
-    private let engine = AVAudioEngine()
+    var onFailure: (@Sendable (String) -> Void)?
+    private let engine: CaptureEngine
+    private let clock: CaptureClock
     private let lock = NSLock()
+    /// Held while the engine is rebuilt or stopped, so a restart never overlaps `finish()`.
+    private let engineLock = NSRecursiveLock()
     private var samples: [Int16] = []
     private var running = false
+    private var level: (@Sendable (Float) -> Void)?
+    private var format: AVAudioFormat?
+    private var lastBuffer: TimeInterval = 0
+    private var failedRestarts = 0
+    private var restartPending = false
+    private var cancelWatchdog: (() -> Void)?
+
+    init(engine: CaptureEngine = AVCaptureEngine(), clock: CaptureClock = DispatchCaptureClock()) {
+        self.engine = engine
+        self.clock = clock
+    }
 
     func start(level: @escaping @Sendable (Float) -> Void) throws {
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceError.noInput }
+        engineLock.lock()
+        defer { engineLock.unlock() }
+        self.level = level
+        let format = try installTap()
+        do {
+            try engine.start()
+        } catch {
+            engine.removeTap()
+            throw error
+        }
+        lock.lock()
+        running = true
+        self.format = format
+        lastBuffer = clock.now
+        lock.unlock()
+        engine.onConfigurationChange = { [weak self] in self?.configurationChanged() }
+        cancelWatchdog = clock.every(Self.watchdogInterval) { [weak self] in self?.checkForSilence() }
+    }
+
+    private func installTap() throws -> AVAudioFormat {
         let converter = AdaptiveConverter()
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+        return try engine.installTap { [weak self] buffer in
+            guard let self else { return }
+            self.lock.lock()
+            self.lastBuffer = self.clock.now
+            self.failedRestarts = 0
+            self.lock.unlock()
             let floats = converter.convert(buffer)
             guard !floats.isEmpty else { return }
-            level(PCMConverter.level(of: floats[...]))
-            self?.append(PCMConverter.int16(floats))
+            self.level?(PCMConverter.level(of: floats[...]))
+            self.append(PCMConverter.int16(floats))
         }
-        engine.prepare()
-        try engine.start()
-        running = true
     }
 
     private func append(_ chunk: [Int16]) {
@@ -122,10 +166,86 @@ final class MicrophoneSource: StreamingSource, @unchecked Sendable {
         lock.unlock()
     }
 
+    // MARK: Restarting
+
+    private func configurationChanged() {
+        lock.lock()
+        let skip = !running || restartPending
+        if !skip { restartPending = true }
+        lock.unlock()
+        guard !skip else { return }
+        // A headset can post several notifications in a row while it switches profile. One restart covers them.
+        _ = clock.after(Self.restartDelay) { [weak self] in self?.restart(reason: "audio configuration changed") }
+    }
+
+    private func checkForSilence() {
+        lock.lock()
+        let silent = running && !restartPending && clock.now - lastBuffer > Self.silenceLimit
+        if silent { failedRestarts += 1 }
+        let failures = failedRestarts
+        lock.unlock()
+        guard silent else { return }
+        if failures >= Self.maxFailedRestarts {
+            giveUp("no audio for \(Self.silenceLimit) s after \(failures - 1) restarts")
+        } else {
+            restart(reason: "no audio for \(Self.silenceLimit) s")
+        }
+    }
+
+    private func restart(reason: String) {
+        engineLock.lock()
+        defer { engineLock.unlock() }
+        lock.lock()
+        restartPending = false
+        let old = format
+        let active = running
+        lock.unlock()
+        guard active else { return }
+        engine.removeTap()
+        engine.stop()
+        do {
+            let new = try installTap()
+            try engine.start()
+            lock.lock()
+            format = new
+            lastBuffer = clock.now
+            lock.unlock()
+            NSLog("IronPet: microphone restarted (%@), format %@ -> %@", reason, old?.description ?? "none", new.description)
+        } catch {
+            engine.removeTap()
+            lock.lock()
+            failedRestarts += 1
+            let failures = failedRestarts
+            if failures < Self.maxFailedRestarts { restartPending = true }
+            lock.unlock()
+            NSLog("IronPet: microphone restart failed (%@), attempt %d of %d: %@", reason, failures, Self.maxFailedRestarts,
+                  error.localizedDescription)
+            if failures >= Self.maxFailedRestarts {
+                giveUp("restart failed \(failures) times: \(error.localizedDescription)")
+            } else {
+                _ = clock.after(Self.retryDelay) { [weak self] in self?.restart(reason: "retry after \(reason)") }
+            }
+        }
+    }
+
+    private func giveUp(_ detail: String) {
+        NSLog("IronPet: microphone gave up: %@", detail)
+        stopEngine()
+        onFailure?("The microphone stopped and could not be restarted. Check the input device and record again.")
+    }
+
     private func stopEngine() {
-        guard running else { return }
+        engineLock.lock()
+        defer { engineLock.unlock() }
+        lock.lock()
+        let wasRunning = running
         running = false
-        engine.inputNode.removeTap(onBus: 0)
+        lock.unlock()
+        cancelWatchdog?()
+        cancelWatchdog = nil
+        engine.onConfigurationChange = nil
+        guard wasRunning else { return }
+        engine.removeTap()
         engine.stop()
     }
 
@@ -144,6 +264,7 @@ final class MicrophoneSource: StreamingSource, @unchecked Sendable {
 /// Plays a WAV file as if it were being spoken: levels follow the file in real time, and `finish` returns all of it.
 final class FileSource: StreamingSource, @unchecked Sendable {
     var sink: (@Sendable ([Int16]) -> Void)?
+    var onFailure: (@Sendable (String) -> Void)?
     private let samples: [Float]
     private var timer: DispatchSourceTimer?
     private static let tick = 0.04
