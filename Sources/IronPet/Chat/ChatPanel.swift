@@ -46,17 +46,20 @@ final class ChatPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
 
-    /// Intercepts ⌘V only when the pasteboard holds an image and no text; text paste stays with the field.
+    /// Intercepts ⌘V when the pasteboard holds an image or text over `DraftPolicy.limit`; other text paste stays with the field.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags == .command, event.charactersIgnoringModifiers == "v", ImageIntake.decide(.general) != .text {
-            let saved = ImageIntake.importPaste(.general)
-            if !saved.isEmpty {
-                saved.forEach(session.attach)
-                return true
-            }
-        }
+        if flags == .command, event.charactersIgnoringModifiers == "v", attachPaste() { return true }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// Attaches what the general pasteboard holds when it must not reach the text field. Also used by Edit > Paste.
+    @discardableResult
+    func attachPaste() -> Bool {
+        let saved = PasteIntake.importPaste(.general)
+        guard !saved.isEmpty else { return false }
+        session.attach(saved)
+        return true
     }
 
     /// Esc stops a running turn first, like the stop button; only an idle chat closes.
