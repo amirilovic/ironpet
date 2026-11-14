@@ -84,24 +84,40 @@ private struct Waveform: View {
     private static let gap: CGFloat = 2.5
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: reduceMotion ? 0.25 : nil, paused: voice.phase == .transcribing)) { _ in
-            Canvas { context, size in
-                let pitch = Self.barWidth + Self.gap
-                let count = Int(size.width / pitch) + 2
-                let (bars, phase) = voice.levels.recent(count)
-                let shift = reduceMotion ? 0 : CGFloat(phase) * pitch
-                for (index, level) in bars.enumerated() {
-                    let x = size.width - CGFloat(bars.count - index) * pitch - shift + pitch
-                    guard x > -pitch, x < size.width else { continue }
-                    let height = max(Self.barWidth, CGFloat(level) * size.height)
-                    let rect = CGRect(x: x, y: (size.height - height) / 2, width: Self.barWidth, height: height)
-                    // Older bars fade out toward the left edge.
-                    let fade = min(1, max(0.15, x / (size.width * 0.35)))
-                    context.fill(Path(roundedRect: rect, cornerRadius: Self.barWidth / 2),
-                                 with: .color(.accentColor.opacity(fade)))
+        // Reduce Motion stops the `.animation` schedule from ticking, so it gets a plain periodic one.
+        Group {
+            if reduceMotion {
+                TimelineView(.periodic(from: .now, by: 0.25)) { timeline in
+                    bars(frame: timeline.date)
+                }
+            } else {
+                TimelineView(.animation(paused: voice.phase == .transcribing)) { timeline in
+                    bars(frame: timeline.date)
                 }
             }
         }
         .accessibilityHidden(true)
+    }
+
+    /// `voice.levels` is a reference type, so the Canvas only redraws if its closure captures something that
+    /// changes every frame. The timeline date does that.
+    private func bars(frame: Date) -> some View {
+        Canvas { context, size in
+            _ = frame
+            let pitch = Self.barWidth + Self.gap
+            let count = Int(size.width / pitch) + 2
+            let (bars, phase) = voice.levels.recent(count)
+            let shift = reduceMotion ? 0 : CGFloat(phase) * pitch
+            for (index, level) in bars.enumerated() {
+                let x = size.width - CGFloat(bars.count - index) * pitch - shift + pitch
+                guard x > -pitch, x < size.width else { continue }
+                let height = max(Self.barWidth, CGFloat(level) * size.height)
+                let rect = CGRect(x: x, y: (size.height - height) / 2, width: Self.barWidth, height: height)
+                // Older bars fade out toward the left edge.
+                let fade = min(1, max(0.15, x / (size.width * 0.35)))
+                context.fill(Path(roundedRect: rect, cornerRadius: Self.barWidth / 2),
+                             with: .color(.accentColor.opacity(fade)))
+            }
+        }
     }
 }
