@@ -67,6 +67,18 @@ struct Config: Codable, Equatable {
         var snoozeMinutes: Double = 10
     }
 
+    struct Automations: Codable, Equatable {
+        /// Execution logs older than this many days are deleted.
+        var logRetentionDays = 14
+        /// When an automation fails, send the error to the chat and ask the agent to fix it.
+        var autoFix = true
+    }
+
+    struct Skills: Codable, Equatable {
+        /// Update installed skills when ironpet ships a newer text, without asking or telling.
+        var autoUpdate = true
+    }
+
     struct Integrations: Codable, Equatable {
         /// Status hooks in `~/.cursor/hooks.json`.
         var cursorHooks = false
@@ -112,6 +124,8 @@ struct Config: Codable, Equatable {
     var hotkeys = Hotkeys()
     var reminders = Reminders()
     var integrations = Integrations()
+    var automations = Automations()
+    var skills = Skills()
     var voice = Voice()
     var meetings = Meetings()
 
@@ -152,6 +166,7 @@ struct Config: Codable, Equatable {
         c.editors = c.editors.filter { !$0.name.isEmpty && !$0.bundleId.isEmpty }
         c.reminders.idleResetMinutes = max(1, c.reminders.idleResetMinutes)
         c.reminders.snoozeMinutes = max(1, c.reminders.snoozeMinutes)
+        c.automations.logRetentionDays = min(365, max(1, c.automations.logRetentionDays))
         c.voice.baseUrl = c.voice.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         c.voice.model = c.voice.model.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.meetings.summaryModel?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.meetings.summaryModel = nil }

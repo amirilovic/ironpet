@@ -18,7 +18,6 @@ final class TestControl {
         /// The handler a notification's Allow / Deny button calls.
         let notificationAction: (UUID, Bool) -> Void
         let signals: SignalStore
-        let github: GitHubWatcher
         let meeting: MeetingController
         /// The meeting panel's frame in top-left screen coordinates, or `.zero` while it is hidden.
         let meetingFrame: () -> CGRect
@@ -32,6 +31,13 @@ final class TestControl {
         let simulateCall: (_ bundleID: String, _ event: String) -> Void
         /// The title of the call bubble on screen, or "".
         let callOffer: () -> String
+        let automations: AutomationService
+        /// Moves the automation clock forward, so a test does not wait in real time.
+        let advanceClock: (TimeInterval) -> Void
+        /// The bubbles on screen: id, title, body and the titles of their buttons.
+        let bubbles: () -> [[String: Any]]
+        /// Presses the button with this title on the bubble with this id. False when there is none.
+        let pressBubbleButton: (_ id: String, _ title: String) -> Bool
     }
 
     private let chat: ChatSession
@@ -86,12 +92,6 @@ final class TestControl {
             guard let first = chat.approvals.first else { return Self.encode(["ok": false, "error": "no pending approval"]) }
             actions.notificationAction(first.id, body["allow"] as? Bool ?? false)
             return Self.encode(["ok": true, "title": first.title])
-        case ("POST", "/test/github-apply"):
-            actions.github.apply(host: body["host"] as? String ?? "test.example", data: body["data"] as? [String: Any] ?? [:])
-            return signalsSnapshot()
-        case ("POST", "/test/github-poll"):
-            actions.github.poll()
-            return Self.encode(["ok": true])
         case ("POST", "/test/voice/start"):
             // Records from a WAV file instead of the microphone, through the same states and UI.
             guard ConfigStore.shared.config.voice.enabled else { return Self.encode(["ok": false, "error": "voice notes are off"]) }
@@ -160,6 +160,33 @@ final class TestControl {
             return meetingSnapshot()
         case ("GET", "/test/signals"):
             return signalsSnapshot()
+        case ("GET", "/test/automations"):
+            return automationsSnapshot()
+        case ("GET", "/test/automations/logs"):
+            let logs = actions.automations.engine.state.logs(automation: body["id"] as? String, limit: 100)
+            return Self.encode(["logs": logs.map { ["automation": $0.automation, "outcome": $0.outcome, "summary": $0.summary, "detail": $0.detail,
+                                                    "duration": $0.duration, "time": AutomationClock.format($0.date)] as [String: Any] }])
+        case ("POST", "/test/automations/advance"):
+            actions.advanceClock((body["seconds"] as? NSNumber)?.doubleValue ?? 0)
+            actions.automations.engine.tick()
+            return automationsSnapshot()
+        case ("POST", "/test/automations/tick"):
+            actions.automations.engine.tick()
+            return automationsSnapshot()
+        case ("POST", "/test/automations/stub-prompt"):
+            // Answers `prompt` actions without starting an agent.
+            let answer = body["answer"] as? String ?? "stub answer"
+            actions.automations.runPrompt = { _, _ in .success(answer) }
+            return Self.encode(["ok": true])
+        case ("POST", "/test/automations/approval"):
+            guard let id = body["id"] as? String else { return Self.encode(["ok": false, "error": "id is required"]) }
+            if body["approve"] as? Bool == true { actions.automations.approve(id) } else { actions.automations.reject(id) }
+            return automationsSnapshot()
+        case ("POST", "/test/automations/bubble"):
+            // Presses a bubble button by title, as a click would.
+            let id = body["id"] as? String ?? "", title = body["button"] as? String ?? ""
+            let pressed = actions.pressBubbleButton(id, title)
+            return Self.encode(["ok": pressed])
         default:
             return Self.encode(["ok": false, "error": "unknown test endpoint \(request.method) \(request.path)"])
         }
@@ -227,9 +254,15 @@ final class TestControl {
         ])
     }
 
+    private func automationsSnapshot() -> Data {
+        let service = actions.automations
+        let list = service.store.automations.map { service.detail($0) }
+        return Self.encode(["automations": list, "bubbles": actions.bubbles(), "error": service.store.error ?? ""])
+    }
+
     private func signalsSnapshot() -> Data {
         Self.encode(["signals": actions.signals.signals.map {
-            ["id": $0.id, "kind": $0.kind.rawValue, "title": $0.title, "subtitle": $0.subtitle, "url": $0.url.absoluteString]
+            ["id": $0.id, "label": $0.label, "title": $0.title, "subtitle": $0.subtitle, "url": $0.url?.absoluteString ?? ""]
         }, "notified": notified])
     }
 

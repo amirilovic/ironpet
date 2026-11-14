@@ -7,12 +7,13 @@ import Combine
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = SessionStore()
     private let signals = SignalStore()
-    private lazy var github = GitHubWatcher(store: signals)
-    private lazy var sentry = SentryWatcher(store: signals)
     private let chat = ChatSession()
     private let notifier = Notifier()
     private let installer = HookInstaller()
-    private let reminders = ReminderScheduler()
+    private var automations: AutomationService!
+    private lazy var logWindow = AutomationLogWindow(service: { [weak self] in self?.automations })
+    /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
+    private var testClockOffset: TimeInterval = 0
     private lazy var announcer = Announcer(notifier: notifier)
     private var bubblePanel: BubblePanel!
     private var server: EventServer?
@@ -46,13 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         announcer.openChat = { [weak self] in self?.showChat() }
         announcer.ask = { [weak self] prompt in self?.ask(prompt) }
         announcer.decide = { [weak self] id, allow in self?.chat.decide(id: id, allow: allow) }
-        announcer.reminderAction = { [weak self] kinds, snooze in
-            if snooze {
-                self?.reminders.snooze(kinds)
-            } else {
-                self?.pet.nudge([.done], each: 3)
-            }
-        }
+        announcer.automationAction = { [weak self] ids, snooze in self?.automations.notificationAction(ids: ids, snooze: snooze) }
         notifier.start()
         // Resolving the login-shell PATH runs the user's shell, so do it before the first chat needs it.
         Task.detached { _ = LoginShell.path }
@@ -65,8 +60,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.announcer.signal(signal)
             self?.testControl?.recordNotified(signal)
         }
-        if config.config.integrations.githubAlerts { github.start() }
-        sentry.start()
 
         pet = PetController(store: store, signals: signals)
         pet.onAsk = { [weak self] prompt in self?.ask(prompt) }
@@ -117,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] old, new in self?.apply(config: new, previous: old) }
             .store(in: &cancellables)
 
+        setUpAutomations()
         do {
             try startServer()
         } catch {
@@ -141,21 +135,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.store.sweep() }
         })
 
-        reminders.isAgentWorking = { [weak self] in
-            guard let self else { return false }
-            return self.chat.state == .running || self.store.sessions.values.contains { $0.status == .running }
-        }
-        reminders.isBusy = { [weak self] in
-            guard let self else { return false }
-            return self.chat.isVisible || !self.chat.approvals.isEmpty || self.store.summary.status == .needsInput
-        }
-        reminders.onDeliver = { [weak self] kinds, working in
-            self?.announcer.reminder(kinds, agentWorking: working)
-            self?.pet.nudge(kinds.map(\.mood))
-        }
-        timers.append(Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reminders.tick() }
+    }
+
+    /// Builds the automation service: the file, the clock and the places an automation can show or run something.
+    private func setUpAutomations() {
+        let store = AutomationStore(defaults: { [config] in
+            AutomationMigration.defaults(from: config.config, sentryConfigured: AutomationDefaults.sentryConfigured)
         })
+        let engine = AutomationEngine(env: .init(
+            now: { [weak self] in Date().addingTimeInterval(self?.testClockOffset ?? 0) },
+            isAgentWorking: { [weak self] in
+                guard let self else { return false }
+                return self.chat.state == .running || self.store.sessions.values.contains { $0.status == .running }
+            },
+            isBusy: { [weak self] in
+                guard let self else { return false }
+                return self.chat.isVisible || !self.chat.approvals.isEmpty || self.store.summary.status == .needsInput
+            }))
+        engine.timing = { [config] in
+            let r = config.config.reminders
+            return .init(paused: r.paused, idleResetMinutes: r.idleResetMinutes, snoozeMinutes: r.snoozeMinutes)
+        }
+        // The app's one database. Features add their migrations to this list, in version order.
+        let database = Database.open(path: Paths.root.appendingPathComponent("ironpet.db"), migrations: AutomationState.migrations).database
+        let service = AutomationService(store: store, engine: engine, database: database)
+        service.notice = { [weak self] notice in self?.announcer.automation(notice) }
+        service.dismissNotice = { [weak self] id in self?.announcer.bubbles.dismiss(id) }
+        service.alert = { [weak self] signal, notify in self?.signals.add(signal, notify: notify) }
+        service.resolveAlert = { [weak self] id in self?.signals.dismiss(id) }
+        service.nudge = { [weak self] moods in self?.pet.nudge(moods, each: moods == [.done] ? 3 : 4) }
+        let workspace = store.paths.workspace
+        service.runPrompt = { automation, prompt in await AutomationPrompt.run(automation, prompt: prompt, workspace: workspace) }
+        automations = service
+        settingsModel.automations = service
+        settingsModel.showLogs = { [weak self] id in self?.logWindow.show(automation: id) }
+        service.logRetentionDays = { [config] in config.config.automations.logRetentionDays }
+        service.autoFixEnabled = { [config] in config.config.automations.autoFix }
+        service.requestFix = { [weak self] automation, trigger, error in
+            self?.sendToChat(AutomationAgentPrompts.fix(automation, trigger: trigger, error: error), show: false,
+                             title: "\(automation.name) failed", busyBody: "Ask \(self?.chat.agent.name ?? "the agent") to fix it?")
+        }
+        settingsModel.createWithAgent = { [weak self] request in
+            self?.sendToChat(AutomationAgentPrompts.newAutomation(request), show: true, title: "New automation", busyBody: "Send it to the chat?")
+        }
+        service.start()
+        timers.append(Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.automations.engine.tick() }
+        })
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.automations.engine.tick() }
+        // Update installed skills, and offer the others once the first-run window is out of the way.
+        if !TestControl.isEnabled {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.checkSkills() }
+        }
+    }
+
+    /// Updates the installed skills quietly when the switch is on, then offers to install or update the rest.
+    private func checkSkills() {
+        let manager = SkillManager.standard
+        if config.config.skills.autoUpdate { manager.updateInstalled() }
+        guard setupWindow == nil else { return }
+        let pending = SkillPrompt.pending(manager.entries(), dismissed: SkillPrompt.dismissed())
+        guard !pending.isEmpty else { return }
+        let message = SkillPrompt.message(pending)
+        announcer.automation(AutomationNotice(
+            id: "skill-install", symbol: "sparkles", tint: .info, title: message.title, body: message.body,
+            buttons: [.init(title: message.button, primary: true) { [weak self] in self?.installSkills(pending) },
+                      .init(title: "Not now") { SkillPrompt.dismiss(pending) }]))
+    }
+
+    private func installSkills(_ pending: [SkillManager.Entry]) {
+        do {
+            let results = try SkillManager.standard.install(names: pending.map(\.skill.name))
+            let outcomes = results.flatMap { $0.outcomes }
+            let problems = outcomes.filter { $0.result == "failed" || $0.result == "skipped" }
+            let linked = outcomes.filter { $0.result == "linked" || $0.result == "copied" }
+            let agents = Set(linked.map { $0.agent.name }).sorted()
+            var body = "Installed in ~/.agents/skills."
+            if !problems.isEmpty { body = SkillInstaller.describe(problems) }
+            else if !agents.isEmpty { body = "Installed for " + agents.joined(separator: ", ") + "." }
+            announcer.automation(AutomationNotice(
+                id: "skill-install", symbol: problems.isEmpty ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
+                tint: problems.isEmpty ? .good : .warn, title: problems.isEmpty ? "Skills installed" : "Skills installed with problems",
+                body: body, expires: 15))
+        } catch {
+            announcer.automation(AutomationNotice(id: "skill-install", symbol: "exclamationmark.triangle.fill", tint: .bad,
+                                                  title: "Could not install the skills", body: error.localizedDescription, expires: 20))
+        }
+    }
+
+    /// The tools Ghost's chat agents get: ironpet's automations, over a stdio bridge to the loopback server.
+    private func registerMCPServer() {
+        guard let executable = Bundle.main.executablePath else { return }
+        var env: [JSON] = []
+        if Paths.isIsolated { env.append(["name": "IRONPET_ROOT", "value": Paths.root.path]) }
+        let entry: JSON = ["name": "ironpet", "command": executable, "args": ["mcp"], "env": env]
+        ACPBackend.defaultMCPServers = { [entry] }
     }
 
     /// Applies settings that need more than being read at the point of use.
@@ -168,9 +242,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !new.voice.enabled { chat.voice.cancel() }
         if !new.meetings.enabled { meeting.dismiss() }
         startCallMonitor()
-        if new.integrations.githubAlerts != old.integrations.githubAlerts {
-            new.integrations.githubAlerts ? github.start() : github.stop()
-        }
         if new.pet.sprite != old.pet.sprite { pet.reloadAtlas() }
     }
 
@@ -263,7 +334,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             $0.pet.name = choices.name
             for agent in HookInstaller.Agent.allCases { $0.integrations.setWatches(choices.agents.contains(agent), agent) }
             $0.integrations.githubAlerts = choices.githubAlerts
-            $0.reminders.paused = !choices.reminders
+        }
+        // The welcome choices now switch automations, which hold the reminders and the GitHub watcher.
+        for reminder in AutomationMigration.reminders {
+            try? automations.store.update(reminder.id) { $0.enabled = choices.reminders }
+        }
+        if automations.store.automations.contains(where: { $0.id == AutomationMigration.githubID }) {
+            try? automations.store.update(AutomationMigration.githubID) { $0.enabled = choices.githubAlerts }
+        } else if choices.githubAlerts {
+            try? automations.store.replace(automations.store.automations + [AutomationDefaults.github(enabled: true)])
         }
         if !FileManager.default.fileExists(atPath: Config.file.path) { try? config.config.save() }
         // Hooks left by an older version that the user unticked.
@@ -317,7 +396,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 capture: { [weak self] region in self?.captureScreen(region: region) },
                 notificationAction: { [weak self] id, allow in self?.notifier.onApprovalAction?(id, allow) },
                 signals: signals,
-                github: github,
                 meeting: meeting,
                 meetingFrame: { [weak self] in
                     guard let screen = NSScreen.screens.first else { return .zero }
@@ -338,6 +416,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 simulateCall: { [weak self] app, event in self?.simulateCall(app, event) },
                 callOffer: { [weak self] in
                     self?.announcer.bubbles.bubbles.first { $0.id == Self.callBubbleID }?.title ?? ""
+                },
+                automations: automations,
+                advanceClock: { [weak self] seconds in self?.testClockOffset += seconds },
+                bubbles: { [weak self] in
+                    (self?.announcer.bubbles.bubbles ?? []).map {
+                        ["id": $0.id, "title": $0.title, "body": $0.body ?? "", "buttons": $0.actions.map(\.title)]
+                    }
+                },
+                pressBubbleButton: { [weak self] id, title in
+                    guard let action = self?.announcer.bubbles.bubbles.first(where: { $0.id == id })?.actions.first(where: { $0.title == title }) else { return false }
+                    action.run()
+                    return true
                 }
             ))
             testControl = control
@@ -350,10 +440,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         server.status = { snapshot.data }
         pet.onRefresh = { [weak self] mood in
             guard let self else { return }
-            snapshot.update(store: self.store, mood: mood)
+            let service = self.automations
+            snapshot.update(store: self.store, mood: mood, automations: (service?.store.automations ?? []).map { a in
+                var entry = service!.summary(a)
+                entry["recentRuns"] = service!.history(a.id, limit: 5)
+                return entry
+            })
+        }
+        server.onAutomation = { [weak self] request, respond in
+            AutomationMCP.route(request, service: { self?.automations }, respond: respond)
         }
         try server.start()
         self.server = server
+        registerMCPServer()
         try String(server.port).write(to: Paths.portFile, atomically: true, encoding: .utf8)
         NSLog("ironpet: listening on 127.0.0.1:\(server.port)")
     }
@@ -425,6 +524,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func openSession(_ id: String) {
         guard let session = store.sessions[id] else { return }
         pet.jump(to: session)
+    }
+
+    /// Starts a new chat and sends `prompt` to the agent. Without `show`, the chat stays hidden and Ghost says when the agent
+    /// needs something. When the chat is busy with a turn or an approval, nothing is replaced: a bubble offers to send it.
+    private func sendToChat(_ prompt: String, show: Bool, title: String, busyBody: String) {
+        if chat.isRunning || !chat.approvals.isEmpty {
+            announcer.automation(AutomationNotice(
+                id: "automation-chat:\(title)", symbol: "wrench.and.screwdriver.fill", tint: .warn, title: title, body: busyBody,
+                buttons: [.init(title: "Send", primary: true) { [weak self] in self?.sendToChat(prompt, show: true, title: title, busyBody: busyBody) },
+                          .init(title: "Not now") {}]))
+            return
+        }
+        chat.newChat()
+        chat.useNoProject()
+        chat.input = prompt
+        chat.send()
+        if show { showChat() } else {
+            announcer.automation(AutomationNotice(
+                id: "automation-chat:\(title)", symbol: "wrench.and.screwdriver.fill", tint: .info, title: title,
+                body: "Asked \(chat.agent.name) to fix it.", buttons: [.init(title: "Open chat", primary: true) { [weak self] in self?.showChat() }], expires: 20))
+        }
     }
 
     /// "Ask Ghost": a new chat with the prompt ready to send.
@@ -608,17 +728,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         login.state = LoginItem.isEnabled ? .on : .off
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",")
         for item in [system, login, settings] { item.target = self }
-        return [meetingMenuItem(), settings, reminders.menuItem(), integrationsMenuItem(), system, login].compactMap { $0 }
+        return [meetingMenuItem(), settings, automationsMenuItem(), integrationsMenuItem(), system, login].compactMap { $0 }
     }
 
     private func integrationsMenuItem() -> NSMenuItem {
         let config = config.config.integrations
-        let github = NSMenuItem(title: "GitHub PR & CI alerts", action: #selector(toggleGitHubAlerts), keyEquivalent: "")
-        github.state = config.githubAlerts ? .on : .off
         let mcp = NSMenuItem(title: "Share MCP sign-ins across folders…", action: #selector(toggleMCPSharing), keyEquivalent: "")
         mcp.state = config.shareMCPSignIns ? .on : .off
         let submenu = NSMenu()
-        for item in [github, mcp] {
+        for item in [mcp] {
             item.target = self
             submenu.addItem(item)
         }
@@ -627,8 +745,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return item
     }
 
-    @objc private func toggleGitHubAlerts() {
-        config.update { $0.integrations.githubAlerts.toggle() }
+    /// Every automation with a switch, plus the pause for all reminders.
+    private func automationsMenuItem() -> NSMenuItem {
+        let submenu = NSMenu()
+        for a in automations.store.automations {
+            let item = NSMenuItem(title: a.name, action: #selector(toggleAutomation(_:)), keyEquivalent: "")
+            item.representedObject = a.id
+            item.state = a.enabled ? .on : .off
+            item.target = self
+            submenu.addItem(item)
+        }
+        submenu.addItem(.separator())
+        let pause = NSMenuItem(title: "Pause reminders", action: #selector(toggleReminderPause), keyEquivalent: "")
+        pause.state = config.config.reminders.paused ? .on : .off
+        pause.target = self
+        submenu.addItem(pause)
+        let logs = NSMenuItem(title: "Show logs…", action: #selector(showAutomationLogs), keyEquivalent: "")
+        logs.target = self
+        submenu.addItem(logs)
+        let more = NSMenuItem(title: "Edit automations…", action: #selector(showSettings(_:)), keyEquivalent: "")
+        more.target = self
+        submenu.addItem(more)
+        let item = NSMenuItem(title: "Automations", action: nil, keyEquivalent: "")
+        item.submenu = submenu
+        return item
+    }
+
+    @objc private func showAutomationLogs() {
+        logWindow.show()
+    }
+
+    @objc private func toggleAutomation(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        try? automations.store.update(id) { $0.enabled.toggle() }
+    }
+
+    @objc private func toggleReminderPause() {
+        config.update { $0.reminders.paused.toggle() }
     }
 
     @objc private func toggleMCPSharing() {

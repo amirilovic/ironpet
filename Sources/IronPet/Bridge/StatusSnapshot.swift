@@ -8,13 +8,13 @@ final class StatusSnapshot: @unchecked Sendable {
     var data: Data { lock.withLock { current } }
 
     @MainActor
-    func update(store: SessionStore, mood: PetMood) {
+    func update(store: SessionStore, mood: PetMood, automations: [[String: Any]] = []) {
         let sessions = store.sessions.values.map { s in
             ["id": s.id, "source": s.source.rawValue, "status": s.status.label, "workspace": s.workspaceName,
              "prompt": s.prompt ?? "", "detail": s.detail ?? "", "iterm": s.origin.itermSessionID ?? "",
              "summary": s.summary ?? ""]
         }
-        let object: [String: Any] = ["mood": mood.rawValue, "sessions": sessions]
+        let object: [String: Any] = ["mood": mood.rawValue, "sessions": sessions, "automations": automations]
         let encoded = (try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])) ?? Data()
         lock.withLock { current = encoded }
     }
