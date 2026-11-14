@@ -21,6 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let meeting = MeetingController()
     private var meetingPanel: MeetingPanel!
     private var meetingBubbleHidden = false
+    private lazy var callPrompt = CallPrompt(
+        isEnabled: { ConfigStore.shared.config.meetings.enabled && ConfigStore.shared.config.meetings.offerToRecordCalls },
+        isBusy: { [weak self] in self?.meeting.isBusy ?? true })
+    private var callMonitor: CallMonitor?
     private var meetingBubbleRemoving = false
     private var hotKeys: [HotKey] = []
     private var previousApp: NSRunningApplication?
@@ -95,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // No dialog may block an automated run.
             meeting.confirmConsent = { true }
         }
+        startCallMonitor()
         chat.onAttention = { [weak self] title in self?.announcer.chat(title) }
         chat.onApprovalNeeded = { [weak self] approval in
             self?.announcer.approval(id: approval.id, title: approval.title, detail: approval.detail)
@@ -162,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || new.meetings.enabled != old.meetings.enabled { registerHotKeys() }
         if !new.voice.enabled { chat.voice.cancel() }
         if !new.meetings.enabled { meeting.dismiss() }
+        startCallMonitor()
         if new.integrations.githubAlerts != old.integrations.githubAlerts {
             new.integrations.githubAlerts ? github.start() : github.stop()
         }
@@ -328,6 +334,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 },
                 meetingBubble: { [weak self] show in
                     if show { self?.showMeetingBubble() } else { self?.announcer.bubbles.dismiss(Self.meetingBubbleID) }
+                },
+                simulateCall: { [weak self] app, event in self?.simulateCall(app, event) },
+                callOffer: { [weak self] in
+                    self?.announcer.bubbles.bubbles.first { $0.id == Self.callBubbleID }?.title ?? ""
                 }
             ))
             testControl = control
@@ -454,6 +464,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static let meetingBubbleID = "meeting"
+    static let callBubbleID = "meeting-call"
+
+    // MARK: Call detection
+
+    /// Watches the microphone while meetings and call offers are on, and stops otherwise.
+    private func startCallMonitor() {
+        let meetings = config.config.meetings
+        let on = meetings.enabled && meetings.offerToRecordCalls
+        if on, callMonitor == nil {
+            let detector = CallDetector(source: { CallMonitor.micClients() })
+            detector.onStarted = { [weak self] app in self?.callEvent(app, started: true) }
+            detector.onEnded = { [weak self] app in self?.callEvent(app, started: false) }
+            callMonitor = CallMonitor(detector: detector)
+        }
+        if on { callMonitor?.start() } else {
+            callMonitor?.stop()
+            announcer.bubbles.dismiss(Self.callBubbleID)
+        }
+    }
+
+    private func callEvent(_ app: String, started: Bool) {
+        let action = started ? callPrompt.callStarted(app) : callPrompt.callEnded(app)
+        if !started, case .none = action { announcer.bubbles.dismiss(Self.callBubbleID) }
+        switch action {
+        case .offerRecord(let id): showCallBubble(id, stop: false)
+        case .offerStop(let id): showCallBubble(id, stop: true)
+        case nil: break
+        }
+    }
+
+    private func appName(_ bundleID: String) -> String {
+        NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleID }?.localizedName
+            ?? (bundleID == "net.whatsapp.WhatsApp" ? "WhatsApp" : bundleID)
+    }
+
+    private func showCallBubble(_ bundleID: String, stop: Bool) {
+        let name = appName(bundleID)
+        let close = { [weak self] in self?.announcer.bubbles.dismiss(Self.callBubbleID) }
+        let actions: [Bubble.Action] = stop
+            ? [.init(title: "Stop recording", style: .primary) { [weak self] in
+                    self?.meeting.stop()
+                    close()
+                },
+               .init(title: "Keep recording") { close() }]
+            : [.init(title: "Record", style: .primary) { [weak self] in
+                    close()
+                    self?.recordCall(bundleID, name: name)
+                },
+               .init(title: "Not now") { [weak self] in
+                    self?.callPrompt.notNow(bundleID)
+                    close()
+                }]
+        announcer.bubbles.show(Bubble(id: Self.callBubbleID, symbol: "phone.fill", tint: .red,
+                                      title: stop ? "Call ended. Stop recording?" : "Looks like a call in \(name). Record it?",
+                                      actions: actions))
+    }
+
+    /// Opens the picker with the call's app chosen and starts, like the user pressing Start there.
+    private func recordCall(_ bundleID: String, name: String) {
+        guard meeting.phase == .idle || meeting.phase == .done else { return }
+        meeting.showPicker()
+        guard meeting.phase == .choosing else { return }
+        callPrompt.accepted(bundleID)
+        meeting.choice = .app(AudioApp(bundleID: bundleID, name: name))
+        meeting.start()
+    }
+
+    private func simulateCall(_ bundleID: String, _ event: String) {
+        switch event {
+        case "record": recordCall(bundleID, name: appName(bundleID))
+        case "not-now":
+            callPrompt.notNow(bundleID)
+            announcer.bubbles.dismiss(Self.callBubbleID)
+        case "ended": callEvent(bundleID, started: false)
+        default: callEvent(bundleID, started: true)
+        }
+    }
 
     private func removeMeetingBubble() {
         meetingBubbleRemoving = true

@@ -48,6 +48,8 @@ struct Config: Codable, Equatable {
         var summaryModel: String?
         /// Run the summary agent as soon as the transcript is final.
         var autoSummary = true
+        /// Ghost offers to record when another app holds the microphone for a call. Only applies with `enabled` on.
+        var offerToRecordCalls = true
     }
 
     struct Reminders: Codable, Equatable {

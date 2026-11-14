@@ -115,7 +115,7 @@ Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rena
   },
   "integrations": { "githubAlerts": false, "shareMCPSignIns": false },
   "voice": { "enabled": false, "baseUrl": "http://localhost:8000/v1", "model": "mlx-community/parakeet-tdt-0.6b-v3" },
-  "meetings": { "enabled": false, "lastApp": "", "summaryAgent": "claude", "summaryModel": "sonnet", "autoSummary": true },
+  "meetings": { "enabled": false, "lastApp": "", "summaryAgent": "claude", "summaryModel": "sonnet", "autoSummary": true, "offerToRecordCalls": true },
   "openIn": "auto",
   "editors": [{ "name": "My IDE", "bundleId": "com.x.ide", "urlTemplate": "myide://open?path={cwd}" }]
 }
@@ -215,6 +215,7 @@ Turn it on under **Settings → Meetings**. The switch only turns on after the v
 | Summary agent | `meetings.summaryAgent` | An ACP agent id such as `"claude"` or `"cursor"`. Settings lists the installed agents |
 | Summary model | `meetings.summaryModel` | A model id the agent reported in the chat. Unset uses the agent's default. Settings offers the models the agent listed the last time it ran in the chat |
 | Summarize automatically | `meetings.autoSummary` | Default on. Off means no agent runs |
+| Offer to record calls | `meetings.offerToRecordCalls` | Default on, and only applies with meetings on. When another app holds the microphone for about 10 seconds, Ghost asks whether to record it. Nothing records until you click Record |
 | Start or stop shortcut | `hotkeys.meeting` | No default. Registered only while meetings are on |
 | Last recorded app | `meetings.lastApp` | Written by ironpet: a bundle id, or `"all"` |
 

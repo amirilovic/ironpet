@@ -35,6 +35,7 @@ enum AudioApps {
     static let meetingApps = [
         "us.zoom.xos", "com.microsoft.teams2", "com.microsoft.teams", "com.cisco.webexmeetingsapp",
         "Cisco-Systems.Spark", "com.webex.meetingmanager", "com.tinyspeck.slackmacgap", "com.apple.FaceTime",
+        "net.whatsapp.WhatsApp", "desktop.WhatsApp",
     ]
     static let browsers = [
         "com.google.Chrome", "com.apple.Safari", "company.thebrowser.Browser", "org.mozilla.firefox",

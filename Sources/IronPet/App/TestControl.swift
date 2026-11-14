@@ -28,6 +28,10 @@ final class TestControl {
         let meetingUI: () -> (bubble: Bool, button: Bool)
         /// Closes the meeting bubble as the user would (`false`), or clicks the pet's Recording button (`true`).
         let meetingBubble: (_ show: Bool) -> Void
+        /// Plays a call event for an app as if the detector had reported it: "started", "ended", "record" or "not-now".
+        let simulateCall: (_ bundleID: String, _ event: String) -> Void
+        /// The title of the call bubble on screen, or "".
+        let callOffer: () -> String
     }
 
     private let chat: ChatSession
@@ -145,6 +149,9 @@ final class TestControl {
         case ("POST", "/test/meeting/show-bubble"):
             actions.meetingBubble(true)
             return meetingSnapshot()
+        case ("POST", "/test/meeting/call"):
+            actions.simulateCall(body["app"] as? String ?? "", body["event"] as? String ?? "started")
+            return meetingSnapshot()
         case ("POST", "/test/meeting/dismiss"):
             actions.meeting.dismiss()
             return meetingSnapshot()
@@ -214,6 +221,7 @@ final class TestControl {
             "selected": meeting.choice.name,
             "frame": [frame.minX, frame.minY, frame.width, frame.height],
             "menuTitle": actions.meetingMenuTitle(),
+            "callOffer": actions.callOffer(),
             "bubbleShown": actions.meetingUI().bubble,
             "recordingButton": actions.meetingUI().button,
         ])

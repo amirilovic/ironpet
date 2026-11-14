@@ -435,6 +435,14 @@ private struct MeetingSettings: View {
                 Text("Off by default. Turning it on needs a voice server under Settings → Voice that passes Test connection. When on, \"Start meeting transcript\" appears in the pet's menu. It records your microphone as Me and one app's audio as Them, sends both to that server in chunks, and keeps the audio and transcript in ~/.ironpet/meetings. macOS asks for Screen & System Audio Recording the first time you start one. Tell everyone on the call.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section {
+                Toggle("Offer to record calls", isOn: Binding(
+                    get: { meetings.offerToRecordCalls }, set: { on in store.update { $0.meetings.offerToRecordCalls = on } }))
+                    .disabled(!meetings.enabled)
+            } footer: {
+                Text("When another app, such as WhatsApp, Zoom or a browser, uses your microphone for about 10 seconds, Ghost asks whether to record the call. Nothing is recorded until you click Record.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Summary") {
                 Toggle("Summarize automatically when a meeting ends", isOn: Binding(
                     get: { meetings.autoSummary }, set: { on in store.update { $0.meetings.autoSummary = on } }))
