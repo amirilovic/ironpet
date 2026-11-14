@@ -28,6 +28,12 @@ enum MeetingError: LocalizedError {
 final class LocalTrack: TrackSource {
     private let source: StreamingSource
 
+    /// Called, from any thread, when the source dies mid-recording and could not recover.
+    var onFailure: (@Sendable (String) -> Void)? {
+        get { source.onFailure }
+        set { source.onFailure = newValue }
+    }
+
     init(_ source: StreamingSource) {
         self.source = source
     }
