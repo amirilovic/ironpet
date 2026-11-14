@@ -652,6 +652,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.runModal()
     }
 
+    /// Edit > Paste. Large text and images in the chat become attachments; everything else goes to the first responder.
+    @objc func paste(_ sender: Any?) {
+        if NSApp.keyWindow === chatPanel, chatPanel.attachPaste() { return }
+        NSApp.keyWindow?.firstResponder?.tryToPerform(#selector(NSText.paste(_:)), with: sender)
+    }
+
+    @objc func pasteAsPlainText(_ sender: Any?) {
+        if NSApp.keyWindow === chatPanel, chatPanel.attachPaste() { return }
+        NSApp.keyWindow?.firstResponder?.tryToPerform(#selector(NSTextView.pasteAsPlainText(_:)), with: sender)
+    }
+
     private func makeMainMenu() -> NSMenu {
         let main = NSMenu()
         let appItem = NSMenuItem()
@@ -663,7 +674,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "Quit ironpet", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu
-        main.addItem(submenu("Edit", Self.editItems()))
+        let edit = Self.editItems()
+        // The selector is the same as NSText's `paste:`, so without an explicit target the text view would win.
+        for item in edit where item.action == #selector(AppDelegate.paste(_:)) || item.action == #selector(AppDelegate.pasteAsPlainText(_:)) {
+            item.target = self
+        }
+        main.addItem(submenu("Edit", edit))
         let newChat = NSMenuItem(title: "New Chat", action: #selector(newChat(_:)), keyEquivalent: "n")
         newChat.target = self
         main.addItem(submenu("Chat", [newChat]))
@@ -689,8 +705,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .separator(),
             item("Cut", #selector(NSText.cut(_:)), "x"),
             item("Copy", #selector(NSText.copy(_:)), "c"),
-            item("Paste", #selector(NSText.paste(_:)), "v"),
-            item("Paste and Match Style", #selector(NSTextView.pasteAsPlainText(_:)), "v", [.command, .option, .shift]),
+            item("Paste", #selector(AppDelegate.paste(_:)), "v"),
+            item("Paste and Match Style", #selector(AppDelegate.pasteAsPlainText(_:)), "v", [.command, .option, .shift]),
             item("Delete", #selector(NSText.delete(_:)), ""),
             item("Select All", #selector(NSText.selectAll(_:)), "a"),
         ]
