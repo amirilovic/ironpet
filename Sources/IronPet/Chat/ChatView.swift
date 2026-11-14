@@ -777,32 +777,30 @@ private struct TypingIndicator: View {
     }
 }
 
-/// Three dots that light up in turn, animated by Core Animation so SwiftUI never re-evaluates for a frame.
-private struct PulsingDots: NSViewRepresentable {
+/// Three dots that pulse in turn, animated by Core Animation so SwiftUI never re-evaluates for a frame.
+struct PulsingDots: NSViewRepresentable {
     func makeNSView(context: Context) -> DotsView { DotsView() }
     func updateNSView(_ view: DotsView, context: Context) {}
 
     final class DotsView: NSView {
+        static let cycle: CFTimeInterval = 1.3
+        static let reducedMotionCycle: CFTimeInterval = 2.6
+        static let animationKey = "pulse"
+
         private var dots: [CALayer] = []
+        private var occlusionObserver: NSObjectProtocol?
+        /// Tests set this to exercise the Reduce Motion path.
+        var reduceMotionOverride: Bool?
 
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
-            for i in 0..<3 {
+            for _ in 0..<3 {
                 let dot = CALayer()
                 dot.bounds = CGRect(x: 0, y: 0, width: 6, height: 6)
                 dot.cornerRadius = 3
                 dot.backgroundColor = NSColor.secondaryLabelColor.cgColor
                 dot.opacity = 0.35
-                // One third of the cycle each, like the old 0.15s phase steps.
-                let pulse = CAKeyframeAnimation(keyPath: "opacity")
-                pulse.values = [1, 0.35, 0.35]
-                pulse.keyTimes = [0, 0.33, 1]
-                pulse.duration = 0.45
-                pulse.beginTime = CACurrentMediaTime() + 0.15 * Double(i)
-                pulse.repeatCount = .infinity
-                pulse.calculationMode = .discrete
-                dot.add(pulse, forKey: "pulse")
                 layer?.addSublayer(dot)
                 dots.append(dot)
             }
@@ -810,7 +808,57 @@ private struct PulsingDots: NSViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError() }
 
+        deinit { if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) } }
+
         override var isFlipped: Bool { true }
+
+        var reduceMotion: Bool { reduceMotionOverride ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+        /// The opacity pulse for dot `index`, started at `layerTime` (the layer's own clock, not the global one).
+        static func animation(index: Int, layerTime: CFTimeInterval, reduceMotion: Bool) -> CAKeyframeAnimation {
+            let cycle = reduceMotion ? reducedMotionCycle : Self.cycle
+            let pulse = CAKeyframeAnimation(keyPath: "opacity")
+            pulse.values = [0.35, 1, 0.35]
+            pulse.keyTimes = [0, 0.5, 1]
+            pulse.timingFunctions = [CAMediaTimingFunction(name: .easeInEaseOut), CAMediaTimingFunction(name: .easeInEaseOut)]
+            pulse.duration = cycle
+            pulse.beginTime = layerTime + cycle / 3 * Double(index)
+            pulse.repeatCount = .infinity
+            pulse.isRemovedOnCompletion = false
+            return pulse
+        }
+
+        /// Removes any old animations and adds fresh ones, so a re-hosted view never has stale or doubled pulses.
+        func installAnimations() {
+            for (i, dot) in dots.enumerated() {
+                dot.removeAnimation(forKey: Self.animationKey)
+                let now = dot.convertTime(CACurrentMediaTime(), from: nil)
+                dot.add(Self.animation(index: i, layerTime: now, reduceMotion: reduceMotion), forKey: Self.animationKey)
+            }
+        }
+
+        private func removeAnimations() {
+            dots.forEach { $0.removeAnimation(forKey: Self.animationKey) }
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let occlusionObserver {
+                NotificationCenter.default.removeObserver(occlusionObserver)
+                self.occlusionObserver = nil
+            }
+            guard let window else { removeAnimations(); return }
+            installAnimations()
+            occlusionObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                // Safe: the observer was registered with queue: .main, so this closure already runs on the main thread.
+                MainActor.assumeIsolated {
+                    guard let self, let window = self.window, window.occlusionState.contains(.visible) else { return }
+                    self.installAnimations()
+                }
+            }
+        }
 
         override func layout() {
             super.layout()
@@ -820,6 +868,8 @@ private struct PulsingDots: NSViewRepresentable {
         override func viewDidChangeEffectiveAppearance() {
             dots.forEach { $0.backgroundColor = NSColor.secondaryLabelColor.cgColor }
         }
+
+        func dotAnimation(_ index: Int) -> CAAnimation? { dots[index].animation(forKey: Self.animationKey) }
     }
 }
 
