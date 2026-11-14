@@ -215,9 +215,9 @@ struct ChatView: View {
 
     private var hints: some View {
         HStack(spacing: 14) {
-            // With voice notes on, the hold-to-talk shortcut is ironpet's own; otherwise it is Wispr Flow's fn.
+            // With voice notes on, the voice shortcut is ironpet's own; otherwise it is Wispr Flow's fn.
             if let voiceKey = VoiceController.hotkey(in: config.config).flatMap(Shortcut.display) {
-                hint("mic.fill", keys: [voiceKey], "hold to talk")
+                hint("mic.fill", keys: [voiceKey], config.config.voice.holdToTalk ? "hold to talk" : "press to talk")
             } else {
                 hint("mic.fill", keys: ["fn"], "talk")
             }

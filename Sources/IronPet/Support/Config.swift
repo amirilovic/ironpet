@@ -18,7 +18,7 @@ struct Config: Codable, Equatable {
         var chat = "cmd+opt+g"
         var captureWindow = "cmd+opt+shift+g"
         var captureRegion = "cmd+opt+ctrl+g"
-        /// Hold to record a voice note, release to transcribe it. Only registered while voice notes are on.
+        /// Starts and stops a voice note (see `Voice.holdToTalk`). Only registered while voice notes are on.
         var voice = "cmd+opt+v"
         /// Starts the meeting picker, or stops a running meeting. No default binding. Only registered while meeting
         /// transcripts are on.
@@ -33,6 +33,8 @@ struct Config: Codable, Equatable {
         /// The server's base URL; `/audio/transcriptions` is added to it.
         var baseUrl = "http://localhost:8000/v1"
         var model = "mlx-community/parakeet-tdt-0.6b-v3"
+        /// On: hold the shortcut to record and release to transcribe. Off: press once to start and again to stop.
+        var holdToTalk = true
     }
 
     /// Meeting transcripts: the mic and one app's audio go to the voice server in chunks, and an agent summarizes the

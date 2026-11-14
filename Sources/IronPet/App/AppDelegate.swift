@@ -8,6 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = SessionStore()
     private let signals = SignalStore()
     private let chat = ChatSession()
+    private lazy var recordingKeys = RecordingKeys(voice: chat.voice, heldModifiers: {
+        Shortcut(ConfigStore.shared.config.hotkeys.voice)?.modifiers ?? 0
+    })
     private let notifier = Notifier()
     private let installer = HookInstaller()
     private var automations: AutomationService!
@@ -103,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in self?.pet.refreshMood() }
             .store(in: &cancellables)
         registerHotKeys()
+        _ = recordingKeys // Starts following the recording phase.
         config.$config
             .removeDuplicates()
             .scan((Config(), config.config)) { ($0.1, $1) }
@@ -264,14 +268,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if hotKey.isRegistered { hotKeys.append(hotKey) } else { failed.insert(text) }
         }
-        // Hold to talk. Only registered with voice notes on, so a disabled feature owns no key.
+        // Voice shortcut (hold to talk or press to toggle). Only registered with voice notes on, so a disabled feature owns no key.
         if let text = VoiceController.hotkey(in: config.config), let shortcut = Shortcut(text) {
+            // The mode is read on every press, so flipping the switch in Settings applies to the next one.
             let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, id: 4, onRelease: { [weak self] in
-                MainActor.assumeIsolated { self?.chat.voice.stop() }
+                MainActor.assumeIsolated {
+                    self?.chat.voice.shortcutReleased(holdToTalk: ConfigStore.shared.config.voice.holdToTalk)
+                }
             }, handler: { [weak self] in
                 MainActor.assumeIsolated {
-                    self?.showChat()
-                    self?.chat.voice.start()
+                    guard let self else { return }
+                    self.showChat()
+                    self.chat.voice.shortcutPressed()
                 }
             })
             if hotKey.isRegistered { hotKeys.append(hotKey) } else { failed.insert(text) }

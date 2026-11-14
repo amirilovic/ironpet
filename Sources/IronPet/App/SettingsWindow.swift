@@ -358,9 +358,11 @@ private struct VoiceSettings: View {
                 }
             }
             Section {
-                ShortcutRow(title: "Hold to talk", path: \.voice, model: model)
+                ShortcutRow(title: "Voice shortcut", path: \.voice, model: model)
+                Toggle("Hold to talk", isOn: Binding(get: { store.config.voice.holdToTalk },
+                                                     set: { on in store.update { $0.voice.holdToTalk = on } }))
             } footer: {
-                Text("The transcript lands in the chat input, or is sent right away when \"Send after dictation\" is on in the chat's settings menu. Hold the shortcut to record and release to transcribe. The key is kept in your Keychain, not in config.json.")
+                Text("The transcript lands in the chat input, or is sent right away when \"Send after dictation\" is on in the chat's settings menu. With Hold to talk on, hold the shortcut to record and release to transcribe. With it off, press once to start and again to stop. While recording, Enter also stops and transcribes, and Esc cancels. The key is kept in your Keychain, not in config.json.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
