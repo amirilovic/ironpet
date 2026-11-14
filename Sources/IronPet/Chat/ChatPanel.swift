@@ -61,6 +61,7 @@ final class ChatPanel: NSPanel {
 
     /// Esc stops a running turn first, like the stop button; only an idle chat closes.
     override func cancelOperation(_ sender: Any?) {
+        if session.dismissSlash() { return }
         if session.isRunning { session.stop() } else { close() }
     }
 
