@@ -90,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.announcer.meetingSummary(url)
             self?.testControl?.recordMeetingNotified(url)
         }
-        meeting.onOpenInChat = { [weak self] folder, files in self?.openMeetingInChat(folder, files) }
+        meeting.onOpenInChat = { [weak self] files in self?.openMeetingInChat(files) }
         if TestControl.isEnabled {
             // No dialog may block an automated run.
             meeting.confirmConsent = { true }
@@ -507,12 +507,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return item
     }
 
-    /// A new chat in the meeting folder with the transcript, and the summary if there is one, attached.
-    private func openMeetingInChat(_ folder: URL, _ files: [URL]) {
-        chat.newChat()
+    /// Adds the transcript, and the summary if there is one, to the current chat. Never changes the chat's
+    /// session or folder.
+    private func openMeetingInChat(_ files: [URL]) {
+        chat.attach(files)
         showChat()
-        chat.use(folder)
-        chat.attachments = files
     }
 
     private func hookMenuItems() -> [NSMenuItem] {

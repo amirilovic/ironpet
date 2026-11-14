@@ -314,6 +314,11 @@ final class ChatSession: ObservableObject {
         attachments.append(screenshot)
     }
 
+    /// Appends files to the current attachments, skipping ones already there.
+    func attach(_ files: [URL]) {
+        attachments += files.filter { !attachments.contains($0) }
+    }
+
     func newChat() {
         stop()
         shutdownAgent()

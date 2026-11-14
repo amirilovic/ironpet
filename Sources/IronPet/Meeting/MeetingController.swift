@@ -85,7 +85,9 @@ final class MeetingController: ObservableObject {
     var runningApps: () -> [AudioApp] = { AudioApps.running() }
     /// The panel appears and disappears with the phase.
     var onSummaryReady: ((URL) -> Void)?
-    var onOpenInChat: ((URL, [URL]) -> Void)?
+    var onOpenInChat: (([URL]) -> Void)?
+    /// Opens a meeting file. Tests replace it.
+    var openFile: (URL) -> Void = { MeetingFileOpener.open($0) }
     var onChange: (() -> Void)?
     /// Agent and model of the last summary run, for `GET /test/meeting`.
     private(set) var lastSummaryRequest: (agent: String, model: String?)?
@@ -609,19 +611,19 @@ final class MeetingController: ObservableObject {
     // MARK: After the meeting
 
     func openTranscript() {
-        if let url = transcriptURL { NSWorkspace.shared.open(url) }
+        if let url = transcriptURL { openFile(url) }
     }
 
     func openSummary() {
-        if let url = summaryURL, FileManager.default.fileExists(atPath: url.path) { NSWorkspace.shared.open(url) }
+        if let url = summaryURL, FileManager.default.fileExists(atPath: url.path) { openFile(url) }
     }
 
-    /// A new chat with the transcript (and the summary, if there is one) attached.
+    /// Attaches the transcript (and the summary, if there is one) to the current chat.
     func openInChat() {
-        guard let folder, let transcript = transcriptURL else { return }
+        guard let transcript = transcriptURL else { return }
         var files = [transcript]
         if let summary = summaryURL, FileManager.default.fileExists(atPath: summary.path) { files.append(summary) }
-        onOpenInChat?(folder, files)
+        onOpenInChat?(files)
     }
 
     // MARK: Plumbing
@@ -695,5 +697,23 @@ final class MeetingController: ObservableObject {
         alert.addButton(withTitle: "Cancel")
         NSApp.activate()
         return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+
+/// Opens meeting markdown in TextEdit, because the system default for .md may be an app that shows nothing.
+/// Falls back to revealing the file in Finder when TextEdit cannot open it.
+enum MeetingFileOpener {
+    static let textEditID = "com.apple.TextEdit"
+
+    static func open(
+        _ url: URL,
+        appURL: (String) -> URL? = { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) },
+        openWith: (URL, URL) -> Void = { file, app in
+            NSWorkspace.shared.open([file], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        },
+        reveal: (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
+    ) {
+        if let app = appURL(textEditID) { openWith(url, app) } else { reveal(url) }
     }
 }

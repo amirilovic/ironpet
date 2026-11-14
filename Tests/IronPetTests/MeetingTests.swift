@@ -267,3 +267,37 @@ final class SummaryRequestTests: XCTestCase {
         }
     }
 }
+
+final class MeetingOpenTests: XCTestCase {
+    func testOpenerTargetsTextEdit() {
+        let file = URL(fileURLWithPath: "/tmp/m/transcript.md")
+        let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
+        var asked: String?
+        var opened: (URL, URL)?
+        MeetingFileOpener.open(file, appURL: { asked = $0; return textEdit }, openWith: { opened = ($0, $1) }, reveal: { _ in XCTFail("revealed") })
+        XCTAssertEqual(asked, "com.apple.TextEdit")
+        XCTAssertEqual(opened?.0, file)
+        XCTAssertEqual(opened?.1, textEdit)
+    }
+
+    func testOpenerRevealsWhenTextEditIsMissing() {
+        let file = URL(fileURLWithPath: "/tmp/m/summary.md")
+        var revealed: URL?
+        MeetingFileOpener.open(file, appURL: { _ in nil }, openWith: { _, _ in XCTFail("opened") }, reveal: { revealed = $0 })
+        XCTAssertEqual(revealed, file)
+    }
+
+    @MainActor
+    func testOpenInChatKeepsSessionAndFolder() {
+        let session = ChatSession(restore: false)
+        let folder = URL(fileURLWithPath: "/tmp/project")
+        session.use(folder)
+        let existing = URL(fileURLWithPath: "/tmp/a.png")
+        session.attachments = [existing]
+        let transcript = URL(fileURLWithPath: "/tmp/m/transcript.md")
+        let summary = URL(fileURLWithPath: "/tmp/m/summary.md")
+        session.attach([transcript, summary, existing])
+        XCTAssertEqual(session.attachments, [existing, transcript, summary])
+        XCTAssertEqual(session.workspace, folder)
+    }
+}
