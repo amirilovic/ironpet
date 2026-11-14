@@ -129,17 +129,17 @@ struct SessionListView: View {
     @ViewBuilder private var alerts: some View {
         if signals.signals.isEmpty {
             EmptyState(symbol: "bell.slash", title: "No alerts",
-                       detail: "CI, review and Sentry alerts show up here.")
+                       detail: "Alerts from your automations show up here, such as CI, reviews and errors.")
         } else {
             ScrollView {
                 VStack(spacing: 2) {
                     ForEach(signals.signals) { signal in
                         SignalRow(signal: signal,
                                   onOpen: {
-                                      NSWorkspace.shared.open(signal.url)
+                                      if let url = signal.url { NSWorkspace.shared.open(url) }
                                       signals.dismiss(signal.id)
                                   },
-                                  onAsk: signal.kind.prompt(for: signal).map { prompt in { onAsk(prompt) } },
+                                  onAsk: signal.ask.map { prompt in { onAsk(prompt) } },
                                   onDismiss: { signals.dismiss(signal.id) })
                     }
                 }
@@ -282,14 +282,14 @@ private struct SignalRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: signal.kind.symbol)
+            Image(systemName: signal.symbol)
                 .font(.system(size: 13))
                 .foregroundStyle(color)
                 .frame(width: 18, height: 18)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(signal.kind.label).font(.caption.weight(.semibold)).foregroundStyle(color)
+                    Text(signal.label).font(.caption.weight(.semibold)).foregroundStyle(color)
                     Spacer(minLength: 4)
                     if hovering {
                         IconButton(symbol: "xmark", help: "Dismiss", action: onDismiss)
@@ -302,7 +302,7 @@ private struct SignalRow: View {
                 Text(signal.title).font(.system(size: 12.5, weight: .medium)).lineLimit(2)
                 Text(signal.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 6) {
-                    Button("Open", action: onOpen)
+                    if signal.url != nil { Button("Open", action: onOpen) }
                     if let onAsk {
                         Button(action: onAsk) { Label("Ask \(ConfigStore.shared.config.pet.name)", systemImage: "sparkles") }
                     }
@@ -320,7 +320,7 @@ private struct SignalRow: View {
     }
 
     private var color: Color {
-        switch signal.kind.mood {
+        switch signal.mood {
         case .failed: return .red
         case .needsInput: return .orange
         default: return .green

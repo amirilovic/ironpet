@@ -468,32 +468,6 @@ def requested(number):
             "repository": {"nameWithOwner": "o/r"}, "author": {"login": "someone"}}
 
 
-def scenario_github():
-    host = f"test-{int(time.time())}.example"
-    def data(prs, reqs):
-        return {"viewer": {"pullRequests": {"nodes": prs}}, "search": {"nodes": reqs}}
-    before = len(call("GET", "/test/signals")["notified"])
-    seeded = call("POST", "/test/github-apply", {"host": host, "data": data([pr(1, "PENDING"), pr(2, "FAILURE")], [requested(10)])})
-    ids = {s["id"] for s in seeded["signals"]}
-    seed_ok = f"gh:{host}|o/r#2:ciFailed" in ids and len(seeded["notified"]) == before
-    after = call("POST", "/test/github-apply", {"host": host, "data": data(
-        [pr(1, "FAILURE", "APPROVED"), pr(2, "SUCCESS")], [requested(10), requested(11)])})
-    new = set(after["notified"][before:])
-    expected = {f"gh:{host}|o/r#1:ciFailed", f"gh:{host}|o/r#1:approved", f"gh:{host}|o/r#2:ciPassed", f"gh:{host}|o/r#11:reviewRequested"}
-    ids = {s["id"] for s in after["signals"]}
-    ok = seed_ok and new == expected and f"gh:{host}|o/r#2:ciFailed" not in ids
-    record("GitHub: first poll silent, then CI/review changes alert", ok,
-           f"seed_silent={seed_ok} notified={sorted(n.split(':')[-1] for n in new)}")
-
-    real_before = len(call("GET", "/test/signals")["notified"])
-    call("POST", "/test/github-poll")
-    time.sleep(12)
-    real_after = call("GET", "/test/signals")
-    record("GitHub: real poll of your accounts runs without a notification flood",
-           len(real_after["notified"]) - real_before <= 3,
-           f"new_notifications={len(real_after['notified']) - real_before} open_alerts={len(real_after['signals'])}")
-
-
 def scenario_mcp():
     """Uses the Langfuse MCP (signed in); the write is denied, so nothing is created."""
     fresh_workspace()
@@ -1270,7 +1244,7 @@ def scenario_meeting_system_audio():
 SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_session, "claude": scenario_claude, "codex": scenario_codex, "agents": scenario_agents,
              "asks": scenario_asks, "runtime": scenario_runtime, "auto": scenario_auto, "picker": scenario_picker,
              "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
-             "notification": scenario_notification_approval, "github": scenario_github, "mcp": scenario_mcp,
+             "notification": scenario_notification_approval, "mcp": scenario_mcp,
              "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
              "voice": scenario_voice, "voice-key": scenario_voice_key, "meeting": scenario_meeting,
              "meeting-system": scenario_meeting_system_audio}

@@ -73,7 +73,7 @@ private struct SetupView: View {
 
     private let present: Set<HookInstaller.Agent>
     private let hasChatCLI = !AgentCatalog.present().isEmpty
-    private let hasGitHubCLI = GitHubWatcher.ghExecutable != nil
+    private let hasGitHubCLI = AutomationDefaults.ghExecutable != nil
 
     init(installer: HookInstaller, finish: @escaping (SetupWindow.Choices?) -> Void) {
         self.installer = installer

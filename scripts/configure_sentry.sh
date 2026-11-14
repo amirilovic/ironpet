@@ -26,4 +26,4 @@ import json, sys
 host, org, projects = sys.argv[1:4]
 print(json.dumps({"host": host, "org": org, "projects": [p.strip() for p in projects.split(",") if p.strip()]}, indent=2))
 EOF
-echo "Saved. Restart ironpet to start watching Sentry."
+echo "Saved. In ironpet, Settings → Automations → New automation…, ask for Sentry alerts (the saved settings and Keychain token are what it uses)."

@@ -11,6 +11,12 @@ final class SettingsModel: ObservableObject {
     }
 
     let actions: Actions
+    /// Set once the app has built it, before the window can open.
+    var automations: AutomationService?
+    /// Opens the execution log window, for one automation or all of them.
+    var showLogs: (String?) -> Void = { _ in }
+    /// Sends what the user wants to the chat, for the agent to create the automation.
+    var createWithAgent: (String) -> Void = { _ in }
     /// Shortcut config strings that failed to register (taken by another app or invalid).
     @Published var failedHotKeys: Set<String> = []
     @Published var launchAtLogin = LoginItem.isEnabled
@@ -82,7 +88,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             TabView {
                 GeneralSettings(model: model).tabItem { Label("General", systemImage: "gearshape") }
-                RemindersSettings().tabItem { Label("Reminders", systemImage: "drop") }
+                AutomationsSettings(model: model).tabItem { Label("Automations", systemImage: "clock.badge.checkmark") }
                 IntegrationsSettings().tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }
                 VoiceSettings(model: model).tabItem { Label("Voice", systemImage: "mic") }
                 MeetingSettings(model: model).tabItem { Label("Meetings", systemImage: "person.2.wave.2") }
@@ -176,6 +182,7 @@ private struct GeneralSettings: View {
                 Text("Lists the agents found on this Mac. Watching adds ironpet's hooks to the agent's own config so \(store.config.pet.name) sees sessions you start yourself. Turning one off removes only ironpet's hooks; an existing file is backed up as *.ironpet-backup the first time. Codex asks you to trust new hooks in its /hooks screen.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            SkillsSettings()
         }
         .formStyle(.grouped)
     }
@@ -515,52 +522,6 @@ private struct MeetingSettings: View {
     }
 }
 
-// MARK: - Reminders
-
-private struct RemindersSettings: View {
-    @ObservedObject private var store = ConfigStore.shared
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle("Pause all reminders", isOn: binding(\.paused))
-            } footer: {
-                Text("Time only counts while you're at the keyboard. While an agent is working, a reminder can come a little early so you take the break while you'd be waiting anyway.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Reminders") {
-                ForEach(ReminderScheduler.Kind.allCases, id: \.self) { kind in
-                    LabeledContent(kind.name) {
-                        HStack(spacing: 12) {
-                            minutes(binding(kind.configPath.appending(path: \.minutes)), range: 1...240)
-                            Toggle(kind.name, isOn: binding(kind.configPath.appending(path: \.enabled)))
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                        }
-                    }
-                }
-            }
-            Section("Timing") {
-                LabeledContent("Reset after being away") { minutes(binding(\.idleResetMinutes), range: 1...60) }
-                LabeledContent("Snooze for") { minutes(binding(\.snoozeMinutes), range: 1...120) }
-            }
-        }
-        .formStyle(.grouped)
-    }
-
-    private func binding<T>(_ path: WritableKeyPath<Config.Reminders, T>) -> Binding<T> {
-        Binding(get: { store.config.reminders[keyPath: path] },
-                set: { value in store.update { $0.reminders[keyPath: path] = value } })
-    }
-
-    private func minutes(_ value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        Stepper(value: value, in: range, step: 5) {
-            Text("\(Int(value.wrappedValue)) min").monospacedDigit().frame(minWidth: 56, alignment: .trailing)
-        }
-        .fixedSize()
-    }
-}
-
 // MARK: - Integrations
 
 struct IntegrationsSettings: View {
@@ -568,17 +529,6 @@ struct IntegrationsSettings: View {
 
     var body: some View {
         Form {
-            Section {
-                Toggle("GitHub PR & CI alerts", isOn: Binding(
-                    get: { store.config.integrations.githubAlerts },
-                    set: { on in store.update { $0.integrations.githubAlerts = on } }))
-                    .disabled(GitHubWatcher.ghExecutable == nil && !store.config.integrations.githubAlerts)
-            } footer: {
-                Text(GitHubWatcher.ghExecutable == nil
-                     ? "Needs the GitHub CLI: brew install gh, then gh auth login."
-                     : "Polls every 2 minutes, on every host `gh` is logged in to: CI on your PRs, approvals, changes requested, review requests.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             Section {
                 Toggle("Share MCP sign-ins across folders", isOn: Binding(
                     get: { store.config.integrations.shareMCPSignIns },
@@ -591,11 +541,7 @@ struct IntegrationsSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
-                LabeledContent("Sentry alerts") {
-                    Text(SentryWatcher.config.map { "On (\($0.org))" } ?? "Off").foregroundStyle(.secondary)
-                }
-            } footer: {
-                Text("Turn on or change with ./scripts/configure_sentry.sh, which keeps the auth token in your Keychain.")
+                Text("GitHub and Sentry alerts are automations. Turn them on or off under Automations.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

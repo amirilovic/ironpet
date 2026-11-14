@@ -1,0 +1,24 @@
+{
+  "originHash" : "b7cbb1428e85c7a661c38ec0f22d2e4fbe5a74c1a9327fd77eed9c18b127f1f1",
+  "pins" : [
+    {
+      "identity" : "jmespath.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/adam-fowler/jmespath.swift",
+      "state" : {
+        "revision" : "3877a5060e85ae33e3b9fe51ab581784f65ec80e",
+        "version" : "1.0.3"
+      }
+    },
+    {
+      "identity" : "quickjs-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/zqqf16/QuickJS-Swift.git",
+      "state" : {
+        "revision" : "5f13d42d81c308d5b70786340c0cd113b78e6315",
+        "version" : "1.0.0"
+      }
+    }
+  ],
+  "version" : 3
+}

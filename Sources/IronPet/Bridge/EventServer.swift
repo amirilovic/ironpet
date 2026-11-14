@@ -9,6 +9,8 @@ final class EventServer {
     var status: () -> Data = { Data("{}".utf8) }
     /// `/test/*` control endpoints; only set when the app runs with `--test-mode`.
     var onTest: ((HTTPRequest, @escaping (Data) -> Void) -> Void)?
+    /// `POST /mcp` (MCP tools for agents) and `POST /automations` (the CLI). Answers with a status line and a body.
+    var onAutomation: ((HTTPRequest, @escaping (String, Data) -> Void) -> Void)?
     private let queue = DispatchQueue(label: "ironpet.event-server")
     private var listener: NWListener?
     private(set) var port: UInt16 = 0
@@ -62,6 +64,13 @@ final class EventServer {
         guard request.header("x-ironpet-token") == token else { return respond(connection, status: "403 Forbidden") }
         if request.method == "GET", request.path == "/status" {
             return respond(connection, status: "200 OK", body: status())
+        }
+        if request.path == "/mcp" || request.path == "/automations" {
+            guard request.method == "POST", let onAutomation else { return respond(connection, status: "405 Method Not Allowed") }
+            onAutomation(request) { [queue] status, body in
+                queue.async { self.respond(connection, status: status, body: body) }
+            }
+            return
         }
         if request.path.hasPrefix("/test/") {
             guard let onTest else { return respond(connection, status: "404 Not Found") }
