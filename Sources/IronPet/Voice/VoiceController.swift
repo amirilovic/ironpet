@@ -38,10 +38,22 @@ final class VoiceController: ObservableObject {
     private var starting = false
     private var stopRequested = false
 
-    /// The hold-to-talk shortcut to register: nil when voice notes are off or the shortcut is cleared.
+    /// The voice shortcut to register: nil when voice notes are off or the shortcut is cleared.
     nonisolated static func hotkey(in config: Config) -> String? {
         guard config.voice.enabled, !config.hotkeys.voice.isEmpty else { return nil }
         return config.hotkeys.voice
+    }
+
+    /// The voice shortcut went down. A press while recording always stops it, so a recording that outlived a switch
+    /// from toggle to hold mode can't get stuck.
+    func shortcutPressed(_ kind: Source = .microphone) {
+        if phase == .recording || starting { stop() } else { start(kind) }
+    }
+
+    /// The voice shortcut came up. Only hold-to-talk acts on it. After Esc cancelled the recording this finds the
+    /// controller idle and does nothing.
+    func shortcutReleased(holdToTalk: Bool) {
+        if holdToTalk { stop() }
     }
 
     var isBusy: Bool { phase != .idle || starting }
