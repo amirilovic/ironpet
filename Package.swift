@@ -9,7 +9,11 @@ let package = Package(
         .package(url: "https://github.com/zqqf16/QuickJS-Swift.git", from: "1.0.0"),
     ],
     targets: [
-        .executableTarget(name: "IronPet", dependencies: [.product(name: "JMESPath", package: "jmespath.swift"), .product(name: "QuickJS", package: "QuickJS-Swift")], path: "Sources/IronPet"),
+        .target(name: "IronPetObjC", path: "Sources/IronPetObjC"),
+        .executableTarget(
+            name: "IronPet",
+            dependencies: ["IronPetObjC", .product(name: "JMESPath", package: "jmespath.swift"), .product(name: "QuickJS", package: "QuickJS-Swift")],
+            path: "Sources/IronPet"),
         .testTarget(name: "IronPetTests", dependencies: ["IronPet"], path: "Tests/IronPetTests"),
     ]
 )

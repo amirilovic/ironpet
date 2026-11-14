@@ -2,14 +2,14 @@ import XCTest
 @testable import IronPet
 
 /// A clock and idle signal the tests move by hand.
-final class FakeClock {
+final class AutomationTestClock {
     var now: Date
     var idle: TimeInterval = 0
     var working = false
     var busy = false
 
     /// Monday 2026-11-16 08:00 UTC.
-    init(_ date: Date = FakeClock.monday8) { now = date }
+    init(_ date: Date = AutomationTestClock.monday8) { now = date }
 
     static let calendar: Calendar = {
         var c = Calendar(identifier: .gregorian)
@@ -28,13 +28,13 @@ final class FakeClock {
 class AutomationTestCase: XCTestCase {
     var dir: URL!
     var paths: AutomationPaths!
-    var clock: FakeClock!
+    var clock: AutomationTestClock!
 
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-auto-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         paths = AutomationPaths(file: dir.appendingPathComponent("automations.json"), directory: dir.appendingPathComponent("automations"))
-        clock = FakeClock()
+        clock = AutomationTestClock()
     }
 
     override func tearDown() async throws {
@@ -233,19 +233,19 @@ final class AutomationTriggerTests: AutomationTestCase {
         var fired: [Date] = []
         rig.engine.onFire = { _ in fired.append(self.clock.now) }
         // Monday 08:00 start. Walk through 09:00.
-        clock.now = FakeClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 8, minute: 59))!
+        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 8, minute: 59))!
         rig.engine.tick()
         XCTAssertEqual(fired.count, 0)
-        clock.now = FakeClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 9, minute: 1))!
+        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 9, minute: 1))!
         rig.engine.tick()
         XCTAssertEqual(fired.count, 1, "Monday 09:00 fires")
         // Saturday. Tick through Friday evening first, so the tick before 09:00 starts on Saturday.
-        clock.now = FakeClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 20, hour: 23, minute: 59))!
+        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 20, hour: 23, minute: 59))!
         rig.engine.tick()
         let beforeSaturday = fired.count
-        clock.now = FakeClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 8, minute: 59))!
+        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 8, minute: 59))!
         rig.engine.tick()
-        clock.now = FakeClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 9, minute: 1))!
+        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 9, minute: 1))!
         rig.engine.tick()
         XCTAssertEqual(fired.count, beforeSaturday, "Saturday does not")
     }
@@ -255,7 +255,7 @@ final class AutomationTriggerTests: AutomationTestCase {
         var fired = 0
         rig.engine.onFire = { _ in fired += 1 }
         for minute in stride(from: 8 * 60, through: 15 * 60, by: 10) {
-            clock.now = FakeClock.calendar.date(byAdding: .minute, value: minute, to: FakeClock.calendar.startOfDay(for: FakeClock.monday8))!
+            clock.now = AutomationTestClock.calendar.date(byAdding: .minute, value: minute, to: AutomationTestClock.calendar.startOfDay(for: AutomationTestClock.monday8))!
             rig.engine.tick()
         }
         XCTAssertEqual(fired, 2)
@@ -300,7 +300,7 @@ final class AutomationTriggerTests: AutomationTestCase {
         let rig = makeRig([daily(["09:00"], weekdays: ["mon"])])
         rig.engine.set(rig.store.automations)
         let next = rig.engine.nextRun(rig.store.automations[0])
-        XCTAssertEqual(next, FakeClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 9)))
+        XCTAssertEqual(next, AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 9)))
     }
 }
 
