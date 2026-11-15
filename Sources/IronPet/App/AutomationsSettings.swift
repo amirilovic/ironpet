@@ -45,6 +45,17 @@ private struct AutomationList: View {
                 }
             }
             Section {
+                Toggle("Auto-approve automation changes", isOn: Binding(
+                    get: { config.config.automations.autoApprove },
+                    set: { on in
+                        config.update { $0.automations.autoApprove = on }
+                        if on { service.reviewApprovals() }
+                    }))
+            } footer: {
+                Text("Agent-written scripts can run shell commands without review.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
                 Toggle("Ask the agent to fix automations that fail", isOn: Binding(
                     get: { config.config.automations.autoFix },
                     set: { on in config.update { $0.automations.autoFix = on } }))

@@ -191,6 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.showLogs = { [weak self] id in self?.logWindow.show(automation: id) }
         service.logRetentionDays = { [config] in config.config.automations.logRetentionDays }
         service.autoFixEnabled = { [config] in config.config.automations.autoFix }
+        service.autoApproveEnabled = { [config] in config.config.automations.autoApprove }
         service.requestFix = { [weak self] automation, trigger, error in
             self?.sendToChat(AutomationAgentPrompts.fix(automation, trigger: trigger, error: error), show: false,
                              title: "\(automation.name) failed", busyBody: "Ask \(self?.chat.agent.name ?? "the agent") to fix it?")

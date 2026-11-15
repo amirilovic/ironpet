@@ -531,6 +531,62 @@ final class AutomationApprovalTests: AutomationTestCase {
         XCTAssertFalse(rig2.service.needsApproval(rig2.store.automations[0]))
     }
 
+    private func createShell(_ rig: Rig) async {
+        let args: [String: Any] = ["id": "sh", "name": "Shell", "trigger": ["type": "interval", "minutes": 5, "clock": "wall"],
+                                   "action": ["type": "shell", "command": "echo hi"]]
+        let result = await rig.service.call("create", args, by: "agent:mcp")
+        if case .failure(let error) = result { XCTFail(error.message) }
+    }
+
+    func testAgentCreateAndUpdateNeedApprovalWithAutoApproveOff() async {
+        let rig = makeRig()
+        await createShell(rig)
+        XCTAssertTrue(rig.service.needsApproval(rig.store.automations[0]))
+        XCTAssertNotNil(rig.notices.last(AutomationService.approvalID("sh")))
+        rig.service.approve("sh")
+        _ = await rig.service.call("update", ["id": "sh", "changes": ["action": ["command": "echo changed"]]], by: "agent:mcp")
+        XCTAssertTrue(rig.service.needsApproval(rig.store.automations[0]))
+    }
+
+    func testAutoApproveApprovesAnAgentCreateAndItRunsOnTheNextFire() async {
+        let rig = makeRig()
+        rig.service.autoApproveEnabled = { true }
+        var ran: [String] = []
+        rig.service.runShell = { command, _ in ran.append(command); return CommandResult(code: 0, stdout: "ran") }
+        await createShell(rig)
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        XCTAssertNil(rig.notices.last(AutomationService.approvalID("sh")), "no approval bubble")
+        XCTAssertEqual(rig.notices.last("automation-auto-approved:sh")?.title, "Auto-approved \"Shell\"")
+        run(rig, minutes: 5)
+        await until("the run") { ran == ["echo hi"] }
+    }
+
+    func testAutoApproveApprovesAnAgentUpdate() async {
+        let rig = makeRig()
+        rig.service.autoApproveEnabled = { true }
+        var ran: [String] = []
+        rig.service.runShell = { command, _ in ran.append(command); return CommandResult(code: 0, stdout: "ran") }
+        await createShell(rig)
+        _ = await rig.service.call("update", ["id": "sh", "changes": ["action": ["command": "echo changed"]]], by: "agent:mcp")
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        run(rig, minutes: 5)
+        await until("the changed command runs") { ran.last == "echo changed" }
+    }
+
+    func testTurningAutoApproveOnApprovesPendingButNotRejected() async {
+        let rig = makeRig([shell(), Automation(id: "no", name: "No", trigger: .init(type: "interval", minutes: 5, clock: "wall"),
+                                               action: .init(type: "shell", command: "rm x"), createdBy: "agent:mcp")])
+        rig.service.reject("no")
+        XCTAssertTrue(rig.service.needsApproval(rig.store.automations[0]))
+        var on = false
+        rig.service.autoApproveEnabled = { on }
+        on = true
+        rig.service.reviewApprovals()
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        let rejected = rig.store.automations.first { $0.id == "no" }!
+        XCTAssertTrue(rig.service.needsApproval(rejected), "a rejected one stays rejected")
+    }
+
     func testTheUsersOwnShellRunsWithoutAsking() async {
         let rig = makeRig([shell(by: "user")])
         var ran = 0
@@ -1604,10 +1660,14 @@ final class AutomationAgentTests: AutomationTestCase {
 
     func testTheSwitchIsOnByDefaultAndCanBeTurnedOff() throws {
         XCTAssertTrue(Config().automations.autoFix)
+        XCTAssertFalse(Config().automations.autoApprove, "off by default")
         let file = dir.appendingPathComponent("config.json")
         try #"{"automations":{"autoFix":false}}"#.write(to: file, atomically: true, encoding: .utf8)
         let loaded = Config.load(from: file).config
         XCTAssertFalse(loaded.automations.autoFix)
         XCTAssertEqual(loaded.automations.logRetentionDays, 14, "the other setting keeps its default")
+        XCTAssertFalse(loaded.automations.autoApprove, "an old config without the key loads as off")
+        try #"{"automations":{"autoApprove":true}}"#.write(to: file, atomically: true, encoding: .utf8)
+        XCTAssertTrue(Config.load(from: file).config.automations.autoApprove)
     }
 }
