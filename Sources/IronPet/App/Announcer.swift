@@ -54,6 +54,24 @@ final class Announcer {
         if alsoSystemNotifications { notifier.announceApproval(id: id, title: title, detail: detail) }
     }
 
+    /// An unknown Telegram user sent /start. Allow adds them; nothing else about them reaches the chat.
+    func telegramPairing(_ request: TelegramBridge.Pending, allow: @escaping () -> Void, deny: @escaping () -> Void) {
+        let user = request.user
+        let handle = user.username.map { "@\($0), " } ?? ""
+        bubbles.show(Bubble(id: Self.telegramID(user.id), symbol: "paperplane.fill", tint: .blue,
+                            title: "Telegram user \(user.displayName) (\(handle)id \(user.id)) wants to connect",
+                            body: "Allow them to chat with \(ConfigStore.shared.config.pet.name) from Telegram?",
+                            actions: [.init(title: "Allow", style: .primary, run: allow),
+                                      .init(title: "Deny", style: .destructive, run: deny)]))
+        chime()
+    }
+
+    func clearTelegramPairing(id: Int64) {
+        bubbles.dismiss(Self.telegramID(id))
+    }
+
+    static func telegramID(_ id: Int64) -> String { "telegram:\(id)" }
+
     func clearApproval(id: UUID) {
         bubbles.dismiss(Self.approvalID(id))
         notifier.clearApproval(id: id)

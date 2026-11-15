@@ -24,10 +24,14 @@ final class SettingsModel: ObservableObject {
     @Published var launchAtLogin = LoginItem.isEnabled
     let pets = PetGalleryModel()
     private let announcer: Announcer
+    let telegram: TelegramBridge
+    /// The selected tab's tag. Tests set it to screenshot a tab.
+    @Published var tab = "general"
 
-    init(actions: Actions, announcer: Announcer) {
+    init(actions: Actions, announcer: Announcer, telegram: TelegramBridge) {
         self.actions = actions
         self.announcer = announcer
+        self.telegram = telegram
     }
 
     var alsoSystemNotifications: Bool {
@@ -107,12 +111,12 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TabView {
-                GeneralSettings(model: model).tabItem { Label("General", systemImage: "gearshape") }
-                AutomationsSettings(model: model).tabItem { Label("Automations", systemImage: "clock.badge.checkmark") }
-                IntegrationsSettings().tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }
-                VoiceSettings(model: model).tabItem { Label("Voice", systemImage: "mic") }
-                MeetingSettings(model: model).tabItem { Label("Meetings", systemImage: "person.2.wave.2") }
+            TabView(selection: $model.tab) {
+                GeneralSettings(model: model).tabItem { Label("General", systemImage: "gearshape") }.tag("general")
+                AutomationsSettings(model: model).tabItem { Label("Automations", systemImage: "clock.badge.checkmark") }.tag("automations")
+                IntegrationsSettings(telegram: model.telegram).tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }.tag("integrations")
+                VoiceSettings(model: model).tabItem { Label("Voice", systemImage: "mic") }.tag("voice")
+                MeetingSettings(model: model).tabItem { Label("Meetings", systemImage: "person.2.wave.2") }.tag("meetings")
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
@@ -515,25 +519,26 @@ private struct MeetingSettings: View {
 // MARK: - Integrations
 
 struct IntegrationsSettings: View {
+    let telegram: TelegramBridge
     @ObservedObject private var store = ConfigStore.shared
 
     var body: some View {
         Form {
-            Section {
-                Toggle("Share MCP sign-ins across folders", isOn: Binding(
+            IntegrationAccordion(
+                title: "MCP sign-ins",
+                status: .init(label: store.config.integrations.shareMCPSignIns ? "On" : "Off",
+                              color: store.config.integrations.shareMCPSignIns ? .green : .secondary),
+                isOn: Binding(
                     get: { store.config.integrations.shareMCPSignIns },
                     set: { on in
                         if on, !IntegrationsSettings.confirmMCPSharing() { return }
                         store.update { $0.integrations.shareMCPSignIns = on }
-                    }))
-            } footer: {
+                    })
+            ) {
                 Text("cursor-agent stores MCP sign-ins per folder. With this on, your MCP OAuth tokens are copied into each folder you chat in, so you sign in once. Relies on an internal Cursor file format.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section {
-                Text("GitHub and Sentry alerts are automations. Turn them on or off under Automations.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            TelegramIntegration(bridge: telegram)
         }
         .formStyle(.grouped)
     }
