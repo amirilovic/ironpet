@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 
 struct ChatView: View {
@@ -7,6 +8,15 @@ struct ChatView: View {
     let close: () -> Void
     @FocusState private var inputFocused: Bool
     @State private var showSettings = false
+    @State private var pinnedToBottom = true
+    @State private var topRowID: UUID?
+    @State private var lastWidth: CGFloat = 0
+    @State private var resizing = false
+    @State private var resizeWasPinned = true
+    @State private var resizeAnchor: UUID?
+    @State private var resizeEnd: DispatchWorkItem?
+    /// How many of the newest items the transcript renders. A resumed session can hold thousands.
+    @State private var shownItems = TranscriptGroup.pageSize
     /// `--render-previews` only: draw the settings popover's content on its own, since a popover can't render offscreen.
     var settingsOnly = false
 
@@ -259,6 +269,13 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
+                    if hiddenItems > 0 {
+                        Button("Show earlier messages (\(hiddenItems))") { shownItems += TranscriptGroup.pageSize }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                    }
                     ForEach(groupedItems, id: \.id) { group in
                         groupView(group).id(group.id)
                     }
@@ -269,18 +286,58 @@ struct ChatView: View {
                     if let agent = session.runtimeOffer { runtimeCard(agent).id("runtime") }
                     if !session.signInOptions.isEmpty { signInCard.id("signin") }
                     Color.clear.frame(height: 1).id("bottom")
+                        .onAppear { if !resizing { pinnedToBottom = true } }
+                        .onDisappear { if !resizing { pinnedToBottom = false } }
                 }
+                .scrollTargetLayout()
                 .padding(14)
             }
+            .scrollPosition(id: $topRowID, anchor: .top)
             .frame(maxHeight: .infinity)
             .softScrollEdges()
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width in widthChanged(width, proxy: proxy) }
             .onChange(of: scrollKey) {
+                // Streaming only follows the end while the reader is there. Sending a message always jumps to it.
+                var sent = false
+                if case .user = session.items.last?.kind { sent = true }
+                guard pinnedToBottom || sent else { return }
                 // Lazy rows below the viewport only have estimated heights, so the first jump can land short.
                 // A second jump after layout settles reaches the real end.
                 proxy.scrollTo("bottom", anchor: .bottom)
                 DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            // A new chat or another thread starts with the default window again.
+            .onChange(of: session.items.first?.id) { shownItems = TranscriptGroup.pageSize }
+        }
+    }
+
+    /// A width change re-wraps every row, and rows off screen only have estimated heights, so the scroll position would
+    /// land at the top. The first change of a resize remembers where the reader was, and each frame puts it back.
+    private func widthChanged(_ width: CGFloat, proxy: ScrollViewProxy) {
+        defer { lastWidth = width }
+        guard lastWidth > 0, abs(width - lastWidth) > 0.5 else { return }
+        if !resizing {
+            resizing = true
+            resizeWasPinned = pinnedToBottom
+            resizeAnchor = topRowID
+        }
+        restoreScroll(proxy)
+        resizeEnd?.cancel()
+        let end = DispatchWorkItem {
+            restoreScroll(proxy)
+            // Layout settles one pass later; only then are the bottom marker and top row trustworthy again.
+            DispatchQueue.main.async { restoreScroll(proxy); resizing = false }
+        }
+        resizeEnd = end
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: end)
+    }
+
+    private func restoreScroll(_ proxy: ScrollViewProxy) {
+        if resizeWasPinned {
+            proxy.scrollTo("bottom", anchor: .bottom)
+        } else if let id = resizeAnchor {
+            proxy.scrollTo(id, anchor: .top)
         }
     }
 
@@ -293,37 +350,17 @@ struct ChatView: View {
         return 0
     }
 
-    /// Consecutive tool steps are shown together as one activity block.
-    private enum Group {
-        case item(ChatSession.Item)
-        case tools([ChatSession.Item])
-
-        var id: UUID {
-            switch self {
-            case .item(let item): return item.id
-            case .tools(let items): return items[0].id
-            }
-        }
+    private var groupedItems: [TranscriptGroup] {
+        let start = TranscriptGroup.windowStart(session.items, limit: shownItems)
+        return TranscriptGroup.make(session.items[start...])
     }
 
-    private var groupedItems: [Group] {
-        var groups: [Group] = []
-        for item in session.items {
-            if case .tool = item.kind {
-                if case .tools(let existing) = groups.last {
-                    groups[groups.count - 1] = .tools(existing + [item])
-                } else {
-                    groups.append(.tools([item]))
-                }
-            } else {
-                groups.append(.item(item))
-            }
-        }
-        return groups
+    private var hiddenItems: Int {
+        TranscriptGroup.windowStart(session.items, limit: shownItems)
     }
 
     @ViewBuilder
-    private func groupView(_ group: Group) -> some View {
+    private func groupView(_ group: TranscriptGroup) -> some View {
         switch group {
         case .tools(let items):
             ToolSteps(items: items)
@@ -915,15 +952,69 @@ private struct PulsingDots: NSViewRepresentable {
     }
 }
 
+/// Consecutive tool steps are shown together as one activity block.
+enum TranscriptGroup {
+    case item(ChatSession.Item)
+    case tools([ChatSession.Item])
+
+    /// Items rendered at first, and added by each "Show earlier" press.
+    static let pageSize = 300
+
+    var id: UUID {
+        switch self {
+        case .item(let item): return item.id
+        case .tools(let items): return items[0].id
+        }
+    }
+
+    /// Where the rendered window of the newest `limit` items starts. It never splits a run of tool steps.
+    static func windowStart(_ items: [ChatSession.Item], limit: Int) -> Int {
+        let base = max(0, items.count - limit)
+        var start = base
+        // Pull in the rest of a run that straddles the boundary, but never more than `limit` extra items.
+        while start > 0, base - start < limit, case .tool = items[start].kind, case .tool = items[start - 1].kind { start -= 1 }
+        return start
+    }
+
+    static func make(_ items: ArraySlice<ChatSession.Item>) -> [TranscriptGroup] {
+        var groups: [TranscriptGroup] = []
+        var run: [ChatSession.Item] = []
+        for item in items {
+            if case .tool = item.kind {
+                run.append(item)
+            } else {
+                if !run.isEmpty { groups.append(.tools(run)); run = [] }
+                groups.append(.item(item))
+            }
+        }
+        if !run.isEmpty { groups.append(.tools(run)) }
+        return groups
+    }
+}
+
 /// Decoded attachment images, so a re-render of the transcript does not read and decode every file again.
 enum ThumbnailCache {
     private static let cache = NSCache<NSString, NSImage>()
     /// How many times a file was actually decoded; tests read it.
     nonisolated(unsafe) static var decodeCount = 0
 
+    /// Decodes at most 640 px on the long side, so a full-resolution screenshot does not stay in memory.
+    private static func decode(_ path: String) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 640,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return NSImage(contentsOfFile: path) // not a bitmap ImageIO can thumbnail, such as a PDF
+        }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    }
+
     static func image(at path: String) -> NSImage? {
         if let cached = cache.object(forKey: path as NSString) { return cached }
-        guard let image = NSImage(contentsOfFile: path) else { return nil }
+        guard let image = decode(path) else { return nil }
         decodeCount += 1
         cache.setObject(image, forKey: path as NSString)
         return image

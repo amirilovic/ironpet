@@ -120,6 +120,35 @@ final class TestControl {
             return Self.encode(["windowId": actions.showSettings(body["tab"] as? String, body["snapshot"] as? String)])
         case ("POST", "/test/stop"):
             chat.stop()
+        case ("POST", "/test/seed-transcript"):
+            // Replaces the open chat's items with the `items` of a saved thread JSON, as a resumed long session would.
+            guard let path = body["file"] as? String, let data = FileManager.default.contents(atPath: path) else {
+                return Self.encode(["ok": false, "error": "file is missing"])
+            }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            // Threads saved before ACP have no "agent", so decode only the items.
+            struct Saved: Decodable { var items: [ChatSession.Item] }
+            guard let thread = try? decoder.decode(Saved.self, from: data) else { return Self.encode(["ok": false, "error": "not a thread"]) }
+            chat.newChat()
+            actions.showChat() // before the items, because showing can start a new chat for the detected folder
+            chat.items = thread.items
+            return Self.encode(["ok": true, "items": thread.items.count])
+        case ("POST", "/test/stream-reply"):
+            // Grows one assistant reply by `tokens` words, as a streamed turn does.
+            let tokens = max(0, min((body["tokens"] as? Int) ?? 2000, 100_000))
+            chat.items.append(.init(kind: .assistant("")))
+            let id = chat.items[chat.items.count - 1].id
+            Task { @MainActor in
+                var text = ""
+                for i in 0..<tokens {
+                    text += "tok\(i) "
+                    guard let index = chat.items.firstIndex(where: { $0.id == id }) else { return }
+                    chat.items[index].kind = .assistant(text)
+                    try? await Task.sleep(nanoseconds: 5_000_000)
+                }
+            }
+            return Self.encode(["ok": true])
         case ("POST", "/test/open-thread"):
             guard let thread = chat.history.first(where: { $0.id == body["id"] as? String }) ?? (body["id"] == nil ? chat.history.first : nil) else {
                 return Self.encode(["ok": false, "error": "no such thread"])
