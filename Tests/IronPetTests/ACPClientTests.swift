@@ -132,3 +132,43 @@ final class ACPClientTests: XCTestCase {
         } catch {}
     }
 }
+
+/// A resumed session replays its whole history as notifications. Measures what that costs the main thread.
+@MainActor
+final class ACPReplayCostTests: XCTestCase {
+    static func replayData(lines: Int, megabytes: Int) -> [Data] {
+        let filler = String(repeating: "x", count: megabytes * 1_048_576 / lines)
+        var chunks: [Data] = []
+        var all = Data()
+        for i in 0..<lines {
+            let update: JSON = i % 3 == 0
+                ? ["sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": filler]]
+                : ["sessionUpdate": "tool_call", "toolCallId": "t\(i)", "title": "Ran", "rawInput": ["command": filler]]
+            let msg: JSON = ["jsonrpc": "2.0", "method": "session/update", "params": ["sessionId": "s", "update": update]]
+            all.append(try! JSONSerialization.data(withJSONObject: msg))
+            all.append(0x0A)
+        }
+        var offset = 0
+        while offset < all.count { chunks.append(all.subdata(in: offset..<min(all.count, offset + 65_536))); offset += 65_536 }
+        return chunks
+    }
+
+    func testReplayOfLargeSessionOnMainThread() throws {
+        let transport = FakeTransport()
+        let client = ACPClient(transport: transport)
+        try client.start()
+        var seen = 0
+        client.onNotification = { _, _ in seen += 1 }
+        let chunks = Self.replayData(lines: 4604, megabytes: 16)
+        let cpu0 = HugeTranscriptTests.threadCPU()
+        let wall0 = Date()
+        var worstChunk = 0.0
+        for chunk in chunks {
+            let t = Date()
+            transport.onData?(chunk)
+            worstChunk = max(worstChunk, Date().timeIntervalSince(t))
+        }
+        XCTAssertLessThan(HugeTranscriptTests.threadCPU() - cpu0, 1.0, "replaying a 16 MB session blocked the main thread")
+        print("REPLAY \(seen) notifications: main-thread cpu \(HugeTranscriptTests.threadCPU() - cpu0)s, wall \(Date().timeIntervalSince(wall0))s, worst chunk \(worstChunk)s, footprint \(HugeTranscriptTests.footprintMB()) MB")
+    }
+}
