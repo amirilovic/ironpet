@@ -310,7 +310,7 @@ struct ChatView: View {
         case .item(let item):
             switch item.kind {
             case .user(let text):
-                UserBubble(text: text, date: item.date)
+                UserBubble(text: text, date: item.date, source: item.origin)
             case .screenshot(let path):
                 HStack {
                     Spacer(minLength: 60)
@@ -643,6 +643,8 @@ private let timeFormatter: DateFormatter = {
 private struct UserBubble: View {
     let text: String
     let date: Date?
+    /// Where the message came from when it was not typed in this chat, such as "telegram".
+    var source: String?
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
@@ -653,9 +655,15 @@ private struct UserBubble: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.accentColor, in: UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 5, topTrailingRadius: 16))
-            if let date {
-                Text(timeFormatter.string(from: date)).font(.system(size: 10)).foregroundStyle(.tertiary)
+            HStack(spacing: 4) {
+                if source == ChatSession.telegramOrigin {
+                    Image(systemName: "paperplane.fill").font(.system(size: 9))
+                    Text("Telegram").font(.system(size: 10))
+                }
+                if let date { Text(timeFormatter.string(from: date)).font(.system(size: 10)) }
             }
+            .foregroundStyle(.tertiary)
+            .help(source == ChatSession.telegramOrigin ? "Sent from Telegram" : "")
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 50)

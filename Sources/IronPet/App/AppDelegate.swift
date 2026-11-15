@@ -38,10 +38,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables: Set<AnyCancellable> = []
     private let config = ConfigStore.shared
     private var setupWindow: SetupWindow?
+    private lazy var telegram = TelegramBridge(
+        client: TelegramAPI(token: { TelegramToken.shared.load() }), host: chat, tokens: TelegramToken.shared,
+        storage: .init(
+            users: { ConfigStore.shared.config.telegram.allowedUsers },
+            add: { user in ConfigStore.shared.update { $0.telegram.allowedUsers.append(user) } },
+            remove: { id in ConfigStore.shared.update { $0.telegram.allowedUsers.removeAll { $0.id == id } } },
+            offset: { UserDefaults.standard.integer(forKey: "telegramOffset") },
+            setOffset: { UserDefaults.standard.set($0, forKey: "telegramOffset") }),
+        petName: { ConfigStore.shared.config.pet.name })
     private lazy var settingsModel = SettingsModel(actions: .init(
         suspendHotKeys: { [weak self] suspended in suspended ? self?.unregisterHotKeys() : self?.registerHotKeys() },
         buildPet: { [weak self] description in self?.requestPet(description) }
-    ), announcer: announcer)
+    ), announcer: announcer, telegram: telegram)
     private lazy var settingsWindow = SettingsWindow(model: settingsModel)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -98,6 +107,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         startCallMonitor()
         chat.onAttention = { [weak self] title in self?.announcer.chat(title) }
+        telegram.onPairingRequest = { [weak self] request in
+            self?.announcer.telegramPairing(request, allow: { self?.telegram.allow(request.id) },
+                                            deny: { self?.telegram.deny(request.id) })
+        }
+        telegram.onPairingResolved = { [weak self] id in self?.announcer.clearTelegramPairing(id: id) }
+        if config.config.telegram.enabled { telegram.setEnabled(true) }
         chat.onApprovalNeeded = { [weak self] approval in
             self?.announcer.approval(id: approval.id, title: approval.title, detail: approval.detail)
         }
@@ -251,6 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setHooks(removed: oldAgents.filter { !newAgents.contains($0) })
         if new.hotkeys != old.hotkeys || new.voice.enabled != old.voice.enabled
             || new.meetings.enabled != old.meetings.enabled { registerHotKeys() }
+        if new.telegram.enabled != old.telegram.enabled { telegram.setEnabled(new.telegram.enabled) }
         if !new.voice.enabled { chat.voice.cancel() }
         if !new.meetings.enabled { meeting.dismiss() }
         startCallMonitor()
@@ -405,8 +421,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return CGRect(x: frame.minX, y: screen.frame.height - frame.maxY, width: frame.width, height: frame.height)
                 },
                 openSession: { [weak self] id in self?.openSession(id) },
-                showSettings: { [weak self] snapshot in
+                showSettings: { [weak self] tab, snapshot in
                     self?.settingsWindow.show()
+                    if let tab { self?.settingsModel.tab = tab }
                     if let snapshot { _ = self?.settingsWindow.snapshot(to: URL(fileURLWithPath: snapshot)) }
                     return self?.settingsWindow.windowNumber ?? 0
                 },
@@ -430,6 +447,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 meetingBubble: { [weak self] show in
                     if show { self?.showMeetingBubble() } else { self?.announcer.bubbles.dismiss(Self.meetingBubbleID) }
                 },
+                telegram: telegram,
                 simulateCall: { [weak self] app, event in self?.simulateCall(app, event) },
                 callOffer: { [weak self] in
                     self?.announcer.bubbles.bubbles.first { $0.id == Self.callBubbleID }?.title ?? ""

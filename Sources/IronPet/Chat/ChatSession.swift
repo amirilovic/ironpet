@@ -17,13 +17,35 @@ final class ChatSession: ObservableObject {
         var id = UUID()
         var kind: Kind
         var date: Date? = Date()
+        /// Where a user message came from when it was not typed here (`ChatSession.telegramOrigin`).
+        var origin: String?
     }
 
     struct QueuedMessage: Identifiable {
         let id = UUID()
         let text: String
         let attachments: [URL]
+        /// The Telegram chat id when the message came from Telegram. Those are never put back in the Mac input.
+        var telegram: Int64? = nil
     }
+
+    /// What happened to a turn that started from Telegram, for `onTelegram`.
+    enum TelegramEvent: Equatable {
+        /// The agent was busy, so the message waits its turn.
+        case queued
+        case started
+        /// The turn needs an approval. The Mac shows the same card.
+        case approval(id: UUID, title: String, detail: String)
+        /// An approval card was answered, here or on the Mac, or went away because the turn ended.
+        case approvalDecided(id: UUID, outcome: ApprovalOutcome)
+        /// The turn ended; the text is the last thing the agent wrote.
+        case finished(String?)
+        case failed(String)
+    }
+
+    enum ApprovalOutcome: Equatable { case allowed, denied, ended }
+
+    static let telegramOrigin = "telegram"
 
     struct Approval: Identifiable {
         let id = UUID()
@@ -129,6 +151,12 @@ final class ChatSession: ObservableObject {
     var onApprovalNeeded: ((Approval) -> Void)?
     var onApprovalResolved: ((UUID) -> Void)?
     var isVisible = false
+    /// Reports progress of turns that came from Telegram, with the Telegram chat id.
+    var onTelegram: ((Int64, TelegramEvent) -> Void)?
+    private var telegramChat: Int64?
+    /// True from the start of a turn that came from Telegram until the next Mac-typed turn. Auto approval is
+    /// ignored while it is set, and a retry after sign-in keeps it.
+    private var telegramTurn = false
 
     private var threadID: String? {
         didSet { if persists { UserDefaults.standard.set(threadID, forKey: Self.threadKey) } }
@@ -425,16 +453,28 @@ final class ChatSession: ObservableObject {
 
     /// Starts a turn. Returns false, without sending, when no folder is chosen or the hooks are missing.
     @discardableResult
-    private func start(prompt: String, shots: [URL]) -> Bool {
+    private func start(prompt: String, shots: [URL], telegram: Int64? = nil) -> Bool {
         var prompt = prompt
-        guard !needsWorkspace, let workspace else {
+        if telegram != nil, workspace == nil {
+            // No chat has a folder yet. The no-project folder is what a chat with no code context uses.
+            try? FileManager.default.createDirectory(at: Self.scratchWorkspace, withIntermediateDirectories: true)
+            workspace = Self.scratchWorkspace
+            needsWorkspace = false
+        }
+        // A Telegram message uses the chat as it is, so it does not wait for a folder pick.
+        guard telegram != nil || !needsWorkspace, let workspace else {
             needsWorkspace = true
             return false
         }
-        if prompt.isEmpty { prompt = "Help me with what's on my screen." }
-        items += shots.map { Item(kind: .screenshot($0.path)) }
-        items.append(Item(kind: .user(prompt)))
+        if telegram != nil, state == .done || state == .failed { state = .idle }
+        if prompt.isEmpty { prompt = telegram == nil ? "Help me with what's on my screen." : "Help me with the attached file." }
+        let origin = telegram == nil ? nil : Self.telegramOrigin
+        items += shots.map { Item(kind: .screenshot($0.path), origin: origin) }
+        items.append(Item(kind: .user(prompt), origin: origin))
         let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
+        telegramTurn = telegram != nil
+        telegramChat = telegram
+        if let telegram { onTelegram?(telegram, .started) }
         run(ACPTurn(prompt: prompt, preamble: preamble, workspace: workspace, resume: threadID, model: model,
                     images: shots.filter(ImageIntake.isImageFile), files: shots.filter { !ImageIntake.isImageFile($0) }))
         return true
@@ -466,8 +506,11 @@ final class ChatSession: ObservableObject {
         queue.removeAll { $0.id == id }
     }
 
-    /// Puts queued messages back in the input, after any text already there, so nothing is lost.
-    private func restoreQueue() {
+    /// Puts queued messages back in the input, after any text already there, so nothing is lost. Messages that came
+    /// from Telegram go back to Telegram as a failure instead: they are not the Mac user's draft.
+    private func restoreQueue(telegramReason: String = "Cancelled on the Mac before it started.") {
+        for message in queue { if let chat = message.telegram { onTelegram?(chat, .failed(telegramReason)) } }
+        queue.removeAll { $0.telegram != nil }
         guard !queue.isEmpty else { return }
         let text = queue.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
         let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -481,11 +524,59 @@ final class ChatSession: ObservableObject {
     /// Sends the oldest queued message through the normal path.
     private func sendNextQueued() {
         guard let next = queue.first else { return }
-        if start(prompt: next.text, shots: next.attachments) {
+        if start(prompt: next.text, shots: next.attachments, telegram: next.telegram) {
             queue.removeFirst()
         } else {
             restoreQueue()
         }
+    }
+
+    /// A message from an allowed Telegram user. It goes into the chat that is open now, the same way typed text
+    /// does, and never changes the chat's thread or folder. A busy agent queues it with the Mac's own queue until the
+    /// turn ends. `files` are shown and sent like Mac attachments, without touching the draft the user may be composing.
+    func submitFromTelegram(_ text: String, chat: Int64, files: [URL] = []) {
+        let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty || !files.isEmpty else { return }
+        guard !isRunning else {
+            queue.append(QueuedMessage(text: prompt, attachments: files, telegram: chat))
+            onTelegram?(chat, .queued)
+            return
+        }
+        start(prompt: prompt, shots: files, telegram: chat)
+    }
+
+    /// Applies a decision from Telegram through the same path as the Mac's Allow and Deny buttons.
+    func decideFromTelegram(id: UUID, allow: Bool) {
+        decide(id: id, allow: allow)
+    }
+
+    func hasPendingApproval(_ id: UUID) -> Bool { approvals.contains { $0.id == id } }
+
+    var telegramQueueCount: Int { queue.count }
+
+    func cancelTelegram(chat: Int64) {
+        queue.removeAll { $0.telegram == chat }
+        if telegramChat == chat { telegramChat = nil }
+    }
+
+    /// Tells Telegram how its turn ended. Called before the next queued message starts, which replaces `telegramChat`.
+    private func finishTelegramTurn(error: String?) {
+        guard let chat = telegramChat else { return }
+        telegramChat = nil
+        if let error {
+            onTelegram?(chat, .failed(error))
+        } else {
+            onTelegram?(chat, .finished(lastAnswer()))
+        }
+    }
+
+    /// The last assistant message after the newest user message.
+    private func lastAnswer() -> String? {
+        guard let start = items.lastIndex(where: { if case .user = $0.kind { return true } else { return false } }) else { return nil }
+        for item in items[start...].reversed() {
+            if case .assistant(let text) = item.kind, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return text }
+        }
+        return nil
     }
 
     private func makeBackend() -> ACPBackend {
@@ -513,11 +604,16 @@ final class ChatSession: ObservableObject {
         for approval in approvals {
             approval.respond(.deny("Stopped in ironpet"))
             onApprovalResolved?(approval.id)
+            if let chat = telegramChat { onTelegram?(chat, .approvalDecided(id: approval.id, outcome: .ended)) }
         }
         approvals = []
         activity = nil
         runStartedAt = nil
         if state == .running { state = .idle }
+        if let chat = telegramChat {
+            telegramChat = nil
+            onTelegram?(chat, .failed("Stopped on the Mac."))
+        }
     }
 
     /// Stops the agent process for good, e.g. when the app quits.
@@ -567,11 +663,12 @@ final class ChatSession: ObservableObject {
         decided[current.key] = allow
         current.respond(allow ? .allow : .deny())
         onApprovalResolved?(id)
+        if let chat = telegramChat { onTelegram?(chat, .approvalDecided(id: id, outcome: allow ? .allowed : .denied)) }
     }
 
     /// Answers the agent's `session/request_permission`: either straight away or through an approval card.
     func handlePermission(_ call: ACPToolCall, respond: @escaping (ApprovalDecision) -> Void) {
-        switch ApprovalRules.policy(for: call, auto: autoMode) {
+        switch ApprovalRules.policy(for: call, auto: autoMode && !telegramTurn) {
         case .allow:
             respond(.allow)
         case .ask(let title, let detail):
@@ -641,6 +738,7 @@ final class ChatSession: ObservableObject {
             return
         }
         approvals.append(approval)
+        if let chat = telegramChat { onTelegram?(chat, .approval(id: approval.id, title: approval.title, detail: approval.detail)) }
         if !isVisible { onApprovalNeeded?(approval) }
     }
 
@@ -667,13 +765,15 @@ final class ChatSession: ObservableObject {
             signInOptions = methods
             items.append(Item(kind: .error("\(agent.name) needs you to sign in.")))
             state = .failed
-            restoreQueue()
+            finishTelegramTurn(error: "\(agent.name) needs you to sign in on the Mac.")
+            restoreQueue(telegramReason: "\(agent.name) needs you to sign in on the Mac.")
         case .needsRuntime:
             endTurn()
             // Not a failure: the chat waits for the user to allow the download.
             runtimeOffer = agent.name
             state = .idle
-            restoreQueue()
+            finishTelegramTurn(error: "\(agent.name) needs a runtime download. Approve it on the Mac.")
+            restoreQueue(telegramReason: "\(agent.name) needs a runtime download. Approve it on the Mac.")
         case .assistant(let text):
             activity = "Writing"
             if case .assistant(let previous) = items.last?.kind {
@@ -697,11 +797,13 @@ final class ChatSession: ObservableObject {
             if let error { items.append(Item(kind: .error(error))) }
             state = error == nil ? .done : .failed
             saveThread()
-            if error == nil { sendNextQueued() } else { restoreQueue() }
+            // Before the queue moves on: the next message replaces the Telegram chat this turn belongs to.
+            finishTelegramTurn(error: error)
             if !isVisible {
                 let name = ConfigStore.shared.config.pet.name
                 onAttention?(error == nil ? "\(name) finished your task" : "\(name)'s task failed")
             }
+            if error == nil { sendNextQueued() } else { restoreQueue(telegramReason: "The turn before it failed, so this message did not run.") }
         }
     }
 
@@ -713,6 +815,7 @@ final class ChatSession: ObservableObject {
         for approval in approvals {
             approval.respond(.deny("The run ended"))
             onApprovalResolved?(approval.id)
+            if let chat = telegramChat { onTelegram?(chat, .approvalDecided(id: approval.id, outcome: .ended)) }
         }
         approvals = []
     }

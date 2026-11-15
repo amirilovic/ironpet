@@ -51,6 +51,14 @@ struct Transcriber {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Any audio file the server can read, such as a Telegram voice message (OGG/Opus). `mime` is the file's type.
+    func transcribe(audio: Data, filename: String, mime: String) async throws -> String {
+        let data = try await send(wav: audio, format: "json", filename: filename, mime: mime)
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let text = object["text"] as? String else { throw TranscriptionError.malformedResponse }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Meeting chunks: asks for `verbose_json` to get timed segments. A server that rejects it (OpenAI's
     /// `gpt-4o-*-transcribe` models answer 400) gets one retry with plain `json`. A server that answers with only
     /// `text` (mlx-audio does for Parakeet) yields one segment at the start of the chunk.
@@ -96,11 +104,11 @@ struct Transcriber {
     }
 
     /// One multipart POST. Returns the body of a 2xx answer.
-    private func send(wav: Data, format: String, filename: String) async throws -> Data {
+    private func send(wav: Data, format: String, filename: String, mime: String = "audio/wav") async throws -> Data {
         var request = try makeRequest()
         let boundary = "ironpet-" + UUID().uuidString
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        let body = Self.multipartBody(boundary: boundary, wav: wav, model: model, format: format, filename: filename)
+        let body = Self.multipartBody(boundary: boundary, wav: wav, model: model, format: format, filename: filename, mime: mime)
 
         let data: Data
         let response: URLResponse
@@ -135,7 +143,7 @@ struct Transcriber {
     }
 
     static func multipartBody(boundary: String, wav: Data, model: String, format: String = "json",
-                              filename: String = "voice-note.wav") -> Data {
+                              filename: String = "voice-note.wav", mime: String = "audio/wav") -> Data {
         var body = Data()
         func field(_ name: String, _ value: String) {
             body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
@@ -143,7 +151,7 @@ struct Transcriber {
         field("model", model)
         field("response_format", format)
         body.append(Data(("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n"
-            + "Content-Type: audio/wav\r\n\r\n").utf8))
+            + "Content-Type: \(mime)\r\n\r\n").utf8))
         body.append(wav)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         return body

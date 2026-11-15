@@ -15,7 +15,7 @@ final class TestControl {
         let chatWindowID: () -> Int
         let chatFrame: () -> CGRect
         let openSession: (String) -> Void
-        let showSettings: (String?) -> Int
+        let showSettings: (_ tab: String?, _ snapshot: String?) -> Int
         let capture: (Bool) -> Void
         /// The handler a notification's Allow / Deny button calls.
         let notificationAction: (UUID, Bool) -> Void
@@ -29,6 +29,7 @@ final class TestControl {
         let meetingUI: () -> (bubble: Bool, button: Bool)
         /// Closes the meeting bubble as the user would (`false`), or clicks the pet's Recording button (`true`).
         let meetingBubble: (_ show: Bool) -> Void
+        let telegram: TelegramBridge
         /// Plays a call event for an app as if the detector had reported it: "started", "ended", "record" or "not-now".
         let simulateCall: (_ bundleID: String, _ event: String) -> Void
         /// The title of the call bubble on screen, or "".
@@ -116,7 +117,7 @@ final class TestControl {
         case ("POST", "/test/voice/stop"):
             chat.voice.stop()
         case ("POST", "/test/show-settings"):
-            return Self.encode(["windowId": actions.showSettings(body["snapshot"] as? String)])
+            return Self.encode(["windowId": actions.showSettings(body["tab"] as? String, body["snapshot"] as? String)])
         case ("POST", "/test/stop"):
             chat.stop()
         case ("POST", "/test/open-thread"):
@@ -165,6 +166,28 @@ final class TestControl {
         case ("POST", "/test/meeting/open-in-chat"):
             actions.meeting.openInChat()
             return meetingSnapshot()
+        case ("GET", "/test/telegram"):
+            return telegramSnapshot()
+        case ("POST", "/test/telegram/token"):
+            return Self.encode(["ok": actions.telegram.saveToken(body["token"] as? String ?? "")])
+        case ("POST", "/test/telegram/enable"):
+            ConfigStore.shared.update { $0.telegram.enabled = body["enabled"] as? Bool ?? true }
+            return telegramSnapshot()
+        case ("POST", "/test/telegram/test"):
+            telegramTest = "running"
+            Task {
+                switch await actions.telegram.test() {
+                case .success(let name): telegramTest = name
+                case .failure(let error): telegramTest = "error: \(error.localizedDescription)"
+                }
+            }
+            return telegramSnapshot()
+        case ("POST", "/test/telegram/allow"):
+            actions.telegram.allow((body["id"] as? NSNumber)?.int64Value ?? 0)
+            return telegramSnapshot()
+        case ("POST", "/test/telegram/deny"):
+            actions.telegram.deny((body["id"] as? NSNumber)?.int64Value ?? 0)
+            return telegramSnapshot()
         case ("GET", "/test/signals"):
             return signalsSnapshot()
         case ("GET", "/test/automations"):
@@ -267,6 +290,24 @@ final class TestControl {
         return Self.encode(["automations": list, "bubbles": actions.bubbles(), "error": service.store.error ?? ""])
     }
 
+    private var telegramTest = ""
+
+    private func telegramSnapshot() -> Data {
+        let bridge = actions.telegram
+        let status: String = switch bridge.status {
+        case .off: "off"
+        case .connecting: "connecting"
+        case .polling(let bot): "polling \(bot)"
+        case .error(let message, _): "error: \(message)"
+        }
+        let config = ConfigStore.shared.config.telegram
+        return Self.encode([
+            "enabled": config.enabled, "status": status, "hasToken": bridge.hasToken, "test": telegramTest,
+            "pending": bridge.pending.map { ["id": $0.id, "name": $0.user.displayName] },
+            "users": config.allowedUsers.map { ["id": $0.id, "name": $0.name] },
+        ])
+    }
+
     private func signalsSnapshot() -> Data {
         Self.encode(["signals": actions.signals.signals.map {
             ["id": $0.id, "label": $0.label, "title": $0.title, "subtitle": $0.subtitle, "url": $0.url?.absoluteString ?? ""]
@@ -283,7 +324,7 @@ final class TestControl {
     private func snapshot() -> Data {
         let items: [[String: Any]] = chat.items.map { item in
             switch item.kind {
-            case .user(let text): return ["kind": "user", "text": text]
+            case .user(let text): return ["kind": "user", "text": text, "origin": item.origin ?? ""]
             case .screenshot(let path): return ["kind": "screenshot", "text": path]
             case .assistant(let text): return ["kind": "assistant", "text": text]
             case .tool(let summary, let ok): return ["kind": "tool", "text": summary, "ok": ok.map { $0 ? "yes" : "no" } ?? "running"]

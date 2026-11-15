@@ -111,6 +111,20 @@ struct Config: Codable, Equatable {
         var shareMCPSignIns = false
     }
 
+    /// Chat with the pet from Telegram through the user's own bot. The bot token is not here; it lives in the
+    /// Keychain (`TelegramToken`). Off by default: turning it on makes ironpet poll api.telegram.org.
+    struct Telegram: Codable, Equatable {
+        struct User: Codable, Equatable, Identifiable {
+            var id: Int64
+            var name: String
+            var username: String?
+        }
+
+        var enabled = false
+        /// Only messages from these Telegram user ids reach the chat.
+        var allowedUsers: [User] = []
+    }
+
     /// An extra app for the "Open sessions in" picker. Without `urlTemplate` the folder is opened with the app;
     /// `{cwd}` in a template becomes the percent-encoded folder path.
     struct Editor: Codable, Equatable {
@@ -130,6 +144,7 @@ struct Config: Codable, Equatable {
     var skills = Skills()
     var voice = Voice()
     var meetings = Meetings()
+    var telegram = Telegram()
 
     static let file = Paths.root.appendingPathComponent("config.json")
 
