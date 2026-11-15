@@ -15,16 +15,17 @@ struct ChatView: View {
     }
 
     private var chat: some View {
-        VStack(spacing: 0) {
-            header
-            Hairline()
+        // The header and composer float as glass over the content; safe-area insets keep the first and
+        // last rows clear of them at the scroll ends while letting everything scroll underneath.
+        SwiftUI.Group {
             if session.items.isEmpty && session.approvals.isEmpty {
                 welcome
             } else {
                 transcript
             }
-            composer
         }
+        .glassBar(.top) { header }
+        .glassBar(.bottom) { composer }
         .frame(minWidth: ChatPanel.minimumSize.width, maxWidth: .infinity,
                minHeight: ChatPanel.minimumSize.height, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -46,30 +47,48 @@ struct ChatView: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: 10) {
-            PetAvatar(size: 30)
-            Text(ConfigStore.shared.config.pet.name).font(.system(size: 13, weight: .semibold))
-            Spacer()
+        GlassGroup {
+            HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    PetAvatar(size: 30)
+                    Text(ConfigStore.shared.config.pet.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .padding(.leading, 4)
+                .padding(.trailing, 16)
+                .padding(.vertical, 4)
+                .chromeGlass(in: Capsule())
+                Spacer()
+                headerControls
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+    }
+
+    private var headerControls: some View {
+        HStack(spacing: 2) {
             if session.autoMode {
                 // The switch lives in settings; this stays so it is always obvious the agent runs unattended.
                 Image(systemName: "bolt.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
                     .help("Auto is on: the agent edits and runs commands without asking")
+                    .padding(.horizontal, 6)
             }
-            HStack(spacing: 2) {
-                settingsButton
-                iconButton("xmark", help: "Close (Esc)", action: close)
-            }
+            settingsButton
+            iconButton("xmark", help: "Close (Esc)", action: close)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(4)
+        .chromeGlass(in: Capsule())
     }
 
     /// Project, agent, model and dictation live behind one button, so the header and composer stay clear.
     private var settingsButton: some View {
         Button { showSettings.toggle() } label: { Image(systemName: "slider.horizontal.3").font(.system(size: 13)) }
-            .buttonStyle(HoverIconStyle())
+            .buttonStyle(CircleHoverIconStyle())
             .help("Chat settings")
             .popover(isPresented: $showSettings, arrowEdge: .bottom) { settingsPopover }
     }
@@ -156,7 +175,7 @@ struct ChatView: View {
 
     private func iconButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).font(.system(size: 13)) }
-            .buttonStyle(HoverIconStyle())
+            .buttonStyle(CircleHoverIconStyle())
             .help(help)
     }
 
@@ -254,6 +273,7 @@ struct ChatView: View {
                 .padding(14)
             }
             .frame(maxHeight: .infinity)
+            .softScrollEdges()
             .onChange(of: scrollKey) {
                 // Lazy rows below the viewport only have estimated heights, so the first jump can land short.
                 // A second jump after layout settles reaches the real end.
@@ -415,39 +435,70 @@ struct ChatView: View {
 
     // MARK: Composer
 
+    /// Laid out like Telegram: a round attach button, the field in its own glass capsule, round mic and send buttons.
     private var composer: some View {
-        SwiftUI.Group {
-            if session.voice.phase != .idle {
-                VoiceBar(voice: session.voice)
-            } else {
-                composerInput
+        VStack(spacing: 8) {
+            // The composer is a bar over the transcript, so the popup floats over the history like Telegram's.
+            let matches = session.slashMatches
+            if !matches.isEmpty {
+                SlashPopup(commands: matches, selection: min(session.slash.selection, matches.count - 1), pick: session.completeSlash)
             }
+            queueRows
+            composerBar
         }
-        .padding(10)
-        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14)
-            .strokeBorder(voiceActive || inputFocused ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.1),
-                          lineWidth: voiceActive || inputFocused ? 1.5 : 1))
-        .contentShape(Rectangle())
-        .onTapGesture { if !voiceActive { inputFocused = true } }
-        .animation(.easeOut(duration: 0.12), value: inputFocused)
         .padding(.horizontal, 12)
-        .padding(.top, 8)
+        .padding(.top, 6)
         .padding(.bottom, 12)
         .onChange(of: session.voice.phase) { _, phase in
             if phase == .idle { inputFocused = true }
         }
     }
 
+    private var composerBar: some View {
+        GlassGroup {
+            HStack(alignment: .bottom, spacing: 8) {
+                if !voiceActive {
+                    Button(action: chooseFiles) { Image(systemName: "paperclip") }
+                        .buttonStyle(GlassCircleButtonStyle())
+                        .help("Attach files")
+                }
+                composerField
+                if !voiceActive {
+                    if config.config.voice.enabled {
+                        Button { session.voice.start() } label: { Image(systemName: "mic") }
+                            .buttonStyle(GlassCircleButtonStyle())
+                            .help("Record a voice note")
+                    }
+                    if session.isRunning {
+                        sendButton("stop.fill", color: .red, help: "Stop (Esc)", action: session.stop)
+                    }
+                    sendButton("arrow.up", color: .accentColor, help: session.isRunning ? "Queue (Enter)" : "Send (Enter)", action: session.send)
+                        .disabled(session.input.trimmingCharacters(in: .whitespaces).isEmpty && session.attachments.isEmpty)
+                }
+            }
+        }
+    }
+
     private var voiceActive: Bool { session.voice.phase != .idle }
+
+    private var composerField: some View {
+        SwiftUI.Group {
+            if voiceActive {
+                VoiceBar(voice: session.voice)
+            } else {
+                composerInput
+            }
+        }
+        .padding(4)
+        .frame(minHeight: GlassCircleButtonStyle.size)
+        .chromeGlass(in: RoundedRectangle(cornerRadius: GlassCircleButtonStyle.size / 2, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture { if !voiceActive { inputFocused = true } }
+        .animation(.easeOut(duration: 0.12), value: inputFocused)
+    }
 
     private var composerInput: some View {
         VStack(alignment: .leading, spacing: 6) {
-            queueRows
-            let matches = session.slashMatches
-            if !matches.isEmpty {
-                SlashPopup(commands: matches, selection: min(session.slash.selection, matches.count - 1), pick: session.completeSlash)
-            }
             if !session.attachments.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(session.attachments, id: \.self) { url in
@@ -465,12 +516,6 @@ struct ChatView: View {
                 .padding(.top, 4)
             }
             HStack(alignment: .bottom, spacing: 6) {
-                Button(action: chooseFiles) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .semibold))
-                }
-                .buttonStyle(HoverIconStyle())
-                .help("Attach files")
                 TextField(session.isRunning ? "\(ConfigStore.shared.config.pet.name) is working. Enter queues your message." : "Ask \(ConfigStore.shared.config.pet.name)…", text: $session.input, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13.5))
@@ -497,20 +542,10 @@ struct ChatView: View {
                     }
                     .onKeyPress(.escape, phases: .down) { _ in session.dismissSlash() ? .handled : .ignored }
                     .onChange(of: session.input) { old, new in session.inputChanged(from: old, to: new) }
-                    .padding(.horizontal, 4)
+                    // The system focus ring is a rectangle; inside the rounded field it showed as a line at each end.
+                    .focusEffectDisabled()
+                    .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                if config.config.voice.enabled {
-                    Button { session.voice.start() } label: {
-                        Image(systemName: "mic").font(.system(size: 13, weight: .semibold))
-                    }
-                    .buttonStyle(HoverIconStyle())
-                    .help("Record a voice note")
-                }
-                if session.isRunning {
-                    sendButton("stop.fill", color: .red, help: "Stop (Esc)", action: session.stop)
-                }
-                sendButton("arrow.up", color: .accentColor, help: session.isRunning ? "Queue (Enter)" : "Send (Enter)", action: session.send)
-                    .disabled(session.input.trimmingCharacters(in: .whitespaces).isEmpty && session.attachments.isEmpty)
             }
         }
     }
@@ -539,9 +574,11 @@ struct ChatView: View {
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
                 }
             }
+            .padding(6)
+            .chromeGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 
@@ -550,8 +587,8 @@ struct ChatView: View {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(color, in: Circle())
+                .frame(width: GlassCircleButtonStyle.size, height: GlassCircleButtonStyle.size)
+                .tintedCircle(color)
         }
         .buttonStyle(.plain)
         .help(help)
@@ -977,25 +1014,6 @@ private struct Keycap: View {
     }
 }
 
-private struct HoverIconStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HoverIcon(configuration: configuration)
-    }
-
-    private struct HoverIcon: View {
-        let configuration: ButtonStyleConfiguration
-        @State private var hovering = false
-        var body: some View {
-            configuration.label
-                .foregroundStyle(.secondary)
-                .frame(width: 26, height: 26)
-                .background(Color.primary.opacity(configuration.isPressed ? 0.14 : hovering ? 0.08 : 0), in: RoundedRectangle(cornerRadius: 6))
-                .contentShape(Rectangle())
-                .onHover { hovering = $0 }
-        }
-    }
-}
-
 /// One row of the project picker: tinted icon tile, title, optional path, chevron, hover highlight.
 private struct PickerRow: View {
     let symbol: String
@@ -1099,10 +1117,10 @@ private struct SlashPopup: View {
                                 Text(command.detail).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
                                 Spacer(minLength: 0)
                             }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(index == selection ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                            .background(index == selection ? Color.accentColor.opacity(0.22) : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -1110,13 +1128,14 @@ private struct SlashPopup: View {
                     }
                 }
             }
-            .frame(maxHeight: 160)
+            .frame(maxHeight: 240)
             .fixedSize(horizontal: false, vertical: true)
             .onChange(of: selection) { _, new in
                 if commands.indices.contains(new) { proxy.scrollTo(commands[new].id) }
             }
         }
-        .padding(4)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        .padding(6)
+        .chromeGlass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
     }
 }
