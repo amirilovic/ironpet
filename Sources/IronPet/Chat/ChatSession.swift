@@ -154,9 +154,6 @@ final class ChatSession: ObservableObject {
     /// Reports progress of turns that came from Telegram, with the Telegram chat id.
     var onTelegram: ((Int64, TelegramEvent) -> Void)?
     private var telegramChat: Int64?
-    /// True from the start of a turn that came from Telegram until the next Mac-typed turn. Auto approval is
-    /// ignored while it is set, and a retry after sign-in keeps it.
-    private var telegramTurn = false
 
     private var threadID: String? {
         didSet { if persists { UserDefaults.standard.set(threadID, forKey: Self.threadKey) } }
@@ -472,7 +469,6 @@ final class ChatSession: ObservableObject {
         items += shots.map { Item(kind: .screenshot($0.path), origin: origin) }
         items.append(Item(kind: .user(prompt), origin: origin))
         let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
-        telegramTurn = telegram != nil
         telegramChat = telegram
         if let telegram { onTelegram?(telegram, .started) }
         run(ACPTurn(prompt: prompt, preamble: preamble, workspace: workspace, resume: threadID, model: model,
@@ -668,7 +664,7 @@ final class ChatSession: ObservableObject {
 
     /// Answers the agent's `session/request_permission`: either straight away or through an approval card.
     func handlePermission(_ call: ACPToolCall, respond: @escaping (ApprovalDecision) -> Void) {
-        switch ApprovalRules.policy(for: call, auto: autoMode && !telegramTurn) {
+        switch ApprovalRules.policy(for: call, auto: autoMode) {
         case .allow:
             respond(.allow)
         case .ask(let title, let detail):
