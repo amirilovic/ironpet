@@ -1671,3 +1671,15 @@ final class AutomationAgentTests: AutomationTestCase {
         XCTAssertTrue(Config.load(from: file).config.automations.autoApprove)
     }
 }
+
+final class AutomationScriptStackTests: XCTestCase {
+    func testRunawayRecursionFailsInsteadOfCrashing() async {
+        let host = AutomationScript.HostIO(sh: { _, _ in CommandResult(spawnError: "no") })
+        do {
+            _ = try await AutomationScript.run(script: "function f(n) { return f(n + 1) + 1; } function poll(s) { return { state: f(0) }; }", state: nil, host: host)
+            XCTFail("expected a failure")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.isEmpty)
+        }
+    }
+}

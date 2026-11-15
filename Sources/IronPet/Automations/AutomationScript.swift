@@ -64,16 +64,41 @@ enum AutomationScript {
     /// Runs `poll(state)` off the main thread. `state` is the JSON text the last run returned, or nil on the first run.
     static func run(script: String, state: String?, deadline: TimeInterval = defaultDeadline, host: HostIO = .system) async throws -> Output {
         try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
+            let thread = Thread {
                 do { continuation.resume(returning: try runBlocking(script: script, state: state, deadline: deadline, host: host)) } catch {
                     continuation.resume(throwing: error)
                 }
             }
+            thread.stackSize = stackBytes
+            thread.qualityOfService = .utility
+            thread.start()
         }
     }
 
     /// Checks that the script parses, runs its top level, and defines `poll`. Nothing else runs.
     static func check(_ script: String) -> String? {
+        onScriptStack { checkOnThisThread(script) }
+    }
+
+    /// QuickJS limits recursion to 1 MiB below the stack pointer of the thread that created the runtime. Dispatch
+    /// and Swift concurrency threads have 512 KiB, so a recursive script overflowed the real stack and crashed the
+    /// process. Every runtime is created and used on a thread with a stack larger than that limit.
+    private static let stackBytes = 8 * 1024 * 1024
+
+    private static func onScriptStack<T>(_ body: @escaping () -> T) -> T {
+        var result: T?
+        let done = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            result = body()
+            done.signal()
+        }
+        thread.stackSize = stackBytes
+        thread.start()
+        done.wait()
+        return result!
+    }
+
+    private static func checkOnThisThread(_ script: String) -> String? {
         if script.utf8.count > maxScriptBytes { return "the script is longer than \(maxScriptBytes / 1024) KiB" }
         do {
             let sandbox = try Sandbox(deadline: 2, host: .init(sh: { _, _ in CommandResult(spawnError: "not available while checking") }))
