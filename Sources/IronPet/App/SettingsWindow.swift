@@ -71,10 +71,15 @@ final class SettingsWindow {
     func show() {
         model.refresh()
         if window == nil {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(model: model)))
+            // A fixed SwiftUI height plus the hosting controller's auto sizing both set the window height,
+            // which logs "AttributeGraph: cycle detected" on tab switches. Only the width stays in SwiftUI.
+            let host = NSHostingController(rootView: SettingsView(model: model))
+            host.sizingOptions = []
+            let window = NSWindow(contentViewController: host)
             window.title = "ironpet Settings"
             window.styleMask = [.titled, .closable, .miniaturizable]
             window.isReleasedWhenClosed = false
+            window.setContentSize(NSSize(width: 520, height: 600))
             window.center()
             self.window = window
             let center = NotificationCenter.default
@@ -133,7 +138,7 @@ struct SettingsView: View {
             }
             .padding(12)
         }
-        .frame(width: 520, height: 600)
+        .frame(width: 520)
     }
 }
 
