@@ -514,11 +514,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chatPanel.isVisible && chatPanel.isKeyWindow && NSApp.isActive ? chatPanel.close() : showChat()
     }
 
-    /// `keepThread`: leave the chat's session and folder as they are instead of following the app the user came from.
-    private func showChat(keepThread: Bool = false) {
+    /// Opening the chat never changes its session or folder. Only the user does, with New Chat, the folder picker,
+    /// a saved thread or the agent switch.
+    private func showChat() {
         let front = NSWorkspace.shared.frontmostApplication
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
-        if !keepThread { chat.prepareForShow(detected: WorkspaceDetector.workspace(of: previousApp ?? front)) }
+        chat.prepareForShow()
         chat.isVisible = true
         wispr.start()
         NSApp.activate()
@@ -563,7 +564,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.jump(to: session)
     }
 
-    /// Starts a new chat and sends `prompt` to the agent. Without `show`, the chat stays hidden and Ghost says when the agent
+    /// Sends `prompt` to the agent in the current chat and folder. Without `show`, the chat stays hidden and Ghost says when the agent
     /// needs something. When the chat is busy with a turn or an approval, nothing is replaced: a bubble offers to send it.
     private func sendToChat(_ prompt: String, show: Bool, title: String, busyBody: String) {
         if chat.isRunning || !chat.approvals.isEmpty {
@@ -573,43 +574,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           .init(title: "Not now") {}]))
             return
         }
-        chat.newChat()
-        chat.useNoProject()
-        chat.input = prompt
-        chat.send()
-        if show { showChat() } else {
+        let sent = sendInCurrentChat(prompt)
+        // Without a folder the prompt waits in the input, so show the chat for the user to pick one.
+        if show || !sent { showChat() } else {
             announcer.automation(AutomationNotice(
                 id: "automation-chat:\(title)", symbol: "wrench.and.screwdriver.fill", tint: .info, title: title,
                 body: "Asked \(chat.agent.name) to fix it.", buttons: [.init(title: "Open chat", primary: true) { [weak self] in self?.showChat() }], expires: 20))
         }
     }
 
-    /// "Ask Ghost": a new chat with the prompt ready to send.
+    /// "Ask Ghost": opens the chat in the current session and folder with the prompt ready to send. A draft the user
+    /// was typing stays below the prompt, separated by a blank line.
     private func ask(_ prompt: String) {
-        chat.newChat()
         showChat()
-        chat.prefill(prompt)
+        let draft = chat.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A second press on the same Ask leaves the input as it is.
+        if draft.hasPrefix(prompt) { return }
+        chat.prefill(draft.isEmpty ? prompt : prompt + "\n\n" + draft)
+    }
+
+    /// Sends `prompt` in the current session and folder. A draft the user was typing and any attachments come back
+    /// after the send. If the send does not go through (no folder chosen yet), the prompt waits in the input above
+    /// the draft, and prefill keeps the dictation auto-send from firing on it.
+    @discardableResult
+    private func sendInCurrentChat(_ prompt: String) -> Bool {
+        let draft = chat.input
+        let staged = chat.attachments
+        chat.attachments = []
+        chat.input = prompt
+        chat.send()
+        chat.attachments = staged
+        if chat.input.isEmpty {
+            chat.input = draft
+            return true
+        } else {
+            chat.prefill(draft.isEmpty ? chat.input : draft + "\n\n" + chat.input)
+            return false
+        }
     }
 
     /// "Build a new pet": opens the chat and sends the request in the current thread. The session and folder stay as
     /// they are. A draft the user was typing comes back after the send. While the agent is running, or before a folder
     /// is chosen, the request waits in the input box instead.
     private func requestPet(_ description: String) {
-        showChat(keepThread: true)
+        showChat()
         PetPrompt.ensureSkillInstalled()
-        let draft = chat.input
-        let staged = chat.attachments
-        chat.attachments = []
-        chat.input = PetPrompt.build(description: description)
-        chat.send()
-        chat.attachments = staged
-        if chat.input.isEmpty {
-            chat.input = draft
-        } else {
-            // The send did not go through. Keep the draft above the waiting request, and use prefill so the
-            // dictation auto-send does not fire on the larger input.
-            chat.prefill(draft.isEmpty ? chat.input : draft + "\n\n" + chat.input)
-        }
+        sendInCurrentChat(PetPrompt.build(description: description))
     }
 
     // MARK: Meetings
