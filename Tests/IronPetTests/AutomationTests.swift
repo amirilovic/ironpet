@@ -497,6 +497,40 @@ final class AutomationApprovalTests: AutomationTestCase {
         XCTAssertEqual(rig.notices.ids.filter { $0 == AutomationService.approvalID("sh") }.count, asked)
     }
 
+    func testSettingsApproveDismissesTheBubbleAndRunsThePendingFire() async {
+        let rig = makeRig([shell()])
+        var ran: [String] = []
+        var dismissed: [String] = []
+        rig.service.dismissNotice = { dismissed.append($0) }
+        rig.service.runShell = { command, _ in ran.append(command); return CommandResult(code: 0, stdout: "ran") }
+        XCTAssertTrue(rig.service.needsApproval(rig.store.automations[0]), "the row shows Approve and Reject")
+        XCTAssertEqual(rig.service.approvalDetail(rig.store.automations[0]), "echo hi")
+        run(rig, minutes: 5)
+        rig.service.approve("sh")
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        XCTAssertTrue(dismissed.contains(AutomationService.approvalID("sh")), "the bubble is dismissed")
+        await until("the pending run") { ran == ["echo hi"] }
+    }
+
+    func testSettingsRejectShowsRejectedAndApproveStaysAvailable() async {
+        let rig = makeRig([shell()])
+        rig.service.reject("sh")
+        let a = rig.store.automations[0]
+        XCTAssertTrue(rig.service.isRejected(a))
+        XCTAssertTrue(rig.service.needsApproval(a), "Approve is still offered")
+        rig.service.approve("sh")
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        XCTAssertFalse(rig.service.isRejected(rig.store.automations[0]))
+    }
+
+    func testNoApprovalButtonsForTheUsersOwnOrApprovedAutomations() {
+        let rig = makeRig([shell(by: "user")])
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        let rig2 = makeRig([shell()])
+        rig2.service.approve("sh")
+        XCTAssertFalse(rig2.service.needsApproval(rig2.store.automations[0]))
+    }
+
     func testTheUsersOwnShellRunsWithoutAsking() async {
         let rig = makeRig([shell(by: "user")])
         var ran = 0

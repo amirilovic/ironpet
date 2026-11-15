@@ -153,7 +153,7 @@ final class AutomationService {
         return engine.state.approved(a.id) != AutomationState.hash(risk)
     }
 
-    private func isRejected(_ a: Automation) -> Bool {
+    func isRejected(_ a: Automation) -> Bool {
         guard let risk = a.riskText else { return false }
         return engine.state.rejected(a.id) == AutomationState.hash(risk)
     }
@@ -168,13 +168,19 @@ final class AutomationService {
         }
     }
 
-    private func askApproval(_ a: Automation) {
-        announced[a.id] = AutomationState.hash(a.riskText ?? "")
-        let detail = (a.riskText ?? "").split(separator: "\n").map { line -> String in
+    /// The command, script or prompt the user is asked to allow, without the internal "shell:" style labels.
+    /// The approval bubble and Settings show this same text.
+    func approvalDetail(_ a: Automation) -> String {
+        (a.riskText ?? "").split(separator: "\n").map { line -> String in
             let text = String(line)
             for prefix in ["shell:", "poll:", "prompt:", "http:"] where text.hasPrefix(prefix) { return String(text.dropFirst(prefix.count)) }
             return text
         }.joined(separator: "\n")
+    }
+
+    private func askApproval(_ a: Automation) {
+        announced[a.id] = AutomationState.hash(a.riskText ?? "")
+        let detail = approvalDetail(a)
         let kind = a.action.type == "prompt" ? "prompt" : "command"
         notice(AutomationNotice(
             id: Self.approvalID(a.id), symbol: "hand.raised.fill", tint: .warn,
