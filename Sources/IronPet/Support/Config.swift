@@ -74,6 +74,8 @@ struct Config: Codable, Equatable {
         var logRetentionDays = 14
         /// When an automation fails, send the error to the chat and ask the agent to fix it.
         var autoFix = true
+        /// Approve commands, scripts and prompts that an agent writes without asking. Off by default.
+        var autoApprove = false
     }
 
     struct Skills: Codable, Equatable {

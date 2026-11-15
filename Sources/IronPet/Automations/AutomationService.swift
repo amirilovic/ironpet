@@ -158,11 +158,21 @@ final class AutomationService {
         return engine.state.rejected(a.id) == AutomationState.hash(risk)
     }
 
+    /// Whether commands, scripts and prompts an agent writes are approved without asking. Set from the settings.
+    var autoApproveEnabled: () -> Bool = { false }
+
     /// Asks about every enabled automation whose command or prompt is new and not the user's own.
+    /// With auto-approve on, it approves them instead, through the same `approve` as the Approve button.
     func reviewApprovals() {
         let live = Set(store.automations.map(\.id))
         for id in pending.keys where !live.contains(id) { pending[id] = nil }
         for a in store.automations where a.enabled && needsApproval(a) && !isRejected(a) {
+            if autoApproveEnabled() {
+                approve(a.id)
+                notice(AutomationNotice(id: "automation-auto-approved:\(a.id)", symbol: "checkmark.shield.fill", tint: .info,
+                                        title: "Auto-approved \"\(a.name)\"", subtitle: "Created by \(a.createdBy).", expires: 15))
+                continue
+            }
             let hash = AutomationState.hash(a.riskText ?? "")
             if announced[a.id] != hash { askApproval(a) }
         }
