@@ -148,6 +148,7 @@ final class AutomationScriptTests: XCTestCase {
         XCTAssertNotNil(AutomationScript.check("const x = 1;"))
         XCTAssertNotNil(AutomationScript.check("function poll( {"))
         XCTAssertNotNil(AutomationScript.check("while (true) {}"))
+        XCTAssertNotNil(AutomationScript.check("function f(n) { return f(n + 1) + 1; } f(0); function poll() { return {}; }"))
     }
 
     func testRealShellThroughTheSandbox() async throws {
