@@ -60,7 +60,7 @@ private struct AutomationList: View {
                     get: { config.config.automations.autoFix },
                     set: { on in config.update { $0.automations.autoFix = on } }))
             } footer: {
-                Text("When a poll, script, shell command or prompt fails, ironpet sends the error to a new chat and asks your agent to fix it with the automation tools. Changes to a command, script or prompt still wait for your Approve. At most one request per automation every 6 hours, and only after it has run fine since the last one.")
+                Text("When a poll, script, shell command or prompt fails, ironpet sends the error to the current chat and asks your agent to fix it with the automation tools. Changes to a command, script or prompt still wait for your Approve. At most one request per automation every 6 hours, and only after it has run fine since the last one.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Timing") {

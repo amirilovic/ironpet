@@ -257,16 +257,11 @@ final class ChatSession: ObservableObject {
 
     var isRunning: Bool { state == .running }
 
-    /// Picks the folder from the app the user came from. Outside a coding app, a new chat asks instead
-    /// of silently reusing the last folder; an ongoing chat keeps its folder.
-    func prepareForShow(detected: URL?) {
+    /// Called when the chat opens. The session and folder stay as they are. Only when no folder was ever chosen does
+    /// the picker show.
+    func prepareForShow() {
         if state == .done || state == .failed, approvals.isEmpty { state = .idle }
-        guard !isRunning else { return }
-        if let detected {
-            use(detected)
-        } else if items.isEmpty {
-            needsWorkspace = true
-        }
+        if workspace == nil { needsWorkspace = true }
     }
 
     func use(_ url: URL) {
