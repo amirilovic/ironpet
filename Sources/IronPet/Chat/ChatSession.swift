@@ -178,8 +178,6 @@ final class ChatSession: ObservableObject {
     private var backgroundReply: UUID?
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
     private var decided: [String: Bool] = [:]
-    private var dictationTimer: Timer?
-    private var prefilling = false
     let voice = VoiceController()
     private var voiceChanges: AnyCancellable?
     /// The transcription error that offers Retry, so only that card shows the button.
@@ -208,11 +206,10 @@ final class ChatSession: ObservableObject {
         voice.onFailure = { [weak self] message, canRetry in self?.voiceFailed(message, canRetry: canRetry) }
     }
 
-    /// A voice note's text goes into the input to edit, or is sent straight away when "Send after dictation" is on, the same switch Wispr Flow dictation uses.
-    /// It is not run through the dictation heuristics, which would send any multi-word insert.
+    /// A voice note's text goes into the input to edit, or is sent straight away when "Send voice notes automatically" is on.
+    /// This is the only path that sends automatically. Pasted, typed and Wispr Flow text never does.
     func receiveTranscript(_ text: String) {
         let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        prefilling = true
         input = existing.isEmpty ? text : existing + " " + text
         if sendAfterDictation { send() }
     }
@@ -433,7 +430,6 @@ final class ChatSession: ObservableObject {
     }
 
     func send() {
-        dictationTimer?.invalidate()
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !attachments.isEmpty else { return }
         if isRunning {
@@ -511,7 +507,6 @@ final class ChatSession: ObservableObject {
         let text = queue.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
         let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let combined = existing.isEmpty ? text : existing + "\n\n" + text
-        if combined != input { prefilling = true }
         input = combined
         attachments += queue.flatMap(\.attachments)
         queue = []
@@ -619,35 +614,19 @@ final class ChatSession: ObservableObject {
         shutdownAgent()
     }
 
-    /// Text delivered by the Wispr Flow bridge. Skipped if Wispr managed to type it into the field itself.
+    /// Text delivered by the Wispr Flow bridge. It is inserted but not sent. Skipped if Wispr managed to type it into the field itself.
     func receiveDictation(_ text: String) {
         guard !input.trimmingCharacters(in: .whitespaces).hasSuffix(text) else { return }
         input = input.isEmpty ? text : input + " " + text
-        scheduleAutoSend()
     }
 
-    /// Puts text in the input for the user to review; unlike a dictation it is not sent automatically.
+    /// Puts text in the input for the user to review. It is never sent automatically.
     func prefill(_ text: String) {
-        prefilling = true
         input = text
     }
 
-    /// Wispr Flow inserts a whole dictation at once; typing grows the text one character at a time.
     func inputChanged(from old: String, to new: String) {
         slash.reset()
-        if prefilling {
-            prefilling = false
-            return
-        }
-        if new.count - old.count >= 4 { scheduleAutoSend() }
-    }
-
-    private func scheduleAutoSend() {
-        guard sendAfterDictation else { return }
-        dictationTimer?.invalidate()
-        dictationTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.send() }
-        }
     }
 
     func decide(_ approval: Approval, allow: Bool) {

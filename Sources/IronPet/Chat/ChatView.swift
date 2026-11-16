@@ -149,13 +149,13 @@ struct ChatView: View {
                         .tint(.orange)
                 }
                 .help("Let the agent edit and run commands without asking (destructive commands still ask)")
-                SettingsRow("Send after dictation", last: true) {
+                SettingsRow("Send voice notes automatically", last: true) {
                     Toggle("", isOn: $session.sendAfterDictation)
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .controlSize(.small)
                 }
-                .help("Send the message as soon as you stop talking (Wispr Flow's fn, or the voice note shortcut)")
+                .help("Send a voice note recorded in ironpet as soon as it is transcribed. Pasted, typed and Wispr Flow text is never sent automatically")
             }
             HStack(spacing: 8) {
                 Button {
