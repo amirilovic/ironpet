@@ -37,11 +37,13 @@ struct FindBar: View {
     let close: () -> Void
     @FocusState private var focused: Bool
     static let fieldID = "findField"
+    /// SwiftUI does not copy the accessibility identifier onto the AppKit field, so AppKit lookups match this.
+    static let placeholder = "Find in chat"
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(.secondary)
-            TextField("Find in chat", text: $query)
+            TextField(Self.placeholder, text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12.5))
                 .focused($focused)
