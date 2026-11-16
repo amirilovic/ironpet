@@ -278,9 +278,11 @@ final class ACPBackend {
         client.onRequest = { [weak self] method, params, respond in self?.agentRequest(method, params, respond) }
         client.onClose = { [weak self, weak client] _ in
             guard let self, self.client === client else { return }
+            ChatLog.note("agent process \(self.agent.id) exited; transcript untouched, next message resumes the session")
             self.sessionReady = false
         }
         try client.start()
+        ChatLog.note("agent process \(agent.id) started")
         self.client = client
         self.transport = transport
         logCLIVersion()
@@ -383,6 +385,7 @@ final class ACPBackend {
                 throw error
             } catch {
                 NSLog("ironpet: \(agent.name) could not load session \(existing): \(error.localizedDescription). Starting a new one.")
+                ChatLog.note("session/load failed for \(existing): \(error.localizedDescription). Starting a new agent session, transcript kept")
                 sessionID = nil
             }
         }

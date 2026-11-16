@@ -303,6 +303,35 @@ final class TelegramTests: XCTestCase {
         XCTAssertFalse(texts.contains("answer to from the mac"))
     }
 
+    func testTelegramMessageWhileBusyNeverClearsTheChatOrAuto() async {
+        allow(10)
+        var log: [String] = []
+        ChatLog.sink = { log.append($0) }
+        defer { ChatLog.sink = nil }
+        var release: CheckedContinuation<Void, Never>?
+        session.turnRunner = { turn, emit in
+            await MainActor.run { emit(.session("thread-1")) }
+            if turn.prompt == "busy" { await withCheckedContinuation { release = $0 } }
+            await MainActor.run { emit(.finished(error: nil)) }
+        }
+        session.autoMode = true
+        session.input = "busy"
+        session.send()
+        for _ in 0..<50 where release == nil { try? await Task.sleep(nanoseconds: 20_000_000) }
+        session.isVisible = false
+        let before = session.items.map(\.id)
+        bridge.handle(telegramMessage("while busy", from: 10))
+        bridge.handle(telegramMessage("/status", from: 10, update: 2))
+        XCTAssertEqual(session.telegramQueueCount, 1)
+        XCTAssertEqual(session.items.map(\.id), before)
+        session.cancelTelegram(chat: 10)
+        XCTAssertEqual(session.items.map(\.id), before)
+        XCTAssertEqual(session.threadID, "thread-1")
+        XCTAssertTrue(session.autoMode)
+        XCTAssertFalse(log.contains { $0.hasPrefix("chat cleared") || $0.hasPrefix("thread ") })
+        release?.resume()
+    }
+
     func testStrangerNeverReachesTheChat() async {
         answering("should not run")
         bridge.handle(telegramMessage("run rm -rf", from: 99))

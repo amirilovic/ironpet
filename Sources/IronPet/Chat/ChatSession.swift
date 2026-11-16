@@ -181,7 +181,7 @@ final class ChatSession: ObservableObject {
     var onTelegram: ((Int64, TelegramEvent) -> Void)?
     private var telegramChat: Int64?
 
-    private var threadID: String? {
+    private(set) var threadID: String? {
         didSet { if persists { UserDefaults.standard.set(threadID, forKey: Self.threadKey) } }
     }
     /// False for preview sessions, so rendering screenshots neither reads nor overwrites the real chat.
@@ -252,11 +252,9 @@ final class ChatSession: ObservableObject {
 
     private func restoreLastChat() {
         let defaults = UserDefaults.standard
-        // Read Auto first: apply(_:) turns Auto off, and its didSet would overwrite the saved value.
-        let savedAuto = defaults.bool(forKey: Self.autoKey)
+        autoMode = defaults.bool(forKey: Self.autoKey)
         if let id = defaults.string(forKey: Self.threadKey), let thread = ThreadStore.load(id) {
-            apply(thread.restoredAfterQuit())
-            autoMode = savedAuto
+            apply(thread.restoredAfterQuit(), reason: "restore after launch")
         }
         input = defaults.string(forKey: Self.draftKey) ?? ""
         attachments = (defaults.stringArray(forKey: Self.attachmentsKey) ?? [])
@@ -297,7 +295,8 @@ final class ChatSession: ObservableObject {
             recents = [url] + recents.filter { $0 != url }.prefix(7)
             UserDefaults.standard.set(recents.map(\.path), forKey: "recentWorkspaces")
         }
-        if changed, !items.isEmpty, !isRunning { newChat() }
+        if changed { ChatLog.note("workspace changed to \(url.path)") }
+        if changed, !items.isEmpty, !isRunning { newChat(reason: "folder picked: \(url.path)") }
     }
 
     /// For general questions that are not about a project.
@@ -313,8 +312,9 @@ final class ChatSession: ObservableObject {
 
     func setAgent(_ next: ACPAgent) {
         guard next != agent, !isRunning else { return }
+        ChatLog.note("agent changed from \(agent.id) to \(next.id)")
         select(next)
-        if !items.isEmpty { newChat() }
+        if !items.isEmpty { newChat(reason: "agent changed to \(next.id)") }
     }
 
     private func select(_ next: ACPAgent) {
@@ -454,13 +454,14 @@ final class ChatSession: ObservableObject {
         return "> \(lead) \(owner) message\(when):\n\(quoted)\n\n\(text)"
     }
 
-    func newChat() {
+    /// Auto mode is not touched: it is the user's setting, not part of a chat.
+    func newChat(reason: String = "new chat requested") {
+        ChatLog.note("chat cleared (\(items.count) items, thread \(threadID ?? "none")): \(reason)")
         stop()
         shutdownAgent()
         replyingTo = nil
         items = []
         threadID = nil
-        autoMode = false
         state = .idle
         lastRunDuration = nil
     }
@@ -468,15 +469,15 @@ final class ChatSession: ObservableObject {
     func open(_ thread: ChatThread) {
         stop()
         shutdownAgent()
-        apply(thread)
+        apply(thread, reason: "opened from history")
     }
 
-    private func apply(_ thread: ChatThread) {
+    private func apply(_ thread: ChatThread, reason: String) {
+        ChatLog.note("thread \(thread.id) loaded (\(thread.items.count) items), replacing thread \(threadID ?? "none"): \(reason)")
         if let saved = AgentCatalog.agent(id: thread.agent), saved != agent { select(saved) }
         replyingTo = nil
         items = thread.items
         threadID = thread.id
-        autoMode = false
         state = .idle
         let url = URL(fileURLWithPath: thread.workspace)
         workspace = url
@@ -640,6 +641,7 @@ final class ChatSession: ObservableObject {
     }
 
     private func makeBackend() -> ACPBackend {
+        if acp != nil { ChatLog.note("agent backend replaced: \(agent.id), thread \(threadID ?? "none") kept") }
         acp?.shutdown()
         let backend = ACPBackend(agent: agent)
         backend.usageFeature = .chat
@@ -792,7 +794,13 @@ final class ChatSession: ObservableObject {
         guard turn == turnID else { return }
         switch event {
         case .session(let id):
-            threadID = id
+            // The agent started a fresh session because it could not resume the old one. The chat keeps its thread
+            // and transcript; only the agent's own context starts over.
+            if let current = threadID, current != id {
+                ChatLog.note("agent session \(id) replaced unresumable \(current); chat thread and \(items.count) items kept")
+            } else {
+                threadID = id
+            }
             // Saved now, not only when the turn ends, so quitting mid-run keeps the question.
             saveThread()
         case .models(_, let list):
