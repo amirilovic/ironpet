@@ -64,7 +64,7 @@ final class TranscriberTests: XCTestCase {
         XCTAssertTrue(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data; boundary=") == true)
         let body = String(decoding: StubProtocol.bodies[0], as: UTF8.self)
         XCTAssertTrue(body.contains("name=\"model\"\r\n\r\nsome/model"))
-        XCTAssertTrue(body.contains("name=\"response_format\"\r\n\r\njson"))
+        XCTAssertTrue(body.contains("name=\"response_format\"\r\n\r\nverbose_json"))
         XCTAssertTrue(body.contains("name=\"file\"; filename=\"voice-note.wav\""))
         XCTAssertTrue(body.contains("RIFF"))
         XCTAssertNotNil(StubProtocol.bodies[0].range(of: wav))
@@ -286,10 +286,10 @@ final class MeetingTranscriptionTests: XCTestCase {
         XCTAssertEqual(formats(), ["verbose_json"])
     }
 
-    func testVoiceNotesStillSendPlainJSON() async throws {
+    func testVoiceNotesAskForVerboseJSON() async throws {
         StubProtocol.respond = { _ in (200, Data(#"{"text":"hello"}"#.utf8), nil) }
         _ = try await transcriber().transcribe(wav: wav)
-        XCTAssertEqual(formats(), ["json"])
+        XCTAssertEqual(formats(), ["verbose_json"])
         XCTAssertTrue(String(decoding: StubProtocol.bodies[0], as: UTF8.self).contains("filename=\"voice-note.wav\""))
     }
 }
