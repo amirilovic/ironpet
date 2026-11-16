@@ -19,6 +19,24 @@ final class ChatSession: ObservableObject {
         var date: Date? = Date()
         /// Where a user message came from when it was not typed here (`ChatSession.telegramOrigin`).
         var origin: String?
+        /// The earlier message this one answers, when the user used Reply.
+        var reply: Reply?
+    }
+
+    /// A reference to an earlier message, kept with the message that answers it. It stores the full text, so the agent
+    /// still gets the original after the transcript scrolls or the thread is reopened.
+    struct Reply: Codable, Equatable {
+        /// The id of the original item. The quote scrolls to it while it is in the transcript.
+        var itemID: UUID
+        /// "You" or the pet's name.
+        var sender: String
+        /// The original message, or only the selected part of it when `selection` is true.
+        var text: String
+        var date: Date?
+        /// True when the user selected part of the message and asked about that.
+        var selection: Bool? = nil
+        /// True when the user wrote the original. Older saved threads lack it and fall back to the sender name.
+        var fromUser: Bool? = nil
     }
 
     struct QueuedMessage: Identifiable {
@@ -27,6 +45,7 @@ final class ChatSession: ObservableObject {
         let attachments: [URL]
         /// The Telegram chat id when the message came from Telegram. Those are never put back in the Mac input.
         var telegram: Int64? = nil
+        var reply: Reply? = nil
     }
 
     /// What happened to a turn that started from Telegram, for `onTelegram`.
@@ -86,6 +105,10 @@ final class ChatSession: ObservableObject {
     }
     /// Messages typed while a turn runs. Each keeps the attachments present when it was queued.
     @Published private(set) var queue: [QueuedMessage] = []
+    /// The message the next send answers. One at a time; choosing another replaces it.
+    @Published var replyingTo: Reply?
+    /// Bumps each time Reply is chosen, so the input takes focus even when the same message is chosen again.
+    @Published private(set) var replyFocusTick = 0
     /// What the agent is doing right now, e.g. "Running `npm test`".
     @Published private(set) var activity: String?
     @Published private(set) var runStartedAt: Date?
@@ -390,9 +413,51 @@ final class ChatSession: ObservableObject {
         attachments += files.filter { !attachments.contains($0) }
     }
 
+    /// Starts a reply to a user or assistant message. Tool steps, screenshots and errors cannot be replied to.
+    func reply(to item: Item, selection: String? = nil) {
+        let sender: String
+        let text: String
+        let fromUser: Bool
+        switch item.kind {
+        case .user(let t): sender = "You"; text = t; fromUser = true
+        case .assistant(let t): sender = ConfigStore.shared.config.pet.name; text = t; fromUser = false
+        default: return
+        }
+        let trimmed = selection?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selected = trimmed?.isEmpty == false ? trimmed : nil
+        replyingTo = Reply(itemID: item.id, sender: sender, text: selected ?? text, date: item.date,
+                           selection: selected == nil ? nil : true, fromUser: fromUser)
+        replyFocusTick += 1
+    }
+
+    /// Most characters of the original that reach the agent.
+    static let replyLimit = 4000
+
+    private static let replyTime: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return f
+    }()
+
+    /// The prompt the agent receives for a reply: the original quoted in full, then the user's text.
+    static func replyPrompt(_ reply: Reply, text: String) -> String {
+        var original = reply.text
+        var note = ""
+        if original.count > replyLimit {
+            note = "\n[The original was cut here. It is \(original.count) characters long.]"
+            original = String(original.prefix(replyLimit))
+        }
+        let owner = reply.fromUser ?? (reply.sender == "You") ? "your own" : "\(reply.sender)'s"
+        let when = reply.date.map { " from \(replyTime.string(from: $0))" } ?? ""
+        let quoted = (original + note).components(separatedBy: "\n").map { "> " + $0 }.joined(separator: "\n")
+        let lead = reply.selection == true ? "About this part of" : "Replying to"
+        return "> \(lead) \(owner) message\(when):\n\(quoted)\n\n\(text)"
+    }
+
     func newChat() {
         stop()
         shutdownAgent()
+        replyingTo = nil
         items = []
         threadID = nil
         autoMode = false
@@ -408,6 +473,7 @@ final class ChatSession: ObservableObject {
 
     private func apply(_ thread: ChatThread) {
         if let saved = AgentCatalog.agent(id: thread.agent), saved != agent { select(saved) }
+        replyingTo = nil
         items = thread.items
         threadID = thread.id
         autoMode = false
@@ -433,20 +499,22 @@ final class ChatSession: ObservableObject {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !attachments.isEmpty else { return }
         if isRunning {
-            queue.append(QueuedMessage(text: prompt, attachments: attachments))
+            queue.append(QueuedMessage(text: prompt, attachments: attachments, reply: replyingTo))
             input = ""
             attachments = []
+            replyingTo = nil
             return
         }
-        if start(prompt: prompt, shots: attachments) {
+        if start(prompt: prompt, shots: attachments, reply: replyingTo) {
             input = ""
             attachments = []
+            replyingTo = nil
         }
     }
 
     /// Starts a turn. Returns false, without sending, when no folder is chosen or the hooks are missing.
     @discardableResult
-    private func start(prompt: String, shots: [URL], telegram: Int64? = nil) -> Bool {
+    private func start(prompt: String, shots: [URL], telegram: Int64? = nil, reply: Reply? = nil) -> Bool {
         var prompt = prompt
         if telegram != nil, workspace == nil {
             // No chat has a folder yet. The no-project folder is what a chat with no code context uses.
@@ -463,11 +531,11 @@ final class ChatSession: ObservableObject {
         if prompt.isEmpty { prompt = telegram == nil ? "Help me with what's on my screen." : "Help me with the attached file." }
         let origin = telegram == nil ? nil : Self.telegramOrigin
         items += shots.map { Item(kind: .screenshot($0.path), origin: origin) }
-        items.append(Item(kind: .user(prompt), origin: origin))
+        items.append(Item(kind: .user(prompt), origin: origin, reply: reply))
         let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
         telegramChat = telegram
         if let telegram { onTelegram?(telegram, .started) }
-        run(ACPTurn(prompt: prompt, preamble: preamble, workspace: workspace, resume: threadID, model: model,
+        run(ACPTurn(prompt: reply.map { Self.replyPrompt($0, text: prompt) } ?? prompt, preamble: preamble, workspace: workspace, resume: threadID, model: model,
                     images: shots.filter(ImageIntake.isImageFile), files: shots.filter { !ImageIntake.isImageFile($0) }))
         return true
     }
@@ -509,13 +577,14 @@ final class ChatSession: ObservableObject {
         let combined = existing.isEmpty ? text : existing + "\n\n" + text
         input = combined
         attachments += queue.flatMap(\.attachments)
+        if replyingTo == nil { replyingTo = queue.compactMap(\.reply).first }
         queue = []
     }
 
     /// Sends the oldest queued message through the normal path.
     private func sendNextQueued() {
         guard let next = queue.first else { return }
-        if start(prompt: next.text, shots: next.attachments, telegram: next.telegram) {
+        if start(prompt: next.text, shots: next.attachments, telegram: next.telegram, reply: next.reply) {
             queue.removeFirst()
         } else {
             restoreQueue()
@@ -525,15 +594,15 @@ final class ChatSession: ObservableObject {
     /// A message from an allowed Telegram user. It goes into the chat that is open now, the same way typed text
     /// does, and never changes the chat's thread or folder. A busy agent queues it with the Mac's own queue until the
     /// turn ends. `files` are shown and sent like Mac attachments, without touching the draft the user may be composing.
-    func submitFromTelegram(_ text: String, chat: Int64, files: [URL] = []) {
+    func submitFromTelegram(_ text: String, chat: Int64, files: [URL] = [], reply: Reply? = nil) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !files.isEmpty else { return }
         guard !isRunning else {
-            queue.append(QueuedMessage(text: prompt, attachments: files, telegram: chat))
+            queue.append(QueuedMessage(text: prompt, attachments: files, telegram: chat, reply: reply))
             onTelegram?(chat, .queued)
             return
         }
-        start(prompt: prompt, shots: files, telegram: chat)
+        start(prompt: prompt, shots: files, telegram: chat, reply: reply)
     }
 
     /// Applies a decision from Telegram through the same path as the Mac's Allow and Deny buttons.

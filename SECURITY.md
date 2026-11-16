@@ -41,6 +41,7 @@ Please use GitHub's **Report a vulnerability** button on the repository's Securi
 - The microphone, only while you record a voice note with voice notes on (off by default). macOS asks for permission the first time you record, not before.
 - The microphone and one app's audio (or all system audio, through ScreenCaptureKit), only while a meeting transcript is recording, with meeting transcripts on (off by default). macOS asks for microphone and Screen & System Audio Recording access the first time you start one.
 - Wispr Flow's local database, to pick up dictation while the chat is open.
+- The general pasteboard, briefly, after you select text in a chat message and release the mouse. ironpet sends the same copy command as Cmd-C to read the selection for the "Ask about this" button, then puts your earlier pasteboard contents back. It never reads the pasteboard otherwise, and the selected text stays in the chat unless you send it.
 
 ## Data in `~/.ironpet`
 
