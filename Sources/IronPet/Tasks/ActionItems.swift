@@ -46,15 +46,19 @@ enum ActionItems {
         let inside = body[open.upperBound..<body.index(before: body.endIndex)]
         var owner: String?
         var due: String?
+        var inDue = false
         for part in inside.split(separator: ",") {
             let pair = part.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            guard pair.count == 2 else { continue }
-            switch pair[0].lowercased() {
-            case "owner": owner = pair[1]
-            case "due": due = pair[1]
-            default: break
+            switch pair.count == 2 ? pair[0].lowercased() : nil {
+            case "owner": owner = pair[1]; inDue = false
+            case "due": due = pair[1]; inDue = true
+            default:
+                // A date with a comma, as in `due: Nov 20, 2026`. An owner list keeps its first name only.
+                if inDue, let start = due { due = start + ", " + part.trimmingCharacters(in: .whitespaces) }
             }
         }
+        owner = owner.flatMap { $0.isEmpty ? nil : $0 }
+        due = due.flatMap { $0.isEmpty ? nil : $0 }
         guard owner != nil || due != nil else { return Item(title: body) }
         let title = body[..<open.lowerBound].trimmingCharacters(in: .whitespaces)
         return Item(title: title.isEmpty ? body : title, owner: owner, due: due)

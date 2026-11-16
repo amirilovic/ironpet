@@ -115,6 +115,28 @@ final class ConfigTests: XCTestCase {
         XCTAssertNil(Config.load(from: file).config.meetings.summaryModel)
     }
 
+    func testTaskDefaults() {
+        let tasks = Config().tasks
+        XCTAssertTrue(tasks.meetingSuggestions)
+        XCTAssertEqual(tasks.keepDoneDays, 30)
+    }
+
+    func testKeepDoneDaysIsClamped() throws {
+        try write(#"{"tasks":{"keepDoneDays":0}}"#)
+        XCTAssertEqual(Config.load(from: file).config.tasks.keepDoneDays, 1)
+        try write(#"{"tasks":{"keepDoneDays":1000}}"#)
+        XCTAssertEqual(Config.load(from: file).config.tasks.keepDoneDays, 365)
+    }
+
+    func testPartialTasksKeepOtherDefaults() throws {
+        try write(#"{"tasks":{"meetingSuggestions":false}}"#)
+        let (config, error) = Config.load(from: file)
+        XCTAssertNil(error)
+        XCTAssertFalse(config.tasks.meetingSuggestions)
+        XCTAssertEqual(config.tasks.keepDoneDays, 30)
+        XCTAssertEqual(config.meetings, Config.Meetings())
+    }
+
     func testVoiceKeysRoundTrip() throws {
         var config = Config()
         config.voice = Config.Voice(enabled: true, baseUrl: "https://api.groq.com/openai/v1", model: "whisper-large-v3-turbo")

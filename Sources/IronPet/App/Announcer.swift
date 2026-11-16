@@ -134,6 +134,24 @@ final class Announcer {
         if alsoSystemNotifications { notifier.announceMeetingSummary(url) }
     }
 
+    /// Action items from a meeting summary that are the user's. Nothing becomes a task until they choose.
+    func taskSuggestions(_ suggestions: [TaskSuggestion], addAll: @escaping () -> Void, review: @escaping () -> Void) {
+        guard !suggestions.isEmpty else { return }
+        let count = suggestions.count
+        var lines = suggestions.prefix(3).map { "• \($0.title)" }
+        if count > 3 { lines.append("and \(count - 3) more") }
+        bubbles.show(Bubble(id: "task-suggestions", symbol: "checklist", tint: .accentColor,
+                            title: "\(count) action \(count == 1 ? "item" : "items") from the meeting", body: lines.joined(separator: "\n"),
+                            actions: [.init(title: "Add all", style: .primary, run: addAll), .init(title: "Review", run: review)],
+                            onTap: review, expires: Date().addingTimeInterval(60)))
+        chime()
+    }
+
+    func tasksAdded(_ count: Int) {
+        bubbles.show(Bubble(id: "task-suggestions", symbol: "checkmark.circle.fill", tint: .green,
+                            title: "Added \(count) \(count == 1 ? "task" : "tasks")", expires: Date().addingTimeInterval(8)))
+    }
+
     /// Small talk from the Actions menu.
     func say(_ text: String) {
         bubbles.show(Bubble(id: "say", symbol: "pawprint.fill", tint: .accentColor, title: ConfigStore.shared.config.pet.name, body: text,
