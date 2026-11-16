@@ -16,7 +16,7 @@ final class PetController: NSObject {
     private let windowModel = IronPetWindowModel()
     private var builtWindow: IronPetPanel?
     /// Built on first use, so it gets the stores the app hands over after `init`.
-    private var window: IronPetPanel {
+    var window: IronPetPanel {
         if let builtWindow { return builtWindow }
         let window = makeWindow()
         builtWindow = window
@@ -37,8 +37,21 @@ final class PetController: NSObject {
     var onCapture: ((_ region: Bool) -> Void)?
     /// The Tasks section's list. Falls back to `TaskStore.shared`, then to an empty list.
     var tasks: TaskStore?
-    /// The Automations and Settings sections. Set before the window first opens.
+    /// The Automations section. Set before the window first opens.
     var settings: SettingsModel?
+    /// The Settings row at the bottom of the sidebar: opens the Settings window.
+    var onSettings: (() -> Void)?
+    /// The Chat section's session and the Transcripts section's meetings. Set before the window first opens.
+    var chat: ChatSession?
+    var meetings: MeetingLibrary?
+    /// "Ask Ghost" on a meeting: attach these files in the chat.
+    var onAskMeeting: (([URL]) -> Void)?
+    var meetingInProgress: () -> URL? = { nil }
+    /// The Chat section came on screen or left it (another section, or the window closed).
+    var onChatShown: ((Bool) -> Void)?
+    /// The window closed, by Esc, a close button or ⌘W, or because ironpet lost focus off Chat.
+    var onWindowClosed: (() -> Void)?
+    private var chatShown = false
     /// "Tell Ghost…" in the Tasks section: send this text to the chat.
     var onTellGhost: ((String) -> Void)?
     /// A task's thread link: open that chat thread.
@@ -102,8 +115,8 @@ final class PetController: NSObject {
     }
 
     var isWindowVisible: Bool { builtWindow?.isVisible ?? false }
-    /// The main sections show what bubbles would announce. Settings does not, so an approval still shows there.
-    var suppressesBubbles: Bool { isWindowVisible && IronPetSection.main.contains(windowModel.section) }
+    var suppressesBubbles: Bool { isWindowVisible && windowModel.section.hidesBubbles }
+    var isChatVisible: Bool { isWindowVisible && windowModel.section == .chat }
     var windowNumber: Int { builtWindow?.windowNumber ?? 0 }
 
     func snapshotWindow(to url: URL) -> Bool { builtWindow?.snapshot(to: url) ?? false }
@@ -189,9 +202,10 @@ final class PetController: NSObject {
         refreshMood()
     }
 
-    /// The pet previews animate only while the General page is on screen.
-    private func syncGallery() {
-        settings?.pets.setWindowShown(isWindowVisible && windowModel.section == .general)
+    private func syncChat() {
+        guard isChatVisible != chatShown else { return }
+        chatShown = isChatVisible
+        onChatShown?(chatShown)
     }
 
     private var taskList: TaskStore { tasks ?? TaskStore.shared ?? Self.noTasks }
@@ -199,38 +213,42 @@ final class PetController: NSObject {
     private func makeWindow() -> IronPetPanel {
         let actions = SessionActions(
             onJump: { [weak self] session in self?.jump(to: session) },
-            onAsk: { [weak self] prompt in
-                self?.window.close()
-                self?.onAsk?(prompt)
-            },
+            onAsk: { [weak self] prompt in self?.onAsk?(prompt) },
             onTrick: { [weak self] trick in
                 // Bubbles are hidden while this window is open.
                 if trick == .speak { self?.window.close() }
                 self?.perform(trick)
             },
-            onTellGhost: { [weak self] text in
-                self?.window.close()
-                self?.onTellGhost?(text)
-            },
-            onOpenThread: { [weak self] id in
-                self?.window.close()
-                self?.onOpenThread?(id)
-            },
+            onTellGhost: { [weak self] text in self?.onTellGhost?(text) },
+            onOpenThread: { [weak self] id in self?.onOpenThread?(id) },
             onOpenSession: { [weak self] id in
                 guard let self else { return }
                 if let session = store.sessions[id] { return jump(to: session) }
-                window.close()
                 onOpenSession?(id)
+            },
+            onAskMeeting: { [weak self] files in self?.onAskMeeting?(files) },
+            meetingInProgress: { [weak self] in self?.meetingInProgress() },
+            onClose: { [weak self] in self?.builtWindow?.close() },
+            onSettings: { [weak self] in
+                guard let self else { return }
+                // The Settings window is a normal window, so it would open behind this floating one.
+                if !isChatVisible { builtWindow?.close() }
+                onSettings?()
             })
-        let window = IronPetPanel(content: IronPetWindowView(model: windowModel, store: store, signals: signals,
-                                                             tasks: taskList, settings: settings, actions: actions))
+        let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(
+            model: windowModel, store: store, signals: signals, tasks: taskList, chat: chat, meetings: meetings,
+            settings: settings, actions: actions))
         window.onVisibilityChange = { [weak self] visible in
-            self?.syncGallery()
+            self?.syncChat()
             if !visible { self?.refreshMood() }
         }
+        window.onClose = { [weak self] in self?.onWindowClosed?() }
         windowModel.$section
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.syncGallery() }
+            .sink { [weak self] _ in
+                self?.syncChat()
+                self?.refreshMood()
+            }
             .store(in: &cancellables)
         return window
     }

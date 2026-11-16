@@ -1,44 +1,39 @@
 import AppKit
 import SwiftUI
 
-/// A page of the ironpet window. The settings cases keep the Settings tab tags, which `/test/settings` takes.
+/// A page of the ironpet window, in sidebar order.
 enum IronPetSection: String, CaseIterable, Identifiable {
-    case agents, alerts, tasks, actions, automations
-    case general, integrations, voice, meetings, usage
+    case chat, agents, alerts, tasks, transcripts, actions, automations
 
     var id: String { rawValue }
-    static let main: [IronPetSection] = [.agents, .alerts, .tasks, .actions, .automations]
-    static let settings: [IronPetSection] = [.general, .integrations, .voice, .meetings, .usage]
 
     var title: String {
         switch self {
+        case .chat: return "Chat"
         case .agents: return "Agents"
         case .alerts: return "Alerts"
         case .tasks: return "Tasks"
+        case .transcripts: return "Transcripts"
         case .actions: return "Actions"
         case .automations: return "Automations"
-        case .general: return "General"
-        case .integrations: return "Integrations"
-        case .voice: return "Voice"
-        case .meetings: return "Meetings"
-        case .usage: return "Usage"
         }
     }
 
     var symbol: String {
         switch self {
+        case .chat: return "bubble.left.and.bubble.right"
         case .agents: return "person.2"
         case .alerts: return "bell"
         case .tasks: return "checklist"
+        case .transcripts: return "waveform"
         case .actions: return "sparkles"
         case .automations: return "clock.badge.checkmark"
-        case .general: return "gearshape"
-        case .integrations: return "puzzlepiece.extension"
-        case .voice: return "mic"
-        case .meetings: return "person.2.wave.2"
-        case .usage: return "chart.bar"
         }
     }
+
+    /// The sections that show what a bubble would announce, so bubbles wait while one is open. The others leave them
+    /// visible, so an approval is not missed while reading a transcript or editing an automation.
+    var hidesBubbles: Bool { [.chat, .agents, .alerts, .tasks, .actions].contains(self) }
 
     /// Agents that need the user win; otherwise alerts when there are some and no agent is working, then tasks that
     /// wait on the user or on Add / Skip.
@@ -53,26 +48,35 @@ enum IronPetSection: String, CaseIterable, Identifiable {
 
 @MainActor
 final class IronPetWindowModel: ObservableObject {
-    @Published var section: IronPetSection = .agents
+    @Published var section: IronPetSection = .chat
 }
 
-/// Agents, alerts, tasks, actions, automations and settings in one floating panel with a sidebar. Opens next to the
-/// pet, and closes on Esc, when ironpet stops being the active app, or when the chat or
-/// meeting panel takes over. Its own sheets, popovers, alerts and open panels keep it open.
+/// The one ironpet window: chat, agents, alerts, tasks, transcripts, actions and automations in a floating
+/// panel with a sidebar, opened next to the pet. On Chat it behaves like a chat window: it stays open when you switch
+/// apps, Esc stops a running turn first, ⌘V pastes an image and ⌘F finds. On the other sections it closes on Esc,
+/// when ironpet stops being the active app, or when the meeting panel takes over; its own sheets, popovers, alerts
+/// and open panels keep it open.
 final class IronPetPanel: NSPanel {
     static let title = "ironpet"
-    static let minimumSize = CGSize(width: 700, height: 480)
+    static let minimumSize = CGSize(width: 720, height: 480)
     private static let sizeKey = "ironpetWindowSize"
     var onVisibilityChange: ((Bool) -> Void)?
+    var onClose: (() -> Void)?
+    private let model: IronPetWindowModel
+    private let session: ChatSession?
     private var observers: [NSObjectProtocol] = []
 
-    init<Content: View>(content: Content) {
+    init<Content: View>(model: IronPetWindowModel, session: ChatSession?, content: Content) {
+        self.model = model
+        self.session = session
+        // A titled window with a hidden title bar: native resizing from every edge and corner.
         super.init(contentRect: CGRect(origin: .zero, size: Self.savedSize),
                    styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         title = Self.title
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         hideStandardWindowButtons()
+        backgroundColor = .windowBackgroundColor
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         hidesOnDeactivate = false
@@ -93,16 +97,21 @@ final class IronPetPanel: NSPanel {
                 }
             },
             center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.close() }
+                MainActor.assumeIsolated {
+                    guard let self, self.isVisible, !self.onChat else { return }
+                    self.close()
+                }
             },
         ]
     }
 
     private static var savedSize: CGSize {
-        guard let saved = UserDefaults.standard.string(forKey: sizeKey) else { return CGSize(width: 780, height: 560) }
+        guard let saved = UserDefaults.standard.string(forKey: sizeKey) else { return CGSize(width: 820, height: 600) }
         let size = NSSizeFromString(saved)
         return CGSize(width: max(size.width, minimumSize.width), height: max(size.height, minimumSize.height))
     }
+
+    private var onChat: Bool { session != nil && model.section == .chat }
 
     override var canBecomeKey: Bool { true }
 
@@ -112,42 +121,75 @@ final class IronPetPanel: NSPanel {
         hideStandardWindowButtons()
     }
 
-    override func cancelOperation(_ sender: Any?) { close() }
-
     /// The new key window is only known once AppKit has finished moving focus.
     override func resignKey() {
         super.resignKey()
         DispatchQueue.main.async { [weak self] in
-            guard let self, isVisible, Self.shouldClose(self, appActive: NSApp.isActive, newKey: NSApp.keyWindow) else { return }
+            guard let self, isVisible,
+                  Self.shouldClose(self, onChat: onChat, appActive: NSApp.isActive, newKey: NSApp.keyWindow) else { return }
             close()
         }
     }
 
-    /// Closes when ironpet is no longer active or another of its panels (the chat, the meeting) became key. Anything
-    /// the window opened itself (a sheet, a popover, an alert, an open panel) keeps it open.
-    static func shouldClose(_ panel: NSWindow, appActive: Bool, newKey: NSWindow?) -> Bool {
+    /// On Chat the window stays until closed, like the chat panel it replaced: Wispr Flow and screenshots work while
+    /// another app is in front. Elsewhere it closes when ironpet is no longer active or the meeting panel became key.
+    /// Anything the window opened itself (a sheet, a popover, an alert, an open panel) keeps it open.
+    static func shouldClose(_ panel: NSWindow, onChat: Bool, appActive: Bool, newKey: NSWindow?) -> Bool {
+        if onChat { return false }
         guard appActive else { return true }
         guard let newKey, newKey !== panel else { return false }
         if newKey.sheetParent === panel || newKey.parent === panel { return false }
-        return newKey is ChatPanel || newKey is MeetingPanel
+        return newKey is MeetingPanel
+    }
+
+    /// Intercepts ⌘V only when the pasteboard holds an image and no text; text paste stays with the field.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if onChat, let session, flags == .command, event.charactersIgnoringModifiers == "v", ImageIntake.decide(.general) != .text {
+            let saved = ImageIntake.importPaste(.general)
+            if !saved.isEmpty {
+                saved.forEach(session.attach)
+                return true
+            }
+        }
+        if onChat, flags == .command, event.charactersIgnoringModifiers == "f", isKeyWindow {
+            revealFind()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// On Chat, Esc stops a running turn first, like the stop button; only an idle chat closes.
+    override func cancelOperation(_ sender: Any?) {
+        guard onChat, let session else { return close() }
+        if session.dismissSlash() { return }
+        if session.findOpen {
+            dismissFind()
+            return
+        }
+        if session.isRunning { session.stop() } else { close() }
     }
 
     override func close() {
         let wasVisible = isVisible
         super.close()
-        if wasVisible { onVisibilityChange?(false) }
+        guard wasVisible else { return }
+        onVisibilityChange?(false)
+        onClose?()
     }
 
     /// Below the pet when there is room, otherwise above it; always clamped to the pet's screen, and no larger than it
-    /// (a size saved on a bigger display would push the sidebar off the left edge).
+    /// (a size saved on a bigger display would push the sidebar off the left edge). Stays where it is when already open.
     func show(near anchor: CGRect) {
-        let screen = NSScreen.screens.first { $0.frame.intersects(anchor) }?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
-        let size = Self.fitted(frame.size, in: screen)
-        var origin = CGPoint(x: anchor.midX - size.width / 2, y: anchor.minY - size.height - 4)
-        if origin.y < screen.minY { origin.y = anchor.maxY + 4 }
-        origin.x = min(max(origin.x, screen.minX + 8), screen.maxX - size.width - 8)
-        origin.y = min(max(origin.y, screen.minY + 8), screen.maxY - size.height - 8)
-        if !isVisible { setFrame(CGRect(origin: origin, size: size), display: true) }
+        if !isVisible {
+            let screen = NSScreen.screens.first { $0.frame.intersects(anchor) }?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+            let size = Self.fitted(frame.size, in: screen)
+            var origin = CGPoint(x: anchor.midX - size.width / 2, y: anchor.minY - size.height - 4)
+            if origin.y < screen.minY { origin.y = anchor.maxY + 4 }
+            origin.x = min(max(origin.x, screen.minX + 8), screen.maxX - size.width - 8)
+            origin.y = min(max(origin.y, screen.minY + 8), screen.maxY - size.height - 8)
+            setFrame(CGRect(origin: origin, size: size), display: true)
+        }
         makeKeyAndOrderFront(nil)
         onVisibilityChange?(true)
     }
@@ -164,6 +206,72 @@ final class IronPetPanel: NSPanel {
         guard let data = rep.representation(using: .png, properties: [:]) else { return false }
         return (try? data.write(to: url)) != nil
     }
+
+    // MARK: Chat focus
+
+    /// Opens the find bar and moves focus into its field. Cmd-F calls this; tests call it directly because a
+    /// test process has no key window.
+    func revealFind() {
+        guard let session else { return }
+        session.findOpen = true
+        session.findFocusTick += 1
+        focusFind()
+    }
+
+    /// Closes the find bar and returns focus to the composer. Esc and the bar's close button both come here.
+    /// The bar leaves the view tree on the next update, and that can hand focus to the window, so retry
+    /// until the composer holds it.
+    func dismissFind() {
+        session?.findOpen = false
+        refocusInput()
+    }
+
+    private var composerHasFocus: Bool {
+        guard let field = contentView.flatMap(Self.firstTextInput), let responder = firstResponder else { return false }
+        return responder === field || (field as? NSTextField)?.currentEditor() === responder
+    }
+
+    private func refocusInput(attempt: Int = 0) {
+        guard isKeyWindow || attempt == 0 else { return }
+        if !composerHasFocus { focusInput() }
+        guard attempt < 10 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+            guard let self, self.session?.findOpen == false else { return }
+            self.refocusInput(attempt: attempt + 1)
+        }
+    }
+
+    /// SwiftUI's FocusState only applies on first appearance; the window is reused, so focus the text view directly.
+    func focusInput() {
+        guard let field = contentView.flatMap(Self.firstTextInput) else { return }
+        makeFirstResponder(field)
+    }
+
+    /// Moves focus to the find field and selects its text. The bar enters the view tree on the next SwiftUI update,
+    /// so retry briefly until the field exists. `FocusState` alone loses to the composer, which keeps first responder.
+    private func focusFind(attempt: Int = 0) {
+        // Esc during the retries closes the bar; do not pull focus back to a field that is going away.
+        guard session?.findOpen == true else { return }
+        if let field = contentView.flatMap({ Self.findField(in: $0) }) {
+            makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+        } else if attempt < 30 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in self?.focusFind(attempt: attempt + 1) }
+        }
+    }
+
+    private static func findField(in view: NSView) -> NSTextField? {
+        if let field = view as? NSTextField, !field.isHidden, field.placeholderString == FindBar.placeholder { return field }
+        for sub in view.subviews { if let found = findField(in: sub) { return found } }
+        return nil
+    }
+
+    private static func firstTextInput(in view: NSView) -> NSView? {
+        if let text = view as? NSTextView, text.isEditable, !text.isFieldEditor { return text }
+        if let field = view as? NSTextField, field.isEditable, field.placeholderString != FindBar.placeholder { return field }
+        for sub in view.subviews { if let found = firstTextInput(in: sub) { return found } }
+        return nil
+    }
 }
 
 struct IronPetWindowView: View {
@@ -171,7 +279,10 @@ struct IronPetWindowView: View {
     @ObservedObject var store: SessionStore
     @ObservedObject var signals: SignalStore
     @ObservedObject var tasks: TaskStore
-    /// Nil in previews that only show the main sections; the Settings rows are hidden then.
+    /// Nil in previews and tests that do not show it; its row is hidden then.
+    var chat: ChatSession?
+    var meetings: MeetingLibrary?
+    /// Nil in previews, which cannot build the Automations section; its row is hidden then.
     var settings: SettingsModel?
     let actions: SessionActions
 
@@ -179,25 +290,34 @@ struct IronPetWindowView: View {
         HStack(spacing: 0) {
             sidebar
             Divider()
-            detail
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.top, 10)
+            detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var shown: [IronPetSection] {
+        IronPetSection.allCases.filter {
+            ($0 != .chat || chat != nil) && ($0 != .transcripts || meetings != nil) && ($0 != .automations || settings != nil)
         }
     }
 
     private var sidebar: some View {
         List(selection: Binding(get: { model.section }, set: { if let section = $0 { model.section = section } })) {
-            Section {
-                ForEach(IronPetSection.main) { row($0) }
-            }
-            if settings != nil {
-                Section("Settings") {
-                    ForEach(IronPetSection.settings) { row($0) }
-                }
-            }
+            ForEach(shown) { row($0) }
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: 22) }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Button(action: actions.onSettings) {
+                Label("Settings", systemImage: "gearshape")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .help("Open ironpet Settings (⌘,)")
+        }
         .frame(width: 190)
     }
 
@@ -216,24 +336,38 @@ struct IronPetWindowView: View {
         }
     }
 
-    private var detail: some View {
-        VStack(spacing: 0) {
-            switch model.section {
-            case .agents: AgentsSection(store: store, onJump: actions.onJump)
-            case .alerts: AlertsSection(signals: signals, onAsk: actions.onAsk)
-            case .tasks:
-                PageHeader(title: IronPetSection.tasks.title) { EmptyView() }
-                TaskListView(tasks: tasks, onTellGhost: actions.onTellGhost, onOpenThread: actions.onOpenThread,
-                             onOpenSession: actions.onOpenSession)
-            case .actions: ActionsSection(onTrick: actions.onTrick)
-            case .automations, .general, .integrations, .voice, .meetings, .usage:
-                if let settings { SettingsPage(section: model.section, model: settings) }
+    @ViewBuilder private var detail: some View {
+        if model.section == .chat, let chat {
+            // The chat draws its own floating header up to the top edge.
+            ChatView(session: chat, close: actions.onClose)
+        } else {
+            VStack(spacing: 0) {
+                switch model.section {
+                case .chat: EmptyView()
+                case .agents: AgentsSection(store: store, onJump: actions.onJump)
+                case .alerts: AlertsSection(signals: signals, onAsk: actions.onAsk)
+                case .tasks:
+                    PageHeader(title: IronPetSection.tasks.title) { EmptyView() }
+                    TaskListView(tasks: tasks, onTellGhost: actions.onTellGhost, onOpenThread: actions.onOpenThread,
+                                 onOpenSession: actions.onOpenSession)
+                case .transcripts:
+                    if let meetings {
+                        TranscriptsView(library: meetings, activeFolder: actions.meetingInProgress, onAsk: actions.onAskMeeting)
+                    }
+                case .actions: ActionsSection(onTrick: actions.onTrick)
+                case .automations:
+                    if let settings {
+                        PageHeader(title: IronPetSection.automations.title) { EmptyView() }
+                        AutomationsSettings(model: settings).frame(maxHeight: .infinity)
+                    }
+                }
             }
+            .padding(.top, 10)
         }
     }
 }
 
-/// What the rows in the agents, alerts, tasks and actions sections do.
+/// What the rows and buttons in the window's sections do.
 struct SessionActions {
     var onJump: (AgentSession) -> Void
     var onAsk: (String) -> Void
@@ -241,6 +375,11 @@ struct SessionActions {
     var onTellGhost: (String) -> Void
     var onOpenThread: (String) -> Void
     var onOpenSession: (String) -> Void
+    var onAskMeeting: ([URL]) -> Void = { _ in }
+    /// The folder of the meeting being recorded or summarized, if any.
+    var meetingInProgress: () -> URL? = { nil }
+    var onClose: () -> Void = {}
+    var onSettings: () -> Void = {}
 
     static let none = SessionActions(onJump: { _ in }, onAsk: { _ in }, onTrick: { _ in }, onTellGhost: { _ in },
                                      onOpenThread: { _ in }, onOpenSession: { _ in })
@@ -264,4 +403,3 @@ struct PageHeader<Trailing: View>: View {
         }
     }
 }
-

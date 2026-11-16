@@ -122,10 +122,10 @@ final class TranscriptFollowTests: XCTestCase {
         spin(1)
     }
 
-    private func open() -> (ChatSession, ChatPanel) {
+    private func open() -> (ChatSession, IronPetPanel) {
         let session = ChatSession(restore: false)
         session.items = HugeTranscriptTests.hugeThread(screenshotDir: nil)
-        let panel = ChatPanel(session: session)
+        let panel = IronPetPanel.chat(session)
         panel.setContentSize(CGSize(width: 520, height: 640))
         panel.orderFrontRegardless()
         spin(3)

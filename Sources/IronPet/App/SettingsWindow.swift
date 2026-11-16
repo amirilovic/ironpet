@@ -1,8 +1,9 @@
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// What the Settings pages need from the rest of the app, beyond `ConfigStore`.
+/// What the settings window needs from the rest of the app, beyond `ConfigStore`.
 @MainActor
 final class SettingsModel: ObservableObject {
     struct Actions {
@@ -27,6 +28,10 @@ final class SettingsModel: ObservableObject {
     let pets = PetGalleryModel()
     private let announcer: Announcer
     let telegram: TelegramBridge
+    /// The selected page's tag, kept so the window reopens on it. Tests set it to screenshot a page.
+    @Published var tab = UserDefaults.standard.string(forKey: "settingsTab").flatMap { SettingsView.page($0)?.tag } ?? "general" {
+        didSet { UserDefaults.standard.set(tab, forKey: "settingsTab") }
+    }
 
     init(actions: Actions, announcer: Announcer, telegram: TelegramBridge) {
         self.actions = actions
@@ -53,30 +58,118 @@ final class SettingsModel: ObservableObject {
     }
 }
 
-/// One Settings page of the ironpet window, with the config.json footer the settings pages share.
-struct SettingsPage: View {
-    let section: IronPetSection
+@MainActor
+final class SettingsWindow {
+    private var window: NSWindow?
+    private let model: SettingsModel
+
+    init(model: SettingsModel) {
+        self.model = model
+    }
+
+    var windowNumber: Int { window?.windowNumber ?? 0 }
+
+    /// Draws the window's own contents to a PNG, for tests; needs no screen-recording permission.
+    func snapshot(to url: URL) -> Bool {
+        guard let view = window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
+        return (try? data.write(to: url)) != nil
+    }
+
+    func show() {
+        model.refresh()
+        if window == nil {
+            // A fixed SwiftUI height plus the hosting controller's auto sizing both set the window height,
+            // which logs "AttributeGraph: cycle detected" on tab switches. Only the width stays in SwiftUI.
+            let host = NSHostingController(rootView: SettingsView(model: model))
+            host.sizingOptions = []
+            let window = NSWindow(contentViewController: host)
+            window.title = SettingsView.page(model.tab)?.title ?? "Settings"
+            window.styleMask = [.titled, .closable, .miniaturizable]
+            window.isReleasedWhenClosed = false
+            window.setContentSize(NSSize(width: SettingsView.width, height: 600))
+            window.center()
+            self.window = window
+            _ = title
+            let center = NotificationCenter.default
+            observers = [
+                center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.syncGalleryActivity() }
+                },
+                center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.model.pets.setWindowShown(false) }
+                },
+            ]
+        }
+        NSApp.activate()
+        window?.makeKeyAndOrderFront(nil)
+        model.pets.setWindowShown(true)
+    }
+
+    private var observers: [NSObjectProtocol] = []
+    private lazy var title: AnyCancellable = model.$tab
+        .receive(on: RunLoop.main)
+        .sink { [weak self] tab in self?.window?.title = SettingsView.page(tab)?.title ?? "Settings" }
+
+    /// Pauses the pet previews while the window is minimized or covered.
+    private func syncGalleryActivity() {
+        guard let window else { return }
+        model.pets.setWindowShown(window.isVisible && window.occlusionState.contains(.visible))
+    }
+}
+
+struct SettingsView: View {
+    struct Page {
+        let tag: String
+        let title: String
+        let symbol: String
+    }
+
+    static let pages = [
+        Page(tag: "general", title: "General", symbol: "gearshape"),
+        Page(tag: "integrations", title: "Integrations", symbol: "puzzlepiece.extension"),
+        Page(tag: "voice", title: "Voice", symbol: "mic"),
+        Page(tag: "meetings", title: "Meetings", symbol: "person.2.wave.2"),
+        Page(tag: "usage", title: "Usage", symbol: "chart.bar"),
+    ]
+    static let sidebarWidth: CGFloat = 180
+    /// The pages keep the width they had as tabs, beside the sidebar.
+    static let width: CGFloat = sidebarWidth + 1 + 540
+
+    static func page(_ tag: String) -> Page? { pages.first { $0.tag == tag } }
+
     @ObservedObject var model: SettingsModel
     @ObservedObject private var store = ConfigStore.shared
 
     var body: some View {
-        VStack(spacing: 0) {
-            PageHeader(title: section.title) { EmptyView() }
-            content.frame(maxHeight: .infinity)
-            if section != .automations {
+        HStack(spacing: 0) {
+            List(selection: Binding(get: { model.tab }, set: { if let tag = $0 { model.tab = tag } })) {
+                ForEach(Self.pages, id: \.tag) { page in
+                    Label(page.title, systemImage: page.symbol).tag(page.tag)
+                }
+            }
+            .listStyle(.sidebar)
+            .frame(width: Self.sidebarWidth)
+            Divider()
+            VStack(spacing: 0) {
+                content
+                    .padding(.horizontal, 10)
+                    .padding(.top, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 Divider()
                 footer
             }
         }
+        .frame(width: Self.width)
     }
 
     @ViewBuilder private var content: some View {
-        switch section {
-        case .automations: AutomationsSettings(model: model)
-        case .integrations: IntegrationsSettings(telegram: model.telegram)
-        case .voice: VoiceSettings(model: model)
-        case .meetings: MeetingSettings(model: model)
-        case .usage: UsageSettings()
+        switch model.tab {
+        case "integrations": IntegrationsSettings(telegram: model.telegram)
+        case "voice": VoiceSettings(model: model)
+        case "meetings": MeetingSettings(model: model)
+        case "usage": UsageSettings()
         default: GeneralSettings(model: model)
         }
     }

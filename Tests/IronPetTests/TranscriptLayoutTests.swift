@@ -62,11 +62,11 @@ final class TranscriptLayoutTests: XCTestCase {
         while Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
     }
 
-    /// Opens the chat panel on `session` and returns the CPU seconds used over 3 idle seconds after the first layout.
+    /// Opens the window on Chat with `session` and returns the CPU seconds used over 3 idle seconds after the first layout.
     private var openedAtBottom: CGFloat?
 
     private func idleCPU(_ session: ChatSession) -> Double {
-        let panel = ChatPanel(session: session)
+        let panel = IronPetPanel.chat(session)
         panel.orderFrontRegardless()
         spin(3) // initial layout and scroll to the bottom
         let before = cpuSeconds()
@@ -96,7 +96,7 @@ final class TranscriptLayoutTests: XCTestCase {
     func testStreamingReplyThenIdle() throws {
         let session = ChatSession(restore: false)
         session.items = try fixtureItems() ?? longThread()
-        let panel = ChatPanel(session: session)
+        let panel = IronPetPanel.chat(session)
         panel.orderFrontRegardless()
         spin(2)
         session.items.append(.init(kind: .assistant("")))
@@ -127,7 +127,7 @@ final class TranscriptLayoutTests: XCTestCase {
         let session = ChatSession(restore: false)
         let fixture = try fixtureItems() ?? longThread()
         session.items = fixture
-        let panel = ChatPanel(session: session)
+        let panel = IronPetPanel.chat(session)
         panel.orderFrontRegardless()
         spin(2)
         session.loadPreview(.approval)
@@ -225,7 +225,7 @@ final class HugeTranscriptTests: XCTestCase {
         // IRONPET_SHOTS: a folder with shot-0.png ... shot-23.png (large screenshots) to decode for real.
         let shots = ProcessInfo.processInfo.environment["IRONPET_SHOTS"].map { URL(fileURLWithPath: $0) }
         session.items = Self.hugeThread(screenshotDir: shots)
-        let panel = ChatPanel(session: session)
+        let panel = IronPetPanel.chat(session)
         let open = Date()
         panel.orderFrontRegardless()
         spin(0.1)
@@ -379,10 +379,10 @@ final class TranscriptResizeTests: XCTestCase {
         return (costs.reduce(0, +) / Double(costs.count), costs.max() ?? 0)
     }
 
-    private func open(conversation: Bool = false) throws -> ChatPanel {
+    private func open(conversation: Bool = false) throws -> IronPetPanel {
         let session = ChatSession(restore: false)
         session.items = try items(conversation: conversation)
-        let panel = ChatPanel(session: session)
+        let panel = IronPetPanel.chat(session)
         panel.setContentSize(CGSize(width: 520, height: 640))
         panel.orderFrontRegardless()
         spin(3)

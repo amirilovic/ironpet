@@ -43,9 +43,8 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), signals: signals(0), tasks: tasks()), .agents)
     }
 
-    func testTheSettingsSectionsKeepTheTagsTheTestEndpointTakes() {
-        XCTAssertEqual(IronPetSection.settings.map(\.rawValue), ["general", "integrations", "voice", "meetings", "usage"])
-        XCTAssertEqual(IronPetSection(rawValue: "automations"), .automations)
+    func testBubblesWaitOnTheSectionsThatShowWhatTheyWouldAnnounce() {
+        XCTAssertEqual(IronPetSection.allCases.filter(\.hidesBubbles), [.chat, .agents, .alerts, .tasks, .actions])
     }
 
     func testASizeSavedOnABiggerDisplayShrinksToTheScreen() {
@@ -56,8 +55,12 @@ final class IronPetWindowTests: XCTestCase {
                        IronPetPanel.minimumSize)
     }
 
+    private func panel() -> IronPetPanel {
+        IronPetPanel(model: IronPetWindowModel(), session: nil, content: EmptyView())
+    }
+
     func testOwnSheetsAndOtherWindowsKeepTheWindowOpen() {
-        let panel = IronPetPanel(content: EmptyView())
+        let panel = panel()
         let sheet = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
         panel.beginSheet(sheet)
         defer { panel.endSheet(sheet) }
@@ -66,18 +69,44 @@ final class IronPetWindowTests: XCTestCase {
         defer { panel.removeChildWindow(child) }
         let log = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
 
-        XCTAssertFalse(IronPetPanel.shouldClose(panel, appActive: true, newKey: sheet))
-        XCTAssertFalse(IronPetPanel.shouldClose(panel, appActive: true, newKey: child))
-        XCTAssertFalse(IronPetPanel.shouldClose(panel, appActive: true, newKey: log))
-        XCTAssertFalse(IronPetPanel.shouldClose(panel, appActive: true, newKey: panel))
-        XCTAssertFalse(IronPetPanel.shouldClose(panel, appActive: true, newKey: nil))
+        for newKey in [sheet, child, log, panel, nil] as [NSWindow?] {
+            XCTAssertFalse(IronPetPanel.shouldClose(panel, onChat: false, appActive: true, newKey: newKey))
+        }
     }
 
-    func testTheChatPanelOrAnotherAppClosesIt() {
-        let panel = IronPetPanel(content: EmptyView())
-        let chat = ChatPanel(session: ChatSession(restore: false))
-        XCTAssertTrue(IronPetPanel.shouldClose(panel, appActive: true, newKey: chat))
-        XCTAssertTrue(IronPetPanel.shouldClose(panel, appActive: false, newKey: nil))
-        XCTAssertTrue(IronPetPanel.shouldClose(panel, appActive: false, newKey: panel))
+    func testAnotherAppClosesItExceptOnChat() {
+        let panel = panel()
+        XCTAssertTrue(IronPetPanel.shouldClose(panel, onChat: false, appActive: false, newKey: nil))
+        XCTAssertTrue(IronPetPanel.shouldClose(panel, onChat: false, appActive: false, newKey: panel))
+        XCTAssertFalse(IronPetPanel.shouldClose(panel, onChat: true, appActive: false, newKey: nil))
+    }
+
+    func testMeetingFoldersParseTheirDateAndSameMinuteSuffix() throws {
+        let date = try XCTUnwrap(MeetingLibrary.date(folderName: "2026-11-16-0930"))
+        let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        XCTAssertEqual([parts.year, parts.month, parts.day, parts.hour, parts.minute], [2026, 11, 16, 9, 30])
+        XCTAssertEqual(MeetingLibrary.date(folderName: "2026-11-16-0930-2"), date)
+        XCTAssertNil(MeetingLibrary.date(folderName: "2026-11-16-0930-copy"))
+        XCTAssertNil(MeetingLibrary.date(folderName: "notes"))
+    }
+
+    func testTheMeetingPreviewSkipsHeadingsAndMarkdown() {
+        XCTAssertEqual(MeetingLibrary.firstLine("# Summary\n\n---\n- **Ship** the window on Friday\n"), "Ship the window on Friday")
+        XCTAssertNil(MeetingLibrary.firstLine("# Summary\n\n"))
+    }
+
+    func testTheLibraryListsMeetingFoldersNewestFirst() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["2026-11-15-1000", "2026-11-16-0930", "2026-11-16-0930-2", "not-a-meeting"] {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+        try "# Transcript\nHello there".write(to: root.appendingPathComponent("2026-11-15-1000/transcript.md"), atomically: true, encoding: .utf8)
+        let library = MeetingLibrary(root: root)
+        library.reload()
+        XCTAssertEqual(library.meetings.map(\.id), ["2026-11-16-0930-2", "2026-11-16-0930", "2026-11-15-1000"])
+        XCTAssertEqual(library.meetings.last?.preview, "Hello there")
+        XCTAssertEqual(library.meetings.last?.hasTranscript, true)
+        XCTAssertEqual(library.meetings.last?.hasSummary, false)
     }
 }

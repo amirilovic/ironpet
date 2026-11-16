@@ -11,9 +11,9 @@ final class ChatFindFocusTests: XCTestCase {
         while Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
     }
 
-    private func open() -> (ChatSession, ChatPanel) {
+    private func open() -> (ChatSession, IronPetPanel) {
         let session = ChatSession(restore: false)
-        let panel = ChatPanel(session: session)
+        let panel = IronPetPanel.chat(session)
         panel.setContentSize(CGSize(width: 520, height: 640))
         panel.makeKeyAndOrderFront(nil)
         addTeardownBlock { @MainActor in panel.close() }
@@ -23,7 +23,7 @@ final class ChatFindFocusTests: XCTestCase {
 
     /// Stands in for Cmd-F. `performKeyEquivalent` calls `revealFind` but needs the key window, and a test
     /// process cannot become the key window.
-    private func press(_ chars: String, in panel: ChatPanel) { panel.revealFind() }
+    private func press(_ chars: String, in panel: IronPetPanel) { panel.revealFind() }
 
     private func findField(_ view: NSView?) -> NSTextField? {
         guard let view else { return nil }
@@ -33,7 +33,7 @@ final class ChatFindFocusTests: XCTestCase {
     }
 
     /// True when the window's first responder is the find field's editor.
-    private func findHasFocus(_ panel: ChatPanel) -> Bool {
+    private func findHasFocus(_ panel: IronPetPanel) -> Bool {
         guard let field = findField(panel.contentView), let editor = field.currentEditor() else { return false }
         return panel.firstResponder === editor
     }
