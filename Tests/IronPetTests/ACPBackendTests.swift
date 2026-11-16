@@ -25,6 +25,8 @@ final class ACPBackendTests: XCTestCase {
         elif method in ("session/new", "session/load"):
             if mode == "auth":
                 send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32000, "message": "Authentication required"}}); continue
+            if mode == "loadfail" and method == "session/load":
+                send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32002, "message": "Session not found"}}); continue
             sid = p.get("sessionId") or "sess-1"
             if os.environ.get("FAKE_MODE") == "bypass":
                 pass
@@ -163,6 +165,42 @@ final class ACPBackendTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 500_000_000)
         XCTAssertTrue(logged().filter { $0["method"] as? String == "session/cancel" }.isEmpty,
                       "the adapter's cancel interrupts Claude Code, which also stops background subagents")
+        backend.shutdown()
+    }
+
+    func testFailedSessionLoadStartsANewSessionWithoutError() async throws {
+        setenv("FAKE_MODE", "loadfail", 1)
+        defer { unsetenv("FAKE_MODE") }
+        var lines: [String] = []
+        ChatLog.sink = { lines.append($0) }
+        defer { ChatLog.sink = nil }
+        let backend = ACPBackend(agent: agent)
+        let events = await run(backend, turn("hello", resume: "old-thread"))
+        guard case .finished(let error) = events.last, error == nil else { return XCTFail("expected a clean finish") }
+        XCTAssertTrue(events.contains { if case .session("sess-1") = $0 { return true } else { return false } })
+        XCTAssertEqual(logged().filter { $0["method"] as? String == "session/load" }.count, 1)
+        XCTAssertEqual(logged().filter { $0["method"] as? String == "session/new" }.count, 1)
+        XCTAssertTrue(lines.contains { $0.hasPrefix("session/load failed for old-thread") })
+        backend.shutdown()
+    }
+
+    func testAgentProcessExitResumesTheSameSessionOnTheNextTurn() async throws {
+        var lines: [String] = []
+        ChatLog.sink = { lines.append($0) }
+        defer { ChatLog.sink = nil }
+        let backend = ACPBackend(agent: agent)
+        let first = text(await run(backend, turn("one")))
+        let pid = try XCTUnwrap(backend.processID)
+        kill(pid, SIGKILL)
+        for _ in 0..<50 where !lines.contains(where: { $0.contains("exited") }) { try? await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertTrue(lines.contains { $0.contains("exited") })
+        let events = await run(backend, turn("two", resume: "sess-1"))
+        guard case .finished(let error) = events.last, error == nil else { return XCTFail("expected a clean finish") }
+        XCTAssertNotEqual(text(events), first, "a new process answered")
+        let loads = logged().filter { $0["method"] as? String == "session/load" }
+        XCTAssertEqual((loads.first?["params"] as? JSON)?["sessionId"] as? String, "sess-1")
+        XCTAssertFalse(events.contains { if case .session = $0 { return true } else { return false } }, "the session is the same, so no new one is announced")
+        XCTAssertFalse(text(events).contains("REPLAY"))
         backend.shutdown()
     }
 
