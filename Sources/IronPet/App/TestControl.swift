@@ -49,6 +49,9 @@ final class TestControl {
     private let chat: ChatSession
     private let actions: Actions
     private(set) var attention: [[String: String]] = []
+    /// What the app does with a finished meeting summary (mine action items, suggest them, show the bubble), so
+    /// `/test/tasks/suggest` runs that path. Without it the endpoint only mines and suggests.
+    var onMeetingSummaryText: ((String, URL) -> Void)?
 
     init(chat: ChatSession, actions: Actions) {
         self.chat = chat
@@ -257,6 +260,24 @@ final class TestControl {
             let id = body["id"] as? String ?? "", title = body["button"] as? String ?? ""
             let pressed = actions.pressBubbleButton(id, title)
             return Self.encode(["ok": pressed])
+        case ("GET", "/test/tasks"):
+            return tasksSnapshot()
+        case ("POST", "/test/tasks/reset"):
+            guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+            for item in store.tasks { try? store.delete(item.id, by: "test") }
+            for suggestion in store.suggestions { store.skip(suggestion.id) }
+            return tasksSnapshot()
+        case ("POST", "/test/tasks/suggest"):
+            return suggestTasks(body)
+        case ("POST", "/test/tasks/accept-all"):
+            guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+            // The suggestions bubble's Add all when it is on screen, as a click would.
+            let bubble = actions.bubbles().first { ($0["buttons"] as? [String])?.contains("Add all") == true }
+            let pressed = (bubble?["id"] as? String).map { actions.pressBubbleButton($0, "Add all") } ?? false
+            if !pressed { store.acceptAll() }
+            var result = (try? JSONSerialization.jsonObject(with: tasksSnapshot())) as? [String: Any] ?? [:]
+            result["pressedBubble"] = pressed
+            return Self.encode(result)
         default:
             return Self.encode(["ok": false, "error": "unknown test endpoint \(request.method) \(request.path)"])
         }
@@ -328,6 +349,45 @@ final class TestControl {
         let service = actions.automations
         let list = service.store.automations.map { service.detail($0) }
         return Self.encode(["automations": list, "bubbles": actions.bubbles(), "error": service.store.error ?? ""])
+    }
+
+    private func tasksSnapshot() -> Data {
+        guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+        return Self.encode([
+            "ok": true,
+            "tasks": store.ordered.map { item -> [String: Any] in
+                var object = TaskStore.json(item)
+                object["history"] = store.history(item.id).map(TaskStore.json)
+                return object
+            },
+            "suggestions": store.suggestions.map(Self.json),
+        ])
+    }
+
+    /// `summary` is the markdown of a meeting summary and `meeting` its folder.
+    private func suggestTasks(_ body: [String: Any]) -> Data {
+        guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+        guard let summary = body["summary"] as? String, let path = body["meeting"] as? String, !path.isEmpty else {
+            return Self.encode(["ok": false, "error": "summary and meeting are required"])
+        }
+        let meeting = URL(fileURLWithPath: path)
+        let before = Set(store.suggestions.map(\.id))
+        if let onMeetingSummaryText {
+            onMeetingSummaryText(summary, meeting)
+        } else {
+            store.suggest(ActionItems.mine(summary), meeting: meeting)
+        }
+        return Self.encode([
+            "ok": true,
+            "appPath": onMeetingSummaryText != nil,
+            "created": store.suggestions.filter { !before.contains($0.id) }.map(Self.json),
+            "suggestions": store.suggestions.map(Self.json),
+            "bubbles": actions.bubbles(),
+        ])
+    }
+
+    private static func json(_ suggestion: TaskSuggestion) -> [String: Any] {
+        ["id": suggestion.id, "title": suggestion.title, "due": suggestion.due ?? NSNull(), "meeting": suggestion.meeting.path]
     }
 
     private var telegramTest = ""

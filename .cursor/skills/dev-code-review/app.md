@@ -90,6 +90,7 @@ Installed-app and e2e checks change the user's machine (see Ground rules in `SKI
 | `SetupWindow`, `SettingsWindow`, `Config` | `setup`, `settings` (take over the keyboard) |
 | `Voice/` | `voice`, `voice-key` (opt-in, need a local mlx-audio server) |
 | `Meeting/` | `meeting`, `meeting-system` (opt-in) |
+| `Tasks/`, task tools, `IronPet tasks` | `tasks` |
 
 Summary rows for the **App** table:
 

@@ -1241,13 +1241,149 @@ def scenario_meeting_system_audio():
             set_dark_mode(dark)
 
 
+# MARK: tasks
+
+TASKS_AGENT = os.environ.get("IRONPET_E2E_AGENT", "cursor")
+TASKS_DB = f"{ROOT}/ironpet.db"
+TASKS_DB_BACKUP = "/tmp/ironpet-e2e-tasks.db"
+TASKS_MEETING = "/tmp/ironpet-e2e-meeting"
+TASKS_SUMMARY = """# Weekly sync
+
+## Summary
+We went through the release.
+
+## Decisions
+- Ship on Friday.
+
+## Action items
+- [ ] Send the invoice to finance (owner: Me, due: 2026-11-20)
+- [ ] Update the changelog (owner: Me)
+- [ ] Prepare two more screenshots (owner: Them)
+- [ ] review PR 42 (owner: Me)
+"""
+
+
+class PreservedTasks:
+    """Backs up ironpet.db (tasks share it with automation state and usage) and puts it back on exit, because the
+    scenario deletes every task. sqlite3's online backup is consistent while the app has the database open in WAL mode."""
+
+    def __enter__(self):
+        import sqlite3
+        self.existed = os.path.exists(TASKS_DB)
+        if self.existed:
+            source, target = sqlite3.connect(TASKS_DB), sqlite3.connect(TASKS_DB_BACKUP)
+            source.backup(target)
+            source.close()
+            target.close()
+        return self
+
+    def __exit__(self, *exc):
+        subprocess.run(["pkill", "-f", f"{APP}/Contents/MacOS/IronPet"])
+        time.sleep(1.5)
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(TASKS_DB + suffix):
+                os.remove(TASKS_DB + suffix)
+        if self.existed:
+            shutil.move(TASKS_DB_BACKUP, TASKS_DB)
+        shutil.rmtree(TASKS_MEETING, ignore_errors=True)
+        relaunch(test_mode=True)
+        return False
+
+
+def tasks_state():
+    return call("GET", "/test/tasks")
+
+
+def run_task_turn(prompt, new_chat):
+    """One chat turn in Auto mode. Cards for the task tools are allowed, anything else is denied."""
+    body = {"prompt": prompt, "auto": True}
+    if new_chat:
+        body.update({"newChat": True, "backend": TASKS_AGENT, "workspace": WS})
+    call("POST", "/test/chat", body)
+    cards = []
+    c = wait_approval_or_end(240)
+    while c and c["approvals"]:
+        title = c["approvals"][0]["title"]
+        cards.append(title)
+        call("POST", "/test/approve", {"allow": "tasks" in title.lower()})
+        c = wait_approval_or_end(240)
+    return c, cards
+
+
+def scenario_tasks():
+    """Tasks: the chat agent creates and closes a task, the CLI adds one, meeting action items become suggestions."""
+    with PreservedTasks():
+        reset = call("POST", "/test/tasks/reset")
+        if not reset.get("ok"):
+            return record("Tasks: test endpoints answer", False, reset.get("error", ""))
+        record("Tasks: reset leaves no tasks or suggestions", not reset["tasks"] and not reset["suggestions"])
+
+        # Chat: create.
+        fresh_workspace()
+        end, cards = run_task_turn("Add a task to call the dentist tomorrow. Only create the task, nothing else.", new_chat=True)
+        tasks = tasks_state()["tasks"]
+        dentist = [t for t in tasks if "dentist" in t["title"].lower()]
+        record(f"Tasks: {TASKS_AGENT} creates one open task from chat",
+               end and end["state"] == "done" and len(tasks) == 1 and len(dentist) == 1 and dentist[0]["status"] != "done",
+               f"state={end and end['state']} cards={cards} tasks={[(t['title'], t['status'], t['source']) for t in tasks]}")
+
+        # Chat: close, in the same thread.
+        end, cards = run_task_turn("I called the dentist, appointment is Tuesday at 21:00. Close that task.", new_chat=False)
+        closed = next((t for t in tasks_state()["tasks"] if dentist and t["id"] == dentist[0]["id"]), None)
+        kinds = [e["kind"] for e in (closed or {}).get("history", [])]
+        record("Tasks: the agent closes it with a note in its history",
+               bool(closed) and closed["status"] == "done" and ("closed" in kinds or "note" in kinds),
+               f"state={end and end['state']} cards={cards} status={closed and closed['status']} history={kinds}")
+
+        # CLI against the running app.
+        env = {**os.environ, "IRONPET_ROOT": ROOT}
+        cli = subprocess.run([f"{APP}/Contents/MacOS/IronPet", "tasks", "add", "Review PR 42", "--url", "https://example.com/pr/42"],
+                             capture_output=True, text=True, timeout=20, env=env)
+        try:
+            added = json.loads(cli.stdout)
+        except ValueError:
+            added = {}
+        listed = subprocess.run([f"{APP}/Contents/MacOS/IronPet", "tasks", "list"], capture_output=True, text=True, timeout=20, env=env)
+        task = next((t for t in tasks_state()["tasks"] if t["title"] == "Review PR 42"), None)
+        record("Tasks: `IronPet tasks add` creates a cli task with its URL",
+               cli.returncode == 0 and added.get("source") == "cli" and bool(task) and task["source"] == "cli"
+               and any(l["kind"] == "url" and l["ref"] == "https://example.com/pr/42" for l in task.get("links", [])),
+               f"exit={cli.returncode} out={cli.stdout.strip()[:120]!r} err={cli.stderr.strip()[:120]!r}")
+        record("Tasks: `IronPet tasks list` shows it", listed.returncode == 0 and "Review PR 42" in listed.stdout,
+               f"exit={listed.returncode} err={listed.stderr.strip()[:120]!r}")
+
+        # Meeting action items: only the user's, and none that is already a task.
+        os.makedirs(TASKS_MEETING, exist_ok=True)
+        open(f"{TASKS_MEETING}/summary.md", "w").write(TASKS_SUMMARY)
+        suggested = call("POST", "/test/tasks/suggest", {"summary": TASKS_SUMMARY, "meeting": TASKS_MEETING})
+        created = {s["title"]: s for s in suggested.get("created", [])}
+        record("Tasks: a summary suggests only Me items that are not tasks yet",
+               set(created) == {"Send the invoice to finance", "Update the changelog"}
+               and created["Send the invoice to finance"]["due"] == "2026-11-20"
+               and all(s["meeting"] == TASKS_MEETING for s in created.values()),
+               f"created={list(created)} suggestions={[s['title'] for s in suggested.get('suggestions', [])]}")
+        bubble = next((b for b in suggested.get("bubbles", []) if {"Add all", "Review"} <= set(b["buttons"])), None)
+        record("Tasks: the app's summary path shows the Add all / Review bubble", suggested.get("appPath") and bool(bubble),
+               f"appPath={suggested.get('appPath')} bubbles={[(b['title'], b['buttons']) for b in suggested.get('bubbles', [])]}")
+
+        accepted = call("POST", "/test/tasks/accept-all")
+        from_meeting = [t for t in accepted["tasks"] if t["title"] in created]
+        record("Tasks: Add all makes backlog tasks from the meeting, linked to its folder",
+               len(from_meeting) == 2 and not accepted["suggestions"]
+               and all(t["status"] == "backlog" and t["source"] == "meeting"
+                       and any(l["kind"] == "file" and l["ref"] == TASKS_MEETING for l in t.get("links", [])) for t in from_meeting),
+               f"pressedBubble={accepted.get('pressedBubble')} tasks={[(t['title'], t['status'], t['source']) for t in from_meeting]}")
+
+        call("POST", "/test/tasks/reset")
+
+
 SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_session, "claude": scenario_claude, "codex": scenario_codex, "agents": scenario_agents,
              "asks": scenario_asks, "runtime": scenario_runtime, "auto": scenario_auto, "picker": scenario_picker,
              "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
              "notification": scenario_notification_approval, "mcp": scenario_mcp,
              "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
              "voice": scenario_voice, "voice-key": scenario_voice_key, "meeting": scenario_meeting,
-             "meeting-system": scenario_meeting_system_audio}
+             "meeting-system": scenario_meeting_system_audio, "tasks": scenario_tasks}
 
 # Need MCP servers signed in with cursor-agent: "mcp" a Langfuse MCP (its write is denied, so nothing is created),
 # "sentry" a Sentry MCP. Run them by name, e.g. `python3 scripts/e2e.py mcp sentry`.
@@ -1255,9 +1391,13 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # the system between light and dark mode for screenshots, saved to $IRONPET_E2E_SHOTS.
 # "meeting" does the same for meeting transcripts, and also runs one Claude Code summary (haiku). "meeting-system" needs
 # Screen & System Audio Recording granted to IronPet and plays a sentence with afplay.
+# "tasks" runs two short turns on $IRONPET_E2E_AGENT (default cursor) and puts ironpet.db back afterwards.
 OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks", "meeting", "meeting-system"}
 
 if __name__ == "__main__":
+    if {"-h", "--help"} & set(sys.argv[1:]):
+        print(f"{__doc__}\nScenarios: {', '.join(SCENARIOS)}\nOpt-in: {', '.join(sorted(OPT_IN))}")
+        sys.exit(0)
     unknown = [name for name in sys.argv[1:] if name not in SCENARIOS]
     if unknown:
         sys.exit(f"Unknown scenario(s): {', '.join(unknown)}. Choose from: {', '.join(SCENARIOS)}")
