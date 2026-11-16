@@ -1,0 +1,16 @@
+{
+  "app": {
+    "bundle_id": "com.googlecode.iterm2",
+    "name": "iTerm2",
+    "pid": 0
+  },
+  "content": {
+    "kind": "document",
+    "text": "$ echo example\nfirst output line\nsecond output line\n$ git status\nworking tree clean",
+    "title": "~/code/sample"
+  },
+  "parser": "terminal/v1",
+  "thread_key": "terminal:iterm2/sample",
+  "thread_title": "~/code/sample",
+  "window_title": "~/code/sample"
+}

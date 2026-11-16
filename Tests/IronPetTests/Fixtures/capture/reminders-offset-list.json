@@ -1,0 +1,145 @@
+{
+  "app": {
+    "bundle_id": "com.apple.reminders",
+    "name": "Reminders",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "Reminders",
+    "frame": {
+      "x": 1440.0,
+      "y": 220.0,
+      "width": 1100.0,
+      "height": 760.0
+    },
+    "children": [
+      {
+        "role": "Group",
+        "attrs": {
+          "identifier": "reminders-sidebar"
+        },
+        "frame": {
+          "x": 1440.0,
+          "y": 220.0,
+          "width": 240.0,
+          "height": 760.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Scheduled",
+            "frame": {
+              "x": 1460.0,
+              "y": 280.0,
+              "width": 120.0,
+              "height": 20.0
+            }
+          }
+        ]
+      },
+      {
+        "role": "Table",
+        "attrs": {
+          "identifier": "reminder-list"
+        },
+        "frame": {
+          "x": 1720.0,
+          "y": 280.0,
+          "width": 700.0,
+          "height": 660.0
+        },
+        "children": [
+          {
+            "role": "Row",
+            "frame": {
+              "x": 1740.0,
+              "y": 320.0,
+              "width": 600.0,
+              "height": 44.0
+            },
+            "children": [
+              {
+                "role": "CheckBox",
+                "value": "checked",
+                "attrs": {
+                  "identifier": "completed-checkbox"
+                },
+                "frame": {
+                  "x": 1740.0,
+                  "y": 320.0,
+                  "width": 20.0,
+                  "height": 20.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "Archive sample packet",
+                "attrs": {
+                  "identifier": "reminder-title"
+                },
+                "frame": {
+                  "x": 1770.0,
+                  "y": 320.0,
+                  "width": 300.0,
+                  "height": 20.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "Friday 14:30",
+                "attrs": {
+                  "identifier": "due-date"
+                },
+                "frame": {
+                  "x": 1770.0,
+                  "y": 342.0,
+                  "width": 200.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Row",
+            "frame": {
+              "x": 1740.0,
+              "y": 390.0,
+              "width": 600.0,
+              "height": 44.0
+            },
+            "children": [
+              {
+                "role": "CheckBox",
+                "value": "0",
+                "attrs": {
+                  "identifier": "completed-checkbox"
+                },
+                "frame": {
+                  "x": 1740.0,
+                  "y": 390.0,
+                  "width": 20.0,
+                  "height": 20.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "Review draft outline",
+                "attrs": {
+                  "identifier": "reminder-title"
+                },
+                "frame": {
+                  "x": 1770.0,
+                  "y": 390.0,
+                  "width": 300.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

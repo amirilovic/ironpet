@@ -1,0 +1,307 @@
+{
+  "app": {
+    "bundle_id": "com.apple.finder",
+    "name": "Finder",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "Projects",
+    "frame": {
+      "x": 340.0,
+      "y": 120.0,
+      "width": 1000.0,
+      "height": 700.0
+    },
+    "children": [
+      {
+        "role": "Toolbar",
+        "frame": {
+          "x": 340.0,
+          "y": 120.0,
+          "width": 1000.0,
+          "height": 52.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Uploading 34 items",
+            "frame": {
+              "x": 700.0,
+              "y": 134.0,
+              "width": 200.0,
+              "height": 16.0
+            }
+          }
+        ]
+      },
+      {
+        "role": "SplitGroup",
+        "frame": {
+          "x": 340.0,
+          "y": 172.0,
+          "width": 1000.0,
+          "height": 648.0
+        },
+        "children": [
+          {
+            "role": "Group",
+            "frame": {
+              "x": 340.0,
+              "y": 172.0,
+              "width": 200.0,
+              "height": 648.0
+            },
+            "children": [
+              {
+                "role": "Outline",
+                "frame": {
+                  "x": 340.0,
+                  "y": 180.0,
+                  "width": 200.0,
+                  "height": 600.0
+                },
+                "children": [
+                  {
+                    "role": "TreeItem",
+                    "frame": {
+                      "x": 348.0,
+                      "y": 190.0,
+                      "width": 180.0,
+                      "height": 20.0
+                    },
+                    "children": [
+                      {
+                        "role": "StaticText",
+                        "value": "Favorites",
+                        "frame": {
+                          "x": 356.0,
+                          "y": 190.0,
+                          "width": 160.0,
+                          "height": 16.0
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "TreeItem",
+                    "frame": {
+                      "x": 348.0,
+                      "y": 214.0,
+                      "width": 180.0,
+                      "height": 20.0
+                    },
+                    "children": [
+                      {
+                        "role": "StaticText",
+                        "value": "Projects",
+                        "frame": {
+                          "x": 356.0,
+                          "y": 214.0,
+                          "width": 160.0,
+                          "height": 16.0
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "Group",
+            "frame": {
+              "x": 540.0,
+              "y": 172.0,
+              "width": 800.0,
+              "height": 648.0
+            },
+            "children": [
+              {
+                "role": "Table",
+                "frame": {
+                  "x": 540.0,
+                  "y": 200.0,
+                  "width": 800.0,
+                  "height": 560.0
+                },
+                "children": [
+                  {
+                    "role": "Row",
+                    "frame": {
+                      "x": 540.0,
+                      "y": 200.0,
+                      "width": 800.0,
+                      "height": 20.0
+                    },
+                    "children": [
+                      {
+                        "role": "StaticText",
+                        "value": "Name",
+                        "frame": {
+                          "x": 548.0,
+                          "y": 200.0,
+                          "width": 300.0,
+                          "height": 16.0
+                        }
+                      },
+                      {
+                        "role": "StaticText",
+                        "value": "Size",
+                        "frame": {
+                          "x": 1100.0,
+                          "y": 200.0,
+                          "width": 100.0,
+                          "height": 16.0
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "Row",
+                    "frame": {
+                      "x": 540.0,
+                      "y": 224.0,
+                      "width": 800.0,
+                      "height": 20.0
+                    },
+                    "selected": true,
+                    "children": [
+                      {
+                        "role": "Cell",
+                        "frame": {
+                          "x": 548.0,
+                          "y": 224.0,
+                          "width": 300.0,
+                          "height": 20.0
+                        },
+                        "children": [
+                          {
+                            "role": "StaticText",
+                            "value": "Report.pdf",
+                            "frame": {
+                              "x": 548.0,
+                              "y": 224.0,
+                              "width": 300.0,
+                              "height": 16.0
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "role": "Cell",
+                        "frame": {
+                          "x": 1100.0,
+                          "y": 224.0,
+                          "width": 100.0,
+                          "height": 20.0
+                        },
+                        "children": [
+                          {
+                            "role": "StaticText",
+                            "value": "12 KB",
+                            "frame": {
+                              "x": 1100.0,
+                              "y": 224.0,
+                              "width": 100.0,
+                              "height": 16.0
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "Row",
+                    "frame": {
+                      "x": 540.0,
+                      "y": 248.0,
+                      "width": 800.0,
+                      "height": 20.0
+                    },
+                    "children": [
+                      {
+                        "role": "StaticText",
+                        "value": "Notes.txt",
+                        "frame": {
+                          "x": 548.0,
+                          "y": 248.0,
+                          "width": 300.0,
+                          "height": 16.0
+                        }
+                      },
+                      {
+                        "role": "StaticText",
+                        "value": "4 KB",
+                        "frame": {
+                          "x": 1100.0,
+                          "y": 248.0,
+                          "width": 100.0,
+                          "height": 16.0
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "Row",
+                    "frame": {
+                      "x": 540.0,
+                      "y": 272.0,
+                      "width": 800.0,
+                      "height": 20.0
+                    },
+                    "children": [
+                      {
+                        "role": "Cell",
+                        "frame": {
+                          "x": 548.0,
+                          "y": 272.0,
+                          "width": 300.0,
+                          "height": 20.0
+                        },
+                        "children": [
+                          {
+                            "role": "TextField",
+                            "value": "Renamed.pdf",
+                            "frame": {
+                              "x": 548.0,
+                              "y": 272.0,
+                              "width": 300.0,
+                              "height": 16.0
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "role": "Cell",
+                        "frame": {
+                          "x": 1100.0,
+                          "y": 272.0,
+                          "width": 100.0,
+                          "height": 20.0
+                        },
+                        "children": [
+                          {
+                            "role": "StaticText",
+                            "value": "12 KB",
+                            "frame": {
+                              "x": 1100.0,
+                              "y": 272.0,
+                              "width": 100.0,
+                              "height": 16.0
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

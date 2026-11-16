@@ -648,8 +648,8 @@ def scenario_setup():
 
 
 WINDOW = "ironpet"
-# The Settings window is titled after the page it shows.
-SETTINGS_PAGES = ["General", "Integrations", "Voice", "Meetings", "Usage"]
+# The Settings window keeps one title; the page name is drawn inside it, not in the title bar.
+SETTINGS = "Settings"
 
 
 def window_shown(title=WINDOW):
@@ -659,15 +659,13 @@ def window_shown(title=WINDOW):
 
 
 def open_settings(page="General"):
-    """Opens the Settings window from the app menu on `page`, and returns its title, or None when it did not open."""
+    """Opens the Settings window from the app menu on `page`, and returns its title ("Settings"), or None when it did not open."""
     activate_app()
     osa('tell application "System Events" to tell process "IronPet" to click menu item "Settings…" of menu 1 of menu bar item 2 of menu bar 1')
-    shown = wait_for(lambda: next((p for p in SETTINGS_PAGES if window_shown(p)), None), 5)
-    if not shown:
+    if not wait_for(lambda: window_shown(SETTINGS), 5):
         return None
-    if shown != page:
-        select_row(shown, page, {"tab": page.lower()})
-    return page if wait_for(lambda: window_shown(page), 3) else None
+    select_row(SETTINGS, page, {"tab": page.lower()})
+    return SETTINGS
 
 
 def show_section(name):
@@ -1414,13 +1412,118 @@ def scenario_tasks():
         call("POST", "/test/tasks/reset")
 
 
+# MARK: screen capture
+
+SCREEN_SLACK = "com.tinyspeck.slackmacgap"
+
+
+class ScreenConfig:
+    """Turns screen capture on for the scenario and puts config.json back. In test mode the app reads no screen and starts no agent: the
+    scenario feeds captures in through /test/screen/ingest and answers the analysis and the decision model with stubs."""
+
+    def __enter__(self):
+        self.saved = open(CONFIG).read() if os.path.exists(CONFIG) else None
+        config = read_config()
+        config["screenCapture"] = {"enabled": True, "sendApps": [SCREEN_SLACK], "delayMinutes": 0.5}
+        json.dump(config, open(CONFIG, "w"), indent=2)
+        time.sleep(2.6)
+        return self
+
+    def __exit__(self, *exc):
+        if self.saved is None:
+            os.remove(CONFIG)
+        else:
+            open(CONFIG, "w").write(self.saved)
+        time.sleep(2.6)
+        return False
+
+
+def screen_state():
+    return call("GET", "/test/screen")
+
+
+def screen_proposals():
+    return [b for b in call("GET", "/test/automations")["bubbles"] if b["id"].startswith("capture-proposal:")]
+
+
+def scenario_screen():
+    """Screen capture: captures pass the local filter, one agent run suggests tasks, Add creates a capture task, Ignore is remembered."""
+    with PreservedTasks(), ScreenConfig():
+        call("POST", "/test/tasks/reset")
+        call("POST", "/test/screen/reset")
+        # The chat the user is in, which capture must leave alone.
+        fresh_workspace()
+        call("POST", "/test/chat", {"newChat": True, "workspace": WS, "prompt": ""})
+        before = chat()
+        # The draft is left out here: the chat is the key window while this runs, so the person at the keyboard can type into it. A unit test covers it.
+        keys = ("workspace", "sessionId", "agent", "model", "history", "items", "state")
+
+        answer = json.dumps({"new_tasks": [
+            {"title": "Send the invoice to Dana", "source_items": "$IDS", "quote": "send the invoice to Dana"},
+            {"title": "Water the plants", "source_items": "$IDS", "quote": "water the plants"}]})
+        call("POST", "/test/screen/stub", {"answer": answer, "secretWords": ["rosebud"]})
+
+        # Three versions of one Slack thread, a secret in another, and a thread from an app that is not allowed to send.
+        thread = {"app": SCREEN_SLACK, "appName": "Slack", "thread": "slack:acme/ana", "title": "Ana", "ageSeconds": 3600}
+        call("POST", "/test/screen/ingest", {**thread, "messages": ["Ana: Can you send the invoice to Dana?"]})
+        call("POST", "/test/screen/ingest", {**thread, "messages": ["Ana: Can you send the invoice to Dana?", "Ana: and water the plants"]})
+        call("POST", "/test/screen/ingest", {**thread, "messages": ["Ana: Can you send the invoice to Dana?", "Ana: and water the plants", "Ana: thanks"]})
+        # A secret the rules know is redacted and the message is still sent. One only the model calls a secret stays on the Mac.
+        call("POST", "/test/screen/ingest", {**thread, "thread": "slack:acme/ops", "title": "Ops", "messages": ["Bo: the wifi password is hunter2"]})
+        call("POST", "/test/screen/ingest", {**thread, "thread": "slack:acme/vault", "title": "Vault", "messages": ["Bo: the unlock phrase is rosebud"]})
+        call("POST", "/test/screen/ingest", {"app": "com.apple.Notes", "appName": "Notes", "thread": "notes:private", "title": "Private",
+                                              "ageSeconds": 3600, "messages": ["buy milk and call the doctor"]})
+        call("POST", "/test/screen/filter")
+        # Items from an app that may not send move to "local" a moment after the filter, when the next send is scheduled.
+        settled = lambda: screen_state() if screen_state()["states"]["new"] == 0 and screen_state()["states"]["ready"] == 4 else None
+        state = wait_for(settled, 15) or screen_state()
+        record("Screen: the filter redacts what the rules know, keeps the model-flagged secret and the other app's text on the Mac, passes the rest",
+               state["states"]["new"] == 0 and state["states"]["ready"] == 4 and state["states"]["local"] == 2, f"states={state['states']}")
+
+        call("POST", "/test/screen/send")
+        bubbles = wait_for(lambda: screen_proposals() if len(screen_proposals()) >= 2 else None, 15) or []
+        log = screen_state()["sendLog"]
+        record("Screen: one run for the allowed app's passed items, and the log says what was redacted and that it was sent",
+               len(log) == 1 and len(log[0]["items"]) == 4 and log[0]["outcome"].startswith("redacted 1 span (secret-assignment 1), sent"), f"sendLog={log}")
+        record("Screen: the suggestions appear as bubbles with Add, Edit and Ignore",
+               len(bubbles) == 2 and all(b["buttons"] == ["Add", "Edit", "Ignore"] for b in bubbles),
+               f"bubbles={[(b['title'], b['buttons']) for b in bubbles]}")
+        record("Screen: nothing is added before a click", not any(t["source"] == "capture" for t in tasks_state()["tasks"]))
+
+        add = next(b for b in bubbles if "invoice" in b["body"])
+        skip = next(b for b in bubbles if "plants" in b["body"])
+        call("POST", "/test/automations/bubble", {"id": add["id"], "button": "Add"})
+        made = wait_for(lambda: next((t for t in tasks_state()["tasks"] if t["title"] == "Send the invoice to Dana"), None), 10)
+        record("Screen: Add creates a task in the Tasks section with source capture and the capture ids in its notes",
+               bool(made) and made["source"] == "capture" and "From screen capture items" in made.get("notes", ""),
+               f"task={made and (made['title'], made['source'], made.get('notes'))}")
+        call("POST", "/test/automations/bubble", {"id": skip["id"], "button": "Ignore"})
+        record("Screen: Ignore adds no task", not any(t["title"] == "Water the plants" for t in tasks_state()["tasks"]))
+
+        # The same suggestions again: the added task already exists and the ignored one is remembered.
+        call("POST", "/test/screen/ingest", {**thread, "messages": ["Ana: Can you send the invoice to Dana?", "Ana: and water the plants", "Ana: thanks", "Ana: ping"]})
+        call("POST", "/test/screen/filter")
+        wait_for(lambda: screen_state()["states"]["ready"] == 1, 15)
+        call("POST", "/test/screen/send")
+        wait_for(lambda: len(screen_state()["sendLog"]) == 2, 15)
+        time.sleep(1)
+        record("Screen: a task that exists and an ignored suggestion are not suggested again", not screen_proposals(),
+               f"bubbles={[(b['title'], b['body']) for b in screen_proposals()]}")
+
+        after = chat()
+        same = {k: (before.get(k), after.get(k)) for k in keys if before.get(k) != after.get(k)}
+        record("Screen: the user's chat session and folder are unchanged", not same, f"changed={same}")
+        call("POST", "/test/tasks/reset")
+        call("POST", "/test/screen/reset")
+
+
 SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_session, "claude": scenario_claude, "codex": scenario_codex, "agents": scenario_agents,
              "asks": scenario_asks, "runtime": scenario_runtime, "auto": scenario_auto, "picker": scenario_picker,
              "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
              "notification": scenario_notification_approval, "mcp": scenario_mcp,
              "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
              "voice": scenario_voice, "voice-key": scenario_voice_key, "meeting": scenario_meeting,
-             "meeting-system": scenario_meeting_system_audio, "tasks": scenario_tasks}
+             "meeting-system": scenario_meeting_system_audio, "tasks": scenario_tasks, "screen": scenario_screen}
 
 # Need MCP servers signed in with cursor-agent: "mcp" a Langfuse MCP (its write is denied, so nothing is created),
 # "sentry" a Sentry MCP. Run them by name, e.g. `python3 scripts/e2e.py mcp sentry`.
@@ -1428,6 +1531,8 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # the system between light and dark mode for screenshots, saved to $IRONPET_E2E_SHOTS.
 # "meeting" does the same for meeting transcripts, and also runs one Claude Code summary (haiku). "meeting-system" needs
 # Screen & System Audio Recording granted to IronPet and plays a sentence with afplay.
+# "screen" feeds synthetic captures in and stubs the model and the agent, so it reads no screen and starts no agent; it puts ironpet.db and
+# config.json back afterwards.
 # "tasks" runs two short turns on $IRONPET_E2E_AGENT (default cursor) and puts ironpet.db back afterwards.
 OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks", "meeting", "meeting-system"}
 

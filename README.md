@@ -111,6 +111,8 @@ See [SPEC.md](SPEC.md) for the full design and the decisions behind it, and [SEC
 
 Every reminder and watcher is an automation in `~/.ironpet/automations.json`. On the first launch with this version, the reminders in `config.json` become automations with the same values. GitHub and Sentry alerts are added only if you already had them on (`integrations.githubAlerts`, or a `~/.ironpet/sentry.json`), as script automations. A fresh install starts with the three reminders (`config.json` keeps `idleResetMinutes`, `snoozeMinutes` and `paused`). The file is checked and reloaded within two seconds. An invalid edit leaves the last good list running and shows a bubble that names the problem. `automations.schema.json` next to it describes every field.
 
+A built-in automation, `review-tasks` ("Review tasks"), is added to every install, new or existing. Every 10 minutes of wall clock time it sends `/ironpet-tasks` to your chat, so the agent reviews the task list. It does not run when no task is in backlog, in progress or needs you (the history shows `skipped: no open tasks`), and not while its previous message is still queued or running. When the agent answers exactly `ironpet-tasks: no changes`, the chat removes the prompt and the reply and the history shows `no changes`. Any other reply stays in the chat. Turn it off in Settings or set `"enabled": false`; ironpet keeps your choice and adds the automation again only if it is missing from the file.
+
 ```json
 {
   "automations": [
@@ -162,7 +164,7 @@ Every reminder and watcher is an automation in `~/.ironpet/automations.json`. On
 
   To add a skill, make `skills/<name>/SKILL.md` (frontmatter with `name`, the same as the folder, and `description`), then run `python3 scripts/gen_skills.py`. It compiles the skills into the app. A test fails if you forget.
 - **CLI.** `IronPet automations list`, `get <id>`, `add --name N --every MIN`, `add --json '{...}'`, `update <id> --json '{...}'`, `pause <id>`, `resume <id>`, `delete <id>`, `run <id>` and `history <id>`. The app must be running. The CLI counts as an agent for approval.
-- **State.** Definitions stay in `automations.json`. Seen sets, run history, approvals and snoozes live in `~/.ironpet/ironpet.db`, ironpet's common SQLite database (WAL), in `automation_*` tables. Seen items older than 7 days and history older than 30 days are pruned.
+- **State.** Definitions stay in `automations.json`. Seen sets, run history, approvals and snoozes live in `~/.ironpet/ironpet.db`, ironpet's common SQLite database (WAL), in `automation_*` tables. Seen items older than 7 days and history older than 30 days are pruned. If the file cannot be opened (for example a newer ironpet build created it), ironpet leaves it untouched, shows an alert with the reason and the path, and runs in memory, so nothing written meanwhile is saved. For a file from a newer build, install that build again to get your data back.
 - **Logs.** ironpet window → Automations has a **Show logs** button (and each row's menu has **Show logs…**, and the right-click menu has Automations → Show logs…). It opens a window with every poll and script run, quiet ones included, plus every reminder, shell command and prompt that ran: time, how long it took, the outcome and the output (exit code, stdout and stderr of a poll, `console.log` lines and actions of a script, the error of a failed run). Filter by automation or show only problems. Logs older than a number of days are deleted: set it under ironpet window → Automations → Keep logs for, or `automations.logRetentionDays` in `config.json` (default 14, from 1 to 365). At most 2000 lines are kept per automation.
 - **History.** The last 20 runs of each automation (time, outcome, short output) are in `automations_history` and under ironpet window → Automations.
 
@@ -318,6 +320,33 @@ Any sprite sheet in the Codex pet v2 layout (1536 px wide, 8 columns of 192×208
 ```
 
 It removes only ironpet's entries from the agents' configs (your other hooks stay) and deletes the two files ironpet owns (Copilot's `ironpet.json` and Pi's `ironpet.ts`), the login item, the app, the Sentry token in the Keychain and the app's preferences. The `*.ironpet-backup` files are kept, since they're your configs from before ironpet.
+
+## Screen capture
+
+Screen capture is off by default. When on, ironpet reads the text of the window you are using through Accessibility, keeps it in `~/.ironpet/ironpet.db`, filters it with a model on your Mac, and after a quiet period asks your chosen agent to look up your tasks and suggest what needs your action. Suggestions appear as bubbles with Add, Edit and Ignore. Nothing becomes a task until you click. With the switch off nothing is read, no model runs, and macOS shows no permission prompt.
+
+**Redaction.** Every item goes through the rules first: AWS, GitHub, GitLab, Anthropic and other `sk-` keys, Stripe, Slack, Google, npm and SendGrid keys, JWTs, private key blocks, `user:password@` in URLs and secret query parameters, `password=`, `token:` and `.env`-style assignments, card and bank numbers, and long random strings. Each span becomes `[redacted:<kind>]`. The local model scores the redacted text, and an item still flagged stays on your Mac. The unredacted text of an item that had a secret is kept for 24 hours, never sent, and can be seen with **Show captures → Reveal original**. After that only the redacted text remains. The send log and Show captures say what happened, for example "redacted 2 spans (aws-key 1, secret-assignment 1), sent".
+
+Turn it on under **Settings → Screen**. macOS asks for Accessibility then. Screen Recording is optional and only used to read the chat name in Viber's header on the device.
+
+| Setting | Key | Notes |
+| --- | --- | --- |
+| Screen capture | `screenCapture.enabled` | Default off |
+| Decision model | `screenCapture.decision.baseUrl`, `.model`, `.api` | `systemone` (H2O-Lightning-4B) or `openai`. The address must be localhost, or nothing is sent |
+| Secret threshold | `screenCapture.decision.secretThreshold` | Default 0.2. The model scores the text after redaction. An item still at or above it stays on the Mac and its text is dropped |
+| Calendar threshold | `screenCapture.decision.calendarThreshold` | Default 0.2. Only matters with a skip threshold: an item at or above it is never skipped as a possible calendar event |
+| Skip threshold | `screenCapture.decision.skipThreshold` | Default 0, which skips nothing. The follow-up and new-task answers of 4B models were unreliable in the evaluation |
+| Agent and model | `screenCapture.agent`, `.model` | An ACP agent id. Its only tools are `tasks_list` and `tasks_get` (read-only), it looks existing tasks up itself, every other permission request is refused, and it runs in `~/.ironpet/capture/agent`, not in your chat folder |
+| Delay | `screenCapture.delayMinutes` | Default 3. Quiet time before a batch is sent |
+| Apps allowed to send | `screenCapture.sendApps` | Bundle ids. Empty by default: captures stay on this Mac |
+| Apps never captured | `screenCapture.excludedApps` | Bundle ids or app names, also under **Never capture** in Settings |
+| Retention | `screenCapture.retentionDays` | Default 30 |
+
+Never captured, whatever a rule says: secure text fields, password managers and authenticator apps, the lock screen, private browser windows, and `file:`, `data:`, `javascript:`, `blob:`, `about:` and browser-internal URLs. Secrets in the text are redacted before anything is stored, scored or sent (see below), and secrets in an item's URL (`code`, `token`, `key`, `sig` and others) are stripped. Every send to the agent is listed in Settings with the time, the agent and model, the capture ids and the size. If no local model is set or it does not answer, nothing is sent.
+
+The rules that turn a window into a conversation or a document are lookback's JavaScript rules (`capture-rules/`). A file in `~/.ironpet/capture/rules` replaces the bundled rule of the same name. After editing a bundled rule, run `python3 scripts/gen_capture_rules.py`.
+
+Pause capture from the pet menu or Settings. **Settings → Screen → Show captures…** lists everything stored with the filter's scores, so you can see what was kept. Suggestions you accept become tasks in the Tasks section of the ironpet window (source `capture`, with the capture item ids in the notes). The agent looks up your tasks (open and done) with read-only tools and can suggest updating one, for example a new due date or done.
 
 ## Meeting transcripts
 

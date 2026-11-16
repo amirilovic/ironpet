@@ -172,10 +172,10 @@ enum AutomationCLI {
     }
 
     /// MCP over stdio: each input line is a JSON-RPC message that goes to the app's `/mcp` endpoint.
-    static func stdioBridge() -> Int32 {
+    static func stdioBridge(path: String = "/mcp") -> Int32 {
         while let line = readLine(strippingNewline: true) {
             guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
-            guard let response = post(path: "/mcp", body: Data(line.utf8)) else {
+            guard let response = post(path: path, body: Data(line.utf8)) else {
                 if let message = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any], let id = message["id"] {
                     let error: [String: Any] = ["jsonrpc": "2.0", "id": id, "error": ["code": -32000, "message": "ironpet is not running"]]
                     if let data = try? JSONSerialization.data(withJSONObject: error) { print(String(decoding: data, as: UTF8.self)) }

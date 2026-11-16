@@ -1,0 +1,78 @@
+{
+  "app": {
+    "bundle_id": "com.google.Chrome",
+    "name": "Google Chrome",
+    "pid": 0
+  },
+  "window_title": "How SQLite Works",
+  "root": {
+    "role": "Window",
+    "name": "How SQLite Works",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1440.0,
+      "height": 900.0
+    },
+    "children": [
+      {
+        "role": "Toolbar",
+        "frame": {
+          "x": 0.0,
+          "y": 0.0,
+          "width": 1440.0,
+          "height": 42.0
+        },
+        "children": [
+          {
+            "role": "TextField",
+            "name": "Address and search bar",
+            "value": "how does sqli",
+            "frame": {
+              "x": 250.0,
+              "y": 6.0,
+              "width": 700.0,
+              "height": 30.0
+            },
+            "focused": true
+          }
+        ]
+      },
+      {
+        "role": "WebArea",
+        "attrs": {
+          "url": "https://docs.invalid/architecture"
+        },
+        "frame": {
+          "x": 0.0,
+          "y": 42.0,
+          "width": 1440.0,
+          "height": 858.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Architecture of SQLite",
+            "frame": {
+              "x": 40.0,
+              "y": 80.0,
+              "width": 400.0,
+              "height": 28.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "This document describes the architecture.",
+            "frame": {
+              "x": 40.0,
+              "y": 120.0,
+              "width": 800.0,
+              "height": 20.0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

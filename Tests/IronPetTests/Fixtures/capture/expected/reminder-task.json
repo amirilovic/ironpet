@@ -1,0 +1,15 @@
+{
+  "app": {
+    "bundle_id": "com.apple.reminders",
+    "name": "Reminders",
+    "pid": 0
+  },
+  "content": {
+    "kind": "page",
+    "text": "Submit project notes\nTomorrow, 5:00 PM\nWork\nAttach the final screenshots.",
+    "title": ""
+  },
+  "parser": "reminders/v1",
+  "thread_key": "reminders:work/submit-project-notes",
+  "thread_title": "Submit project notes"
+}

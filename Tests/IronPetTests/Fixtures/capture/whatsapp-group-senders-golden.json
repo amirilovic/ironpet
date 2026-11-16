@@ -1,0 +1,25 @@
+{
+  "phase": 4,
+  "content": {
+    "kind": "conversation",
+    "title": "Weekend Plans",
+    "is_group": true,
+    "messages": [
+      {
+        "author": "Mira",
+        "text": "bringing snacks",
+        "is_me": false
+      },
+      {
+        "author": "Niko",
+        "text": "arranging rides",
+        "is_me": false
+      },
+      {
+        "author": "You",
+        "text": "I will bring drinks",
+        "is_me": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "app": {
+    "bundle_id": "com.microsoft.teams2",
+    "name": "Microsoft Teams",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "Microsoft Teams",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1200.0,
+      "height": 800.0
+    },
+    "children": [
+      {
+        "role": "TextField",
+        "value": "Search teams",
+        "attrs": {
+          "label": "Search"
+        },
+        "frame": {
+          "x": 24.0,
+          "y": 24.0,
+          "width": 260.0,
+          "height": 28.0
+        }
+      },
+      {
+        "role": "List",
+        "attrs": {
+          "identifier": "teams-chat-list",
+          "label": "Chats"
+        },
+        "frame": {
+          "x": 24.0,
+          "y": 80.0,
+          "width": 300.0,
+          "height": 600.0
+        },
+        "children": [
+          {
+            "role": "Row",
+            "frame": {
+              "x": 24.0,
+              "y": 100.0,
+              "width": 300.0,
+              "height": 28.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Release planning",
+                "frame": {
+                  "x": 44.0,
+                  "y": 106.0,
+                  "width": 220.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "Row",
+        "frame": {
+          "x": 400.0,
+          "y": 180.0,
+          "width": 680.0,
+          "height": 40.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "outside message row",
+            "frame": {
+              "x": 420.0,
+              "y": 190.0,
+              "width": 500.0,
+              "height": 16.0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

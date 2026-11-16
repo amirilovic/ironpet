@@ -102,6 +102,10 @@ final class Database {
 
     /// `nil` for an in-memory database.
     let path: URL?
+    /// Set when this is the in-memory stand-in for a file that could not be opened. Nothing in it reaches the disk.
+    private(set) var unavailableReason: String?
+    /// The file that could not be opened, when `unavailableReason` is set.
+    private(set) var unavailablePath: URL?
     private let writer: Connection
     private let reader: Connection?
     private let writeQueue = DispatchQueue(label: "ironpet.database.write")
@@ -113,8 +117,10 @@ final class Database {
         self.path = path
         if let path { try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true) }
         writer = try Connection(path: path?.path ?? ":memory:", readOnly: false)
+        // Check the version before switching to WAL, because that switch rewrites the header of a file that is not in WAL mode.
+        try Self.refuseNewer(writer, migrations)
         if path != nil {
-            try writer.script("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
+            try writer.script("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA secure_delete = ON;")
         }
         try Self.migrate(writer, migrations)
         reader = try path.map { try Connection(path: $0.path, readOnly: true) }
@@ -125,12 +131,22 @@ final class Database {
         do { return (try Database(path: path, migrations: migrations), nil) } catch {
             NSLog("ironpet: database \(path?.path ?? ":memory:") unavailable, using memory only: \(error.localizedDescription)")
             // An in-memory database with the same migrations cannot fail the way a damaged file can.
-            return (try! Database(path: nil, migrations: migrations), error.localizedDescription)
+            let fallback = try! Database(path: nil, migrations: migrations)
+            fallback.unavailableReason = error.localizedDescription
+            fallback.unavailablePath = path
+            return (fallback, error.localizedDescription)
         }
     }
 
     /// The version the schema is at.
     var schemaVersion: Int { (try? read { Self.version($0) }) ?? 0 }
+
+    /// Folds the write-ahead log into the database file and empties it, so text deleted earlier is no longer in the log. Best effort: it
+    /// does nothing while a reader holds the log, and an in-memory database has none.
+    func checkpoint() {
+        guard path != nil else { return }
+        writeQueue.sync { try? writer.script("PRAGMA wal_checkpoint(TRUNCATE);") }
+    }
 
     /// Runs `body` on the write queue inside one transaction. A throw rolls the transaction back and rethrows.
     @discardableResult
@@ -160,15 +176,21 @@ final class Database {
         ((try? connection.rows("PRAGMA user_version"))?.first?.first as? Int64).map(Int.init) ?? 0
     }
 
+    private static func refuseNewer(_ connection: Connection, _ migrations: [Migration]) throws {
+        let current = version(connection)
+        if let latest = migrations.map(\.version).max(), current > latest {
+            throw Failure(message: "the database is at version \(current), newer than this ironpet knows (\(latest)). "
+                + "A newer ironpet build created it. Install that build or a newer one again; your data is untouched.")
+        }
+    }
+
     private static func migrate(_ connection: Connection, _ migrations: [Migration]) throws {
         let ordered = migrations.sorted { $0.version < $1.version }
         for (a, b) in zip(ordered, ordered.dropFirst()) where a.version == b.version {
             throw Failure(message: "two migrations have version \(a.version): \(a.name) and \(b.name)")
         }
+        try refuseNewer(connection, migrations)
         let current = version(connection)
-        if let latest = ordered.last, current > latest.version {
-            throw Failure(message: "the database is at version \(current), newer than this ironpet knows (\(latest.version))")
-        }
         for migration in ordered where migration.version > current {
             try connection.script("BEGIN IMMEDIATE")
             do {

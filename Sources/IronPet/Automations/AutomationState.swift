@@ -80,6 +80,9 @@ final class AutomationState {
 
     private let database: Database
 
+    /// Why the database is unavailable, when history is only in memory.
+    var unavailable: String? { database.unavailableReason }
+
     /// Uses the app's shared database. `nil` makes a private in-memory one, for tests and previews.
     init(database: Database? = nil) {
         self.database = database ?? Database.open(path: nil, migrations: Self.migrations).database

@@ -1,0 +1,25 @@
+{
+  "phase": 4,
+  "content": {
+    "kind": "conversation",
+    "title": "general",
+    "is_group": true,
+    "messages": [
+      {
+        "author": "Arin",
+        "text": "index rebuilt",
+        "is_me": false
+      },
+      {
+        "author": "Bela",
+        "text": "deploy looks green",
+        "is_me": false
+      },
+      {
+        "author": "Bela",
+        "text": "shipping now",
+        "is_me": false
+      }
+    ]
+  }
+}

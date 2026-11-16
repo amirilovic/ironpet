@@ -1,0 +1,123 @@
+{
+  "app": {
+    "bundle_id": "com.apple.iCal",
+    "name": "Calendar",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "Calendar",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1200.0,
+      "height": 800.0
+    },
+    "children": [
+      {
+        "role": "Group",
+        "attrs": {
+          "identifier": "calendar-sidebar"
+        },
+        "frame": {
+          "x": 0.0,
+          "y": 0.0,
+          "width": 220.0,
+          "height": 800.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Today",
+            "frame": {
+              "x": 20.0,
+              "y": 80.0,
+              "width": 100.0,
+              "height": 20.0
+            }
+          }
+        ]
+      },
+      {
+        "role": "Popover",
+        "attrs": {
+          "identifier": "event-detail"
+        },
+        "frame": {
+          "x": 400.0,
+          "y": 120.0,
+          "width": 480.0,
+          "height": 420.0
+        },
+        "children": [
+          {
+            "role": "Heading",
+            "value": "Design review",
+            "attrs": {
+              "identifier": "event-title"
+            },
+            "frame": {
+              "x": 430.0,
+              "y": 145.0,
+              "width": 300.0,
+              "height": 30.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Tuesday, 3:00 PM",
+            "attrs": {
+              "identifier": "start-date-time"
+            },
+            "frame": {
+              "x": 430.0,
+              "y": 200.0,
+              "width": 250.0,
+              "height": 20.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Studio room",
+            "attrs": {
+              "identifier": "event-location"
+            },
+            "frame": {
+              "x": 430.0,
+              "y": 235.0,
+              "width": 250.0,
+              "height": 20.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Work",
+            "attrs": {
+              "identifier": "calendar-name"
+            },
+            "frame": {
+              "x": 430.0,
+              "y": 270.0,
+              "width": 180.0,
+              "height": 20.0
+            }
+          },
+          {
+            "role": "TextArea",
+            "value": "Review the interaction flow.",
+            "attrs": {
+              "identifier": "event-notes"
+            },
+            "frame": {
+              "x": 430.0,
+              "y": 315.0,
+              "width": 350.0,
+              "height": 80.0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

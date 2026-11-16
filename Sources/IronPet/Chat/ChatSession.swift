@@ -54,6 +54,8 @@ final class ChatSession: ObservableObject {
     enum AutomationEvent: Equatable {
         case started
         case finished
+        /// The reply was the task review's "nothing to do" line. The chat removed the prompt and the reply.
+        case noChange
         case failed(String)
         /// The user or the chat ended it before or during the run. Not a fault in the automation.
         case cancelled(String)
@@ -651,10 +653,31 @@ final class ChatSession: ObservableObject {
     }
 
     /// Tells the automation how its turn ended. Called before the next queued message starts.
-    private func finishAutomationTurn(error: String?) {
+    private func finishAutomationTurn(error: String?, noChange: Bool = false) {
         guard let id = automationRun else { return }
         automationRun = nil
-        onAutomation?(id, error.map { .failed($0) } ?? .finished)
+        onAutomation?(id, error.map { .failed($0) } ?? (noChange ? .noChange : .finished))
+    }
+
+    /// Removes the task review's prompt and reply from the transcript when the reply is exactly the "no changes" line.
+    /// Returns true when it did. Any other reply stays as a normal automation turn.
+    private func hideNoOpReview() -> Bool {
+        guard automationRun == AutomationDefaults.reviewTasksID,
+              let start = items.lastIndex(where: { if case .user = $0.kind { return true } else { return false } }),
+              items[start].origin == Self.automationOrigin,
+              lastAnswer()?.trimmingCharacters(in: .whitespacesAndNewlines) == AutomationDefaults.reviewTasksNoChange else { return false }
+        // The reply is the whole turn. Tool calls or other text before the line mean the agent did something.
+        let rest = items[(start + 1)...]
+        let onlyTheLine = rest.allSatisfy { item in
+            if case .assistant(let text) = item.kind {
+                let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return t.isEmpty || t == AutomationDefaults.reviewTasksNoChange
+            }
+            return false
+        }
+        guard onlyTheLine else { return false }
+        items.removeSubrange(start...)
+        return true
     }
 
     /// Applies a decision from Telegram through the same path as the Mac's Allow and Deny buttons.
@@ -672,8 +695,8 @@ final class ChatSession: ObservableObject {
     }
 
     /// Tells Telegram how its turn ended. Called before the next queued message starts, which replaces `telegramChat`.
-    private func finishTelegramTurn(error: String?) {
-        finishAutomationTurn(error: error)
+    private func finishTelegramTurn(error: String?, noChange: Bool = false) {
+        finishAutomationTurn(error: error, noChange: noChange)
         guard let chat = telegramChat else { return }
         telegramChat = nil
         if let error {
@@ -887,10 +910,11 @@ final class ChatSession: ObservableObject {
             endTurn()
             if let error { items.append(Item(kind: .error(error))) }
             state = error == nil ? .done : .failed
+            let hidden = error == nil && hideNoOpReview()
             saveThread()
             // Before the queue moves on: the next message replaces the Telegram chat this turn belongs to.
-            finishTelegramTurn(error: error)
-            if !isVisible {
+            finishTelegramTurn(error: error, noChange: hidden)
+            if !isVisible, !hidden {
                 let name = ConfigStore.shared.config.pet.name
                 onAttention?(error == nil ? "\(name) finished your task" : "\(name)'s task failed")
             }

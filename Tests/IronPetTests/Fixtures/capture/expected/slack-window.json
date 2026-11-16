@@ -1,0 +1,15 @@
+{
+  "app": {
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "name": "Slack",
+    "pid": 0
+  },
+  "content": {
+    "kind": "page",
+    "text": "Home\ngeneral\nrandom-channel\nAlice shipped the build\nBob deploy looks green",
+    "title": ""
+  },
+  "parser": "generic/v1",
+  "thread_key": "app:com.tinyspeck.slackmacgap",
+  "thread_title": "Slack"
+}

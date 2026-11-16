@@ -1,0 +1,36 @@
+{
+  "app": {
+    "bundle_id": "com.google.Chrome",
+    "name": "Google Chrome",
+    "pid": 0
+  },
+  "content": {
+    "kind": "conversation",
+    "messages": [
+      {
+        "author": "Nira Vale",
+        "is_me": false,
+        "sent_at": "Tue 08:17 AM",
+        "text": "The map review is complete. No delayed signals remain."
+      },
+      {
+        "author": "Sol Renn",
+        "is_me": false,
+        "sent_at": "Tue 08:39 AM",
+        "text": "The last probe is green."
+      },
+      {
+        "author": "You",
+        "draft": true,
+        "is_me": true,
+        "text": "I will send the map note."
+      }
+    ],
+    "title": "Signal map check"
+  },
+  "parser": "outlook-web/v1",
+  "thread_key": "outlook:AAQkAD00",
+  "thread_title": "Signal map check",
+  "url": "https://outlook.office.com/mail/inbox/id/AAQkAD00?itemid=AAQkAD00&exvsurl=1",
+  "window_title": "Quarterly index rebuild - Outlook"
+}

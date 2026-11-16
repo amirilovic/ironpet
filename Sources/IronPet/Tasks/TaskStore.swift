@@ -44,6 +44,9 @@ final class TaskStore: ObservableObject {
 
     // MARK: Reading
 
+    /// Why the database is unavailable, when tasks are only in memory.
+    var unavailable: String? { database.unavailableReason }
+
     func task(_ id: String) -> TaskItem? { tasks.first { $0.id == id } }
 
     /// Open tasks first (needs you, in progress, backlog), then done, newest first within each.
@@ -210,6 +213,7 @@ final class TaskStore: ObservableObject {
 
     /// One entry for MCP tools (`tasks_<op>`), the CLI and tests. Arguments are JSON objects; results are JSON values.
     func call(_ op: String, _ args: [String: Any], by: String) -> Result<Any, TaskError> {
+        if let reason = unavailable { return .failure(TaskError(message: DatabaseNotice.toolError(reason))) }
         do {
             switch op {
             case "list":

@@ -13,9 +13,20 @@ struct TaskListView: View {
     @State private var showDone = false
     @State private var message = ""
 
+    enum Content: Equatable { case unavailable, empty, list }
+
+    /// Tasks held in memory stay visible. With none, the unavailable state replaces "No tasks yet", which would be wrong while the real list is out of reach.
+    static func content(unavailable: Bool, isEmpty: Bool) -> Content { !isEmpty ? .list : unavailable ? .unavailable : .empty }
+
     var body: some View {
         VStack(spacing: 0) {
-            if tasks.suggestions.isEmpty && open.isEmpty && done.isEmpty {
+            if let reason = tasks.unavailable {
+                DatabaseBanner(reason: reason)
+            }
+            let content = Self.content(unavailable: tasks.unavailable != nil, isEmpty: tasks.suggestions.isEmpty && open.isEmpty && done.isEmpty)
+            if content == .unavailable {
+                Spacer()
+            } else if content == .empty {
                 EmptyState(symbol: "checklist", title: "No tasks yet",
                            detail: "Ask \(petName) to keep track of something, or finish a meeting.")
             } else {

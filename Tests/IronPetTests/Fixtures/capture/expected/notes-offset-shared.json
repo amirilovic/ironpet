@@ -1,0 +1,16 @@
+{
+  "app": {
+    "bundle_id": "com.apple.Notes",
+    "name": "Notes",
+    "pid": 0
+  },
+  "content": {
+    "kind": "document",
+    "text": "reserve room\nsend outline",
+    "title": "Trip plan"
+  },
+  "parser": "notes/v1",
+  "thread_key": "notes:trip-plan",
+  "thread_title": "Trip plan",
+  "window_title": "Trip plan"
+}

@@ -112,6 +112,9 @@ final class UsageStore: @unchecked Sendable {
     /// Only touched on `queue`.
     private var lastPrune = Date.distantPast
 
+    /// Why the database is unavailable, when usage is only in memory.
+    var unavailable: String? { database.unavailableReason }
+
     init(database: Database) {
         self.database = database
         queue.async { [self] in prune() }
@@ -198,7 +201,7 @@ final class UsageStore: @unchecked Sendable {
 
 /// Every feature's migrations, in the order the database applies them.
 enum AppMigrations {
-    static let all = AutomationState.migrations + UsageStore.migrations + TaskStore.migrations
+    static let all = AutomationState.migrations + UsageStore.migrations + TaskStore.migrations + CaptureStore.migrations
 }
 
 // MARK: Agent usage

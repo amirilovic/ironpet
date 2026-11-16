@@ -32,6 +32,25 @@ final class ConfigTests: XCTestCase {
         XCTAssertFalse(config.integrations.claudeHooks)
     }
 
+    func testScreenCaptureIsOffByDefaultAndSendsNothingUntilAppsAreAllowed() throws {
+        let defaults = Config().screenCapture
+        XCTAssertFalse(defaults.enabled)
+        XCTAssertTrue(defaults.sendApps.isEmpty)
+        XCTAssertEqual(defaults.delayMinutes, 3)
+        XCTAssertEqual(defaults.retentionDays, 30)
+        XCTAssertEqual(defaults.decision.secretThreshold, 0.2)
+        XCTAssertEqual(defaults.decision.calendarThreshold, 0.2)
+        XCTAssertEqual(defaults.decision.skipThreshold, 0)
+        try write(#"{"screenCapture":{"enabled":true,"delayMinutes":0,"retentionDays":9999,"decision":{"secretThreshold":7}}}"#)
+        let (config, error) = Config.load(from: file)
+        XCTAssertNil(error)
+        XCTAssertTrue(config.screenCapture.enabled)
+        XCTAssertEqual(config.screenCapture.delayMinutes, 0.5, "clamped")
+        XCTAssertEqual(config.screenCapture.retentionDays, 365)
+        XCTAssertEqual(config.screenCapture.decision.secretThreshold, 1)
+        XCTAssertEqual(config.screenCapture.decision.api, "systemone", "other keys keep their defaults")
+    }
+
     func testPartialFileIsLaidOverDefaults() throws {
         try write(#"{"pet":{"name":"Mochi"},"reminders":{"water":{"minutes":30}}}"#)
         let (config, error) = Config.load(from: file)

@@ -102,6 +102,9 @@ final class ACPBackend {
     /// A restricted run gets only its own working folder: no memory or screenshot folders. Meeting summaries use it.
     var restricted = false
 
+    /// A restricted run gets no MCP servers, except the read-only task lookup when this is on. Screen capture analysis uses it.
+    var readOnlyTaskTools = false
+
     /// The feature this backend's turns count under in the Usage tab. Nil records nothing, which is the default for anything
     /// that is not an ironpet feature.
     var usageFeature: UsageFeature?
@@ -110,6 +113,9 @@ final class ACPBackend {
 
     /// MCP servers every unrestricted session gets, as ACP `mcpServers` entries. ironpet's own automation tools go here.
     nonisolated(unsafe) static var defaultMCPServers: () -> [JSON] = { [] }
+
+    /// The MCP server entry for the read-only task lookup (`ironpet mcp --tasks-readonly`). It exposes `tasks_list` and `tasks_get` only.
+    nonisolated(unsafe) static var readOnlyTasksMCPServer: () -> JSON? = { nil }
 
     /// Receives transcript updates (text, tool calls) that arrive while no prompt is in flight, such as a background
     /// subagent's result after its turn ended.
@@ -372,13 +378,25 @@ final class ACPBackend {
 
     // MARK: Sessions
 
+    /// The MCP servers this backend's sessions get: all of ironpet's for the chat, none for a restricted run, and only the read-only task lookup
+    /// for a restricted run that asks for it.
+    var sessionMCPServers: [JSON] {
+        guard restricted else { return Self.defaultMCPServers() }
+        return readOnlyTaskTools ? [Self.readOnlyTasksMCPServer()].compactMap { $0 } : []
+    }
+
     private func ensureSession(_ turn: ACPTurn) async throws {
         guard let client else { throw ACPError(code: -1, message: "The agent stopped") }
         if sessionReady, sessionID != nil { return }
         // A new or reloaded session counts cost from its own start. A reload's replayed updates set the baseline again.
         reportedCost = nil
         costAccounted = nil
-        var params: JSON = ["cwd": turn.workspace.path, "mcpServers": restricted ? [JSON]() : Self.defaultMCPServers()]
+        var params: JSON = ["cwd": turn.workspace.path, "mcpServers": sessionMCPServers]
+        if restricted, readOnlyTaskTools {
+            // The Claude adapter reads this and leaves these built-in tools out, so they cannot run even if the user's own settings allow
+            // them without asking. Other agents ignore it and rely on ironpet refusing their permission requests.
+            params["_meta"] = ["claudeCode": ["options": ["disallowedTools": ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent"]]]]
+        }
         let sessionCapabilities = capabilities["sessionCapabilities"] as? JSON ?? [:]
         if sessionCapabilities["additionalDirectories"] != nil, !restricted {
             for dir in [Memory.directory, ScreenCapture.directory] { try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }

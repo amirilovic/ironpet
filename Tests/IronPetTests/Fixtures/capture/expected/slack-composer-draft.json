@@ -1,0 +1,32 @@
+{
+  "app": {
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "name": "Slack",
+    "pid": 0
+  },
+  "content": {
+    "kind": "conversation",
+    "messages": [
+      {
+        "author": "Ana Invented",
+        "is_me": false,
+        "text": "the budget test is green"
+      },
+      {
+        "author": "Bo Invented",
+        "is_me": false,
+        "text": "merging after review"
+      },
+      {
+        "author": "You",
+        "draft": true,
+        "is_me": true,
+        "text": "shipping phase b today"
+      }
+    ],
+    "title": "unknown"
+  },
+  "parser": "slack/v1",
+  "thread_key": "slack:unknown",
+  "thread_title": "unknown"
+}

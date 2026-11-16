@@ -1,0 +1,15 @@
+{
+  "app": {
+    "bundle_id": "com.apple.iWork.Pages",
+    "name": "Pages",
+    "pid": 0
+  },
+  "content": {
+    "kind": "document",
+    "text": "Project brief\nImplementation notes\nThe native parser retains document identity across edits.",
+    "title": "Project brief"
+  },
+  "parser": "pages/v1",
+  "thread_key": "pages:project-brief",
+  "thread_title": "Project brief"
+}
