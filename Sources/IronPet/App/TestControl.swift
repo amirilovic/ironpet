@@ -15,6 +15,9 @@ final class TestControl {
         let chatWindowID: () -> Int
         let chatFrame: () -> CGRect
         let openSession: (String) -> Void
+        /// Scrolls the chat transcript to `fraction` (0 top, 1 bottom) as a reader would, when given, and saves a PNG of the
+        /// chat to `snapshotPath` when given. Returns its geometry.
+        let scrollChat: (_ fraction: Double?, _ snapshotPath: String?) -> [String: Any]
         let showSettings: (_ tab: String?, _ snapshot: String?) -> Int
         let capture: (Bool) -> Void
         /// The handler a notification's Allow / Deny button calls.
@@ -87,6 +90,8 @@ final class TestControl {
             guard let first = chat.approvals.first else { return Self.encode(["ok": false, "error": "no pending approval"]) }
             chat.decide(first, allow: body["allow"] as? Bool ?? false)
             return Self.encode(["ok": true, "title": first.title])
+        case ("POST", "/test/scroll"):
+            return Self.encode(actions.scrollChat(body["fraction"] as? Double, body["snapshot"] as? String))
         case ("POST", "/test/open-session"):
             actions.openSession(body["session"] as? String ?? "")
             return Self.encode(["ok": true])
