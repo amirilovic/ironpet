@@ -2,7 +2,7 @@ import XCTest
 @testable import IronPet
 
 /// Answers every request with a canned response (or error) and keeps what it was sent.
-private final class StubProtocol: URLProtocol, @unchecked Sendable {
+final class StubProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var respond: (URLRequest) -> (Int, Data, Error?) = { _ in (200, Data(), nil) }
     nonisolated(unsafe) static var requests: [URLRequest] = []
     nonisolated(unsafe) static var bodies: [Data] = []

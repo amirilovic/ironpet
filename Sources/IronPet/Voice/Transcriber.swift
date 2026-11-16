@@ -31,6 +31,9 @@ struct TimedSegment: Equatable {
     var start: TimeInterval
     var end: TimeInterval
     var text: String
+    /// Whisper's probability that the segment is not speech, when the server returns it.
+    var noSpeechProb: Double? = nil
+    var avgLogprob: Double? = nil
 }
 
 /// Client for the OpenAI transcription API: a multipart `POST {baseUrl}/audio/transcriptions`. Works with OpenAI,
@@ -69,7 +72,7 @@ struct Transcriber {
         } catch TranscriptionError.http(let status, _) where status == 400 || status == 422 {
             data = try await send(wav: wav, format: "json", filename: "meeting.wav")
         }
-        return try Self.parseSegments(data)
+        return SegmentFilter.filter(try Self.parseSegments(data), wav: wav)
     }
 
     /// Reads Whisper-style `segments` and Parakeet-style `sentences` (each with `start`, `end`, `text`), from one JSON
@@ -94,7 +97,9 @@ struct Transcriber {
                       let start = (item["start"] as? NSNumber)?.doubleValue else { continue }
                 let end = (item["end"] as? NSNumber)?.doubleValue ?? start
                 timed.append(TimedSegment(start: start, end: max(start, end),
-                                          text: words.trimmingCharacters(in: .whitespacesAndNewlines)))
+                                          text: words.trimmingCharacters(in: .whitespacesAndNewlines),
+                                          noSpeechProb: (item["no_speech_prob"] as? NSNumber)?.doubleValue,
+                                          avgLogprob: (item["avg_logprob"] as? NSNumber)?.doubleValue))
             }
         }
         if !timed.isEmpty { return timed }
