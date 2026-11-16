@@ -8,8 +8,14 @@ struct ChatView: View {
     let close: () -> Void
     @FocusState private var inputFocused: Bool
     @State private var showSettings = false
-    @State private var pinnedToBottom = true
+    @State private var follow = TranscriptFollow()
     @State private var topRowID: UUID?
+    @State private var scrollActivity = ScrollActivity()
+    @State private var lastContentHeight: CGFloat = 0
+    @State private var lastItemID: UUID?
+    @State private var lastContentKey = ""
+    @State private var settleScroll: DispatchWorkItem?
+    @State private var lastGap: CGFloat = 0
     @State private var lastWidth: CGFloat = 0
     @State private var resizing = false
     @State private var resizeWasPinned = true
@@ -27,6 +33,9 @@ struct ChatView: View {
     @State private var findScrollTick = 0
     /// `--render-previews` only: draw the settings popover's content on its own, since a popover can't render offscreen.
     var settingsOnly = false
+    /// The row SwiftUI reports at the top of the transcript. Tests compare it before and after content arrives, because
+    /// the scroll offset in points moves when SwiftUI re-estimates the heights of rows that are not on screen.
+    nonisolated(unsafe) static var topRowForTesting: UUID?
 
     var body: some View {
         if settingsOnly { settingsPopover } else { chat }
@@ -316,32 +325,92 @@ struct ChatView: View {
                     if let agent = session.runtimeOffer { runtimeCard(agent).id("runtime") }
                     if !session.signInOptions.isEmpty { signInCard.id("signin") }
                     Color.clear.frame(height: 1).id("bottom")
-                        .onAppear { if !resizing { pinnedToBottom = true } }
-                        .onDisappear { if !resizing { pinnedToBottom = false } }
                 }
                 .scrollTargetLayout()
                 .padding(14)
+                .background(ScrollObserver(activity: scrollActivity) { metrics, userDriven in
+                    scrollMetricsChanged(metrics, userDriven: userDriven, proxy: proxy)
+                })
             }
-            .scrollPosition(id: $topRowID, anchor: .top)
+            // The top row only matters while the reader is away from the end: it keeps their row in place as content
+            // arrives and is where a resize puts them back. At the end it is nil, because a stale row would pull the
+            // view away from the bottom each time scrollTo put it there.
+            .scrollPosition(id: Binding(get: { follow.pinned ? nil : topRowID },
+                                        set: { ChatView.topRowForTesting = $0; if !follow.pinned { topRowID = $0 } }), anchor: .top)
             .frame(maxHeight: .infinity)
             .softScrollEdges()
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width in widthChanged(width, proxy: proxy) }
+            .overlay(alignment: .bottom) {
+                if follow.newBelow {
+                    Button {
+                        follow.jumpedToLatest()
+                        scrollToEnd(proxy)
+                    } label: {
+                        Label("Jump to latest", systemImage: "arrow.down")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .chromeGlass(in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 8)
+                    .transition(.opacity)
+                    .accessibilityIdentifier("jump-to-latest")
+                }
+            }
             .onChange(of: scrollKey) {
                 // Streaming only follows the end while the reader is there. Sending a message always jumps to it.
-                var sent = false
-                if case .user = session.items.last?.kind { sent = true }
+                // Only a new user message typed here jumps. While the agent works the last item stays that message,
+                // and every status change must not drag a reader who scrolled up back down.
+                let last = session.items.last
+                var readerSent = false
+                if last?.id != lastItemID, case .user = last?.kind, last?.origin == nil { readerSent = true }
+                lastItemID = last?.id
+                let contentKey = "\(session.items.count)-\(session.approvals.count)-\(lastAssistantLength)"
+                follow.contentArrived(readerSent: readerSent, newContent: contentKey != lastContentKey)
+                lastContentKey = contentKey
                 // With the find bar on a match, the view stays on it; only sending jumps away.
-                guard (pinnedToBottom && currentFindMatch == nil) || sent else { return }
-                // Lazy rows below the viewport only have estimated heights, so the first jump can land short.
-                // A second jump after layout settles reaches the real end.
-                proxy.scrollTo("bottom", anchor: .bottom)
-                DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+                guard follow.pinned, currentFindMatch == nil || readerSent else { return }
+                scrollToEnd(proxy)
             }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onAppear {
+                lastItemID = session.items.last?.id
+                lastContentKey = "\(session.items.count)-\(session.approvals.count)-\(lastAssistantLength)"
+                scrollToEnd(proxy)
+            }
             .onChange(of: findScrollTick) { revealCurrentMatch(proxy) }
             // A new chat or another thread starts with the default window again.
             .onChange(of: session.items.first?.id) { shownItems = TranscriptGroup.pageSize }
         }
+    }
+
+    private func scrollToEnd(_ proxy: ScrollViewProxy) {
+        scrollActivity.noteProgrammaticScroll()
+        proxy.scrollTo("bottom", anchor: .bottom)
+    }
+
+    private func scrollMetricsChanged(_ metrics: ScrollMetrics, userDriven: Bool, proxy: ScrollViewProxy) {
+        let grew = metrics.contentHeight != lastContentHeight
+        lastContentHeight = metrics.contentHeight
+        follow.geometryChanged(distanceFromBottom: metrics.distanceFromBottom, userDriven: userDriven)
+        // Rows below the viewport only have estimated heights, so the end moves as they are measured.
+        lastGap = metrics.distanceFromBottom
+        if follow.pinned, topRowID != nil { topRowID = nil }
+        guard follow.pinned, !userDriven, !resizing, grew, metrics.distanceFromBottom > TranscriptFollow.bottomTolerance else { return }
+        settleAtEnd(proxy, attempt: 0)
+    }
+
+    /// Scrolling realizes rows, which changes the estimated height, which would scroll again. So this jumps once after
+    /// the changes pause, and checks a few times that the jump reached the real end, which estimates can leave short.
+    private func settleAtEnd(_ proxy: ScrollViewProxy, attempt: Int) {
+        settleScroll?.cancel()
+        let work = DispatchWorkItem {
+            guard follow.pinned, !resizing else { return }
+            if lastGap > TranscriptFollow.bottomTolerance { scrollToEnd(proxy) }
+            if attempt < 3 { settleAtEnd(proxy, attempt: attempt + 1) }
+        }
+        settleScroll = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
     }
 
     /// A width change re-wraps every row, and rows off screen only have estimated heights, so the scroll position would
@@ -351,7 +420,7 @@ struct ChatView: View {
         guard lastWidth > 0, abs(width - lastWidth) > 0.5 else { return }
         if !resizing {
             resizing = true
-            resizeWasPinned = pinnedToBottom
+            resizeWasPinned = follow.pinned
             resizeAnchor = topRowID
         }
         restoreScroll(proxy)
@@ -366,6 +435,7 @@ struct ChatView: View {
     }
 
     private func restoreScroll(_ proxy: ScrollViewProxy) {
+        scrollActivity.noteProgrammaticScroll()
         if resizeWasPinned {
             proxy.scrollTo("bottom", anchor: .bottom)
         } else if let id = resizeAnchor {
@@ -478,9 +548,12 @@ struct ChatView: View {
             }
         }?.id
         guard let target else { return }
+        // A match is somewhere in the history, so streaming must not pull the view back to the end.
+        follow.leftTheEnd()
+        scrollActivity.noteProgrammaticScroll()
         proxy.scrollTo(target, anchor: .center)
         // Rows below the viewport only have estimated heights, so settle once layout has caught up.
-        DispatchQueue.main.async { proxy.scrollTo(target, anchor: .center) }
+        DispatchQueue.main.async { scrollActivity.noteProgrammaticScroll(); proxy.scrollTo(target, anchor: .center) }
     }
 
     private var scrollKey: String {

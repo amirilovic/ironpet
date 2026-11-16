@@ -425,6 +425,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return CGRect(x: frame.minX, y: screen.frame.height - frame.maxY, width: frame.width, height: frame.height)
                 },
                 openSession: { [weak self] id in self?.openSession(id) },
+                scrollChat: { [weak self] fraction, path in
+                    // The transcript is the tallest scroll view; the composer's text view has one too.
+                    @MainActor func find(_ view: NSView?) -> [NSScrollView] {
+                        guard let view else { return [] }
+                        return (view as? NSScrollView).map { [$0] } ?? [] + view.subviews.flatMap { find($0) }
+                    }
+                    let scrolls = find(self?.chatPanel.contentView)
+                    guard let scroll = scrolls.max(by: { ($0.documentView?.bounds.height ?? 0) < ($1.documentView?.bounds.height ?? 0) }), let doc = scroll.documentView else { return [String: Any]() }
+                    let visible = scroll.contentView.bounds
+                    if let fraction {
+                        let maxTop = max(0, doc.bounds.height - visible.height)
+                        scroll.contentView.scroll(to: NSPoint(x: visible.minX, y: maxTop * fraction))
+                        scroll.reflectScrolledClipView(scroll.contentView)
+                    }
+                    let now = scroll.contentView.bounds
+                    let result: [String: Any] = ["top": now.minY, "bottomGap": doc.bounds.height - now.maxY, "content": doc.bounds.height, "viewport": now.height]
+                    if let path {
+                        if let view = self?.chatPanel.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                            view.cacheDisplay(in: view.bounds, to: rep)
+                            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                        }
+                    }
+                    return result
+                },
                 showSettings: { [weak self] tab, snapshot in
                     self?.settingsWindow.show()
                     if let tab { self?.settingsModel.tab = tab }
