@@ -1,0 +1,375 @@
+import AppKit
+import SwiftUI
+
+/// The Tasks tab of the agents panel. The agent owns the list; here the user can only mark a task done, delete it,
+/// and add or skip meeting suggestions. Anything else goes to the chat through "Tell Ghost…".
+struct TaskListView: View {
+    @ObservedObject var tasks: TaskStore
+    let onTellGhost: (String) -> Void
+    let onOpenThread: (String) -> Void
+    let onOpenSession: (String) -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showDone = false
+    @State private var message = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if tasks.suggestions.isEmpty && open.isEmpty && done.isEmpty {
+                EmptyState(symbol: "checklist", title: "No tasks yet",
+                           detail: "Ask \(petName) to keep track of something, or finish a meeting.")
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        suggestions
+                        ForEach([TaskStatus.needsYou, .inProgress, .backlog], id: \.self) { status in
+                            let items = open.filter { $0.status == status }
+                            if !items.isEmpty {
+                                SectionTitle(status.title)
+                                ForEach(items) { row($0) }
+                            }
+                        }
+                        doneSection
+                    }
+                    .padding(6)
+                }
+                .frame(maxHeight: .infinity)
+            }
+            Divider()
+            tellGhost
+        }
+    }
+
+    private var petName: String { ConfigStore.shared.config.pet.name }
+
+    private var open: [TaskItem] { tasks.ordered.filter { $0.status != .done } }
+
+    /// Done tasks stay in the database for `tasks.keepDoneDays`; the list only shows the last week.
+    private var done: [TaskItem] {
+        let cutoff = Date().addingTimeInterval(-7 * 86_400)
+        return tasks.ordered.filter { $0.status == .done && ($0.closed ?? $0.updated) >= cutoff }
+    }
+
+    @ViewBuilder private var suggestions: some View {
+        if !tasks.suggestions.isEmpty {
+            SectionHeader("Suggestions", action: "Add all", help: "Add every suggestion to the backlog") { tasks.acceptAll() }
+            ForEach(tasks.suggestions) { suggestion in
+                SuggestionRow(suggestion: suggestion,
+                              onAdd: { _ = try? tasks.accept(suggestion.id) },
+                              onSkip: { tasks.skip(suggestion.id) })
+            }
+        }
+    }
+
+    @ViewBuilder private var doneSection: some View {
+        if !done.isEmpty {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { showDone.toggle() }
+            } label: {
+                HStack(spacing: 4) {
+                    Text("DONE (\(done.count))")
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(0.6)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .rotationEffect(.degrees(showDone ? 90 : 0))
+                }
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+                .padding(.bottom, 2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Done, \(done.count) \(done.count == 1 ? "task" : "tasks")")
+            .accessibilityValue(showDone ? "Expanded" : "Collapsed")
+            .help(showDone ? "Hide finished tasks" : "Show tasks finished in the last 7 days")
+            if showDone {
+                ForEach(done) { row($0) }
+            }
+        }
+    }
+
+    private func row(_ task: TaskItem) -> some View {
+        TaskRow(task: task,
+                onDone: { _ = try? tasks.close(task.id, by: "user") },
+                onDelete: { try? tasks.delete(task.id, by: "user") },
+                onOpen: open(_:))
+    }
+
+    private var tellGhost: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Tell \(petName)…", text: $message)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .onSubmit(send)
+                .accessibilityLabel("Tell \(petName) about a task")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.08), lineWidth: 1))
+        .padding(10)
+        .help("Tasks are changed through the chat, for example \"move the deploy task to in progress\"")
+    }
+
+    private func send() {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        message = ""
+        onTellGhost(text)
+    }
+
+    private func open(_ link: TaskLink) {
+        switch link.kind {
+        case .url:
+            // Validated on the way in; checked again because the database is a file anyone can edit.
+            guard let url = URL(string: link.ref), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
+            NSWorkspace.shared.open(url)
+        case .file:
+            // Reveal rather than open: an agent wrote the path, and opening could launch an app or a script.
+            let url = URL(fileURLWithPath: (link.ref as NSString).expandingTildeInPath)
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        case .thread:
+            onOpenThread(link.ref)
+        case .session:
+            onOpenSession(link.ref)
+        }
+    }
+}
+
+// MARK: - Rows
+
+private struct TaskRow: View {
+    let task: TaskItem
+    let onDone: () -> Void
+    let onDelete: () -> Void
+    let onOpen: (TaskLink) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovering = false
+
+    private static let maxLinkButtons = 3
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            CheckButton(done: task.status == .done, title: task.title, action: onDone)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(task.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(task.status == .done ? .secondary : .primary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                details
+            }
+            Spacer(minLength: 4)
+            if !task.links.isEmpty {
+                HStack(spacing: 2) {
+                    ForEach(Array(task.links.prefix(Self.maxLinkButtons).enumerated()), id: \.offset) { _, link in
+                        IconButton(symbol: link.symbol, help: link.help) { onOpen(link) }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering ? 0.07 : 0)))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .help(task.notes)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
+        .contextMenu { menu }
+        .accessibilityElement(children: .contain)
+        .accessibilityAction(named: "Delete", onDelete)
+    }
+
+    private var details: some View {
+        let now = Date()
+        let overdue = task.isOverdue(now: now)
+        return HStack(spacing: 5) {
+            Image(systemName: task.source.symbol)
+                .font(.system(size: 10))
+                .accessibilityLabel("From \(task.source.rawValue)")
+            Text((task.closed ?? task.updated).formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
+            if let due = task.dueLabel(now: now) {
+                Text("·").accessibilityHidden(true)
+                Label(due, systemImage: overdue ? "exclamationmark.circle.fill" : "calendar")
+                    .labelStyle(DueLabelStyle())
+                    .foregroundStyle(overdue ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+    }
+
+    @ViewBuilder private var menu: some View {
+        if task.status != .done {
+            Button("Mark Done", action: onDone)
+        }
+        ForEach(Array(task.links.enumerated()), id: \.offset) { _, link in
+            Button(link.help) { onOpen(link) }
+        }
+        Button("Copy Title") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(task.title, forType: .string)
+        }
+        Divider()
+        Button("Delete", role: .destructive, action: onDelete)
+    }
+}
+
+private struct SuggestionRow: View {
+    let suggestion: TaskSuggestion
+    let onAdd: () -> Void
+    let onSkip: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "lightbulb")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(width: 18, height: 18)
+                .padding(.top, 1)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(suggestion.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 5) {
+                    Image(systemName: TaskSource.meeting.symbol).font(.system(size: 10))
+                    Text("Meeting, \(suggestion.created.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))")
+                    if let due = suggestion.due {
+                        Text("·").accessibilityHidden(true)
+                        Label("Due \(due)", systemImage: "calendar").labelStyle(DueLabelStyle())
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                HStack(spacing: 6) {
+                    Button("Add", action: onAdd)
+                        .help("Add to the backlog")
+                    Button("Skip", action: onSkip)
+                        .help("Dismiss this suggestion")
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+                .padding(.top, 3)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering ? 0.07 : 0)))
+        .onHover { hovering = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+// MARK: - Pieces
+
+/// The leading circle. Shows a check on hover so it reads as a button before it is clicked.
+private struct CheckButton: View {
+    let done: Bool
+    let title: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: done ? "checkmark.circle.fill" : hovering ? "checkmark.circle" : "circle")
+                .font(.system(size: 15))
+                .foregroundStyle(done ? AnyShapeStyle(AgentStatus.done.tint) : AnyShapeStyle(.secondary))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(done)
+        .onHover { hovering = $0 }
+        .padding(.top, 1)
+        .help(done ? "Done" : "Mark done")
+        .accessibilityLabel(done ? "Done: \(title)" : "Mark \(title) done")
+    }
+}
+
+/// Icon and text on one baseline with a tight gap, for the metadata line.
+private struct DueLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 3) {
+            configuration.icon.font(.system(size: 10))
+            configuration.title
+        }
+    }
+}
+
+extension TaskLink {
+    var symbol: String {
+        switch kind {
+        case .url: return "safari"
+        case .file: return "folder"
+        case .thread: return "bubble.left.and.bubble.right"
+        case .session: return "arrow.up.forward.app"
+        }
+    }
+
+    /// The tooltip, accessibility label and menu title for the link's button.
+    var help: String {
+        let name = label?.trimmingCharacters(in: .whitespaces).nilIfEmpty
+        switch kind {
+        case .url: return "Open \(name ?? URL(string: ref)?.host ?? "link")"
+        case .file: return "Show \(name ?? (ref as NSString).lastPathComponent) in Finder"
+        case .thread: return "Open \(name ?? "chat thread")"
+        case .session: return "Open \(name ?? "agent session")"
+        }
+    }
+}
+
+extension TaskItem {
+    /// A due date at local midnight came from a plain date (`2026-11-20`) and lasts the whole day.
+    private func dueIsAllDay(_ due: Date, calendar: Calendar) -> Bool {
+        calendar.dateComponents([.hour, .minute, .second], from: due) == DateComponents(hour: 0, minute: 0, second: 0)
+    }
+
+    func isOverdue(now: Date, calendar: Calendar = .current) -> Bool {
+        guard let due, status != .done else { return false }
+        return dueIsAllDay(due, calendar: calendar) ? due < calendar.startOfDay(for: now) : due < now
+    }
+
+    /// "Due tomorrow", "Due Nov 20 at 15:30", "Overdue since yesterday". Nil without a due date.
+    func dueLabel(now: Date, calendar: Calendar = .current) -> String? {
+        guard let due else { return nil }
+        var dayFormat = Date.FormatStyle.dateTime.month(.abbreviated).day()
+        if !calendar.isDate(due, equalTo: now, toGranularity: .year) { dayFormat = dayFormat.year() }
+        dayFormat.calendar = calendar
+        dayFormat.timeZone = calendar.timeZone
+        let today = calendar.startOfDay(for: now)
+        let day: String
+        switch calendar.dateComponents([.day], from: today, to: calendar.startOfDay(for: due)).day {
+        case 0: day = "today"
+        case 1: day = "tomorrow"
+        case -1: day = "yesterday"
+        default: day = due.formatted(dayFormat)
+        }
+        var timeFormat = Date.FormatStyle.dateTime.hour().minute()
+        timeFormat.calendar = calendar
+        timeFormat.timeZone = calendar.timeZone
+        let time = dueIsAllDay(due, calendar: calendar) ? nil : due.formatted(timeFormat)
+        if isOverdue(now: now, calendar: calendar) {
+            if day == "today", let time { return "Overdue since \(time)" }
+            return "Overdue since \(day)" + (time.map { " \($0)" } ?? "")
+        }
+        return "Due \(day)" + (time.map { " at \($0)" } ?? "")
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}

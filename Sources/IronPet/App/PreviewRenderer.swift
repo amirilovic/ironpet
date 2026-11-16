@@ -34,11 +34,18 @@ enum PreviewRenderer {
         sessions.loadPreview(sampleSessions)
         let signals = SignalStore()
         sampleSignals.forEach { signals.add($0, notify: false) }
-        render(SessionListView(store: sessions, signals: signals, onJump: { _ in }, onAsk: { _ in }, onTrick: { _ in }).panel(),
-               to: dir, "agents")
+        let tasks = sampleTasks()
+        func list(_ sessions: SessionStore, tasks: TaskStore, on tab: SessionListView.Tab? = nil) -> some View {
+            SessionListView(store: sessions, signals: signals, tasks: tasks, onJump: { _ in }, onAsk: { _ in }, onTrick: { _ in },
+                            onTellGhost: { _ in }, onOpenThread: { _ in }, onOpenSession: { _ in }, initialTab: tab).panel()
+        }
+        render(list(sessions, tasks: tasks), to: dir, "agents")
         // The list opens on Alerts when no agent needs you or is working.
-        render(SessionListView(store: SessionStore(), signals: signals, onJump: { _ in }, onAsk: { _ in }, onTrick: { _ in }).panel(),
-               to: dir, "alerts")
+        render(list(SessionStore(), tasks: tasks), to: dir, "alerts")
+        render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks")
+        render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks-light", scheme: .light)
+        let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
+        render(list(sessions, tasks: noTasks, on: .tasks), to: dir, "tasks-empty")
 
         let done = Bubble(id: "done", symbol: AgentStatus.done.symbol, tint: AgentStatus.done.tint, title: "demo-app: Done",
                           subtitle: "Claude Code", body: "Edited 3 files · Fixed the flaky login test.",
@@ -74,17 +81,17 @@ enum PreviewRenderer {
         writeGIF(frames, to: dir.appendingPathComponent("pet.gif"))
     }
 
-    private static func render(_ view: some View, to dir: URL, _ name: String) {
-        guard let rep = snapshot(view) else { return }
+    private static func render(_ view: some View, to dir: URL, _ name: String, scheme: ColorScheme = .dark) {
+        guard let rep = snapshot(view, scheme: scheme) else { return }
         let file = dir.appendingPathComponent("\(name).png")
         try? rep.representation(using: .png, properties: [:])?.write(to: file)
         print("wrote \(file.path)")
     }
 
-    private static func snapshot(_ view: some View, wait: TimeInterval = 0.5) -> NSBitmapImageRep? {
-        let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
+    private static func snapshot(_ view: some View, wait: TimeInterval = 0.5, scheme: ColorScheme = .dark) -> NSBitmapImageRep? {
+        let host = NSHostingView(rootView: view.environment(\.colorScheme, scheme))
         let window = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
-        window.appearance = NSAppearance(named: .darkAqua)
+        window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
         window.contentView = host
         let size = host.fittingSize
         window.setContentSize(size)
@@ -143,6 +150,37 @@ enum PreviewRenderer {
             session("4", .cursor, .failed, "docs-site", prompt: "Upgrade to the new docs theme",
                     reply: "The build fails because the theme needs Node 20.", minutes: 11),
         ]
+    }
+
+    /// An in-memory list with one task in each state, created at made-up times.
+    private static func sampleTasks() -> TaskStore {
+        var clock = Date()
+        let store = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database, now: { clock })
+        let day: TimeInterval = 86_400
+        func add(_ title: String, _ status: TaskStatus, _ source: TaskSource, ago: TimeInterval, due: Date? = nil,
+                 notes: String = "", links: [TaskLink] = []) {
+            clock = Date().addingTimeInterval(-ago)
+            _ = try? store.create(title: title, notes: notes, status: status, source: source, due: due, links: links, by: "agent:mcp")
+        }
+        let today = Calendar.current.startOfDay(for: Date())
+        add("Approve the staging deploy for the rate limiter", .needsYou, .agent, ago: 600,
+            notes: "The canary has been green for an hour.",
+            links: [TaskLink(kind: .url, ref: "https://github.com/you/api-server/pull/17", label: "PR #17")])
+        add("Fix the flaky login test", .inProgress, .chat, ago: 1500, due: today.addingTimeInterval(-day),
+            links: [TaskLink(kind: .session, ref: "3", label: nil), TaskLink(kind: .thread, ref: "t1", label: nil)])
+        add("Make the settings page work on mobile", .inProgress, .telegram, ago: 3 * 3600,
+            due: today.addingTimeInterval(2 * day + 17 * 3600))
+        add("Write the release notes for 2.4", .backlog, .meeting, ago: day, due: today.addingTimeInterval(4 * day),
+            links: [TaskLink(kind: .file, ref: "/Users/you/.ironpet/meetings/2026-11-15-1000", label: "Meeting")])
+        add("Upgrade the docs site to Node 20", .backlog, .cli, ago: 2 * day)
+        add("Rotate the Sentry token", .done, .user, ago: 2 * 3600)
+        add("Answer Maya about the onboarding copy", .done, .meeting, ago: day + 3600)
+        add("Remove the old feature flags", .done, .agent, ago: 3 * day)
+        clock = Date().addingTimeInterval(-900)
+        store.suggest([("Send the design review notes to the team", "Friday")],
+                      meeting: URL(fileURLWithPath: "/Users/you/.ironpet/meetings/2026-11-16-1500"))
+        clock = Date()
+        return store
     }
 
     private static var sampleSignals: [Signal] {
