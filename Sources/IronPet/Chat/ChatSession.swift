@@ -573,6 +573,7 @@ final class ChatSession: ObservableObject {
     private func makeBackend() -> ACPBackend {
         acp?.shutdown()
         let backend = ACPBackend(agent: agent)
+        backend.usageFeature = .chat
         backend.onPermission = { [weak self] call, respond in self?.handlePermission(call, respond: respond) }
         backend.onBackground = { [weak self] event in self?.handleBackground(event) }
         acp = backend

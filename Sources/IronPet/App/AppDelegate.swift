@@ -177,7 +177,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .init(paused: r.paused, idleResetMinutes: r.idleResetMinutes, snoozeMinutes: r.snoozeMinutes)
         }
         // The app's one database. Features add their migrations to this list, in version order.
-        let database = Database.open(path: Paths.root.appendingPathComponent("ironpet.db"), migrations: AutomationState.migrations).database
+        let database = Database.open(path: Paths.root.appendingPathComponent("ironpet.db"), migrations: AppMigrations.all).database
+        UsageStore.shared = UsageStore(database: database)
         let service = AutomationService(store: store, engine: engine, database: database)
         service.notice = { [weak self] notice in self?.announcer.automation(notice) }
         service.dismissNotice = { [weak self] id in self?.announcer.bubbles.dismiss(id) }

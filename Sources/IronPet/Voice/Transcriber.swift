@@ -46,6 +46,10 @@ struct Transcriber {
     var apiKey: String?
     var session: URLSession = .shared
     var timeout: TimeInterval = 120
+    /// The feature whose Usage tab entry a successful request counts under. Nil (connection tests) records nothing.
+    var usageFeature: UsageFeature?
+    /// Where usage goes. Nil uses the app's `UsageStore.shared`.
+    var usageStore: UsageStore?
 
     func transcribe(wav: Data) async throws -> String {
         let data = try await send(wav: wav, format: "json", filename: "voice-note.wav")
@@ -77,15 +81,16 @@ struct Transcriber {
 
     /// Reads Whisper-style `segments` and Parakeet-style `sentences` (each with `start`, `end`, `text`), from one JSON
     /// object or from newline-delimited JSON. With neither, the whole `text` becomes one segment at 0.
-    static func parseSegments(_ data: Data) throws -> [TimedSegment] {
-        var objects: [[String: Any]] = []
-        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            objects = [object]
-        } else {
-            objects = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).compactMap {
-                (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any]
-            }
+    /// The response as one JSON object, or as newline-delimited JSON objects.
+    static func jsonObjects(_ data: Data) -> [[String: Any]] {
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { return [object] }
+        return String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).compactMap {
+            (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any]
         }
+    }
+
+    static func parseSegments(_ data: Data) throws -> [TimedSegment] {
+        let objects = jsonObjects(data)
         guard !objects.isEmpty else { throw TranscriptionError.malformedResponse }
         var timed: [TimedSegment] = []
         var text: String?
@@ -130,7 +135,15 @@ struct Transcriber {
         guard (200..<300).contains(http.statusCode) else {
             throw TranscriptionError.http(status: http.statusCode, detail: Self.snippet(of: data))
         }
+        recordUsage(data)
         return data
+    }
+
+    /// Stores what the provider reported for this request. A response with no usage and no `duration` records nothing:
+    /// ironpet does not measure the audio itself.
+    private func recordUsage(_ data: Data) {
+        guard let feature = usageFeature, let store = usageStore ?? UsageStore.shared, let usage = TranscriptionUsage.parse(data) else { return }
+        store.record(usage.event(feature: feature, model: model))
     }
 
     func makeRequest() throws -> URLRequest {

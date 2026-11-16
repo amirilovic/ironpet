@@ -99,6 +99,12 @@ final class ACPBackend {
     /// A restricted run gets only its own working folder: no memory or screenshot folders. Meeting summaries use it.
     var restricted = false
 
+    /// The feature this backend's turns count under in the Usage tab. Nil records nothing, which is the default for anything
+    /// that is not an ironpet feature.
+    var usageFeature: UsageFeature?
+    /// Where usage goes. Nil uses the app's `UsageStore.shared`.
+    var usageStore: UsageStore?
+
     /// MCP servers every unrestricted session gets, as ACP `mcpServers` entries. ironpet's own automation tools go here.
     nonisolated(unsafe) static var defaultMCPServers: () -> [JSON] = { [] }
 
@@ -125,6 +131,14 @@ final class ACPBackend {
     private var currentModel: String?
     private var modelConfigID: String?
     private var timedOut = false
+    /// The session's cumulative cost as the agent last reported it in a `usage_update`. ACP reports cost for the whole session,
+    /// so one turn's cost is the difference from where it stood when the turn began.
+    private var reportedCost: (amount: Double, currency: String)?
+    /// The part of `reportedCost` already stored in a usage record. A turn's cost is what came in since, which also covers a
+    /// `usage_update` that arrives between turns.
+    private var costAccounted: (amount: Double, currency: String)?
+    private var modelReportedInTurn: String?
+    private var modelAtTurnStart: String?
 
     var processID: Int32? { transport?.processID }
     /// The model the session is using, as the agent last reported or accepted it.
@@ -142,6 +156,7 @@ final class ACPBackend {
         // A cancelled turn can still be winding down. Wait for it, but never longer than the cancel watchdog allows.
         for _ in 0..<60 where promptInFlight { try? await Task.sleep(nanoseconds: 100_000_000) }
         self.onEvent = onEvent
+        var started: Date?
         do {
             try await connect(turn.workspace)
             try await ensureSession(turn)
@@ -151,15 +166,41 @@ final class ACPBackend {
             promptInFlight = true
             promptCount += 1
             defer { promptInFlight = false }
+            started = Date()
+            modelAtTurnStart = currentModel
+            modelReportedInTurn = nil
             let result = try await client.request("session/prompt", ["sessionId": sessionID, "prompt": blocks])
+            recordUsage(result, started: started ?? Date())
             emit(.finished(error: result["stopReason"] as? String == "refusal" ? "The agent declined this request." : nil))
         } catch ACPLaunchError.runtimeMissing {
             emit(.needsRuntime)
         } catch let error as ACPError where error.isAuthRequired {
             emit(.needsSignIn(authMethods))
         } catch {
+            // A turn that failed after the prompt went out still counts, and may have cost something.
+            if let started { recordUsage([:], started: started) }
             emit(.finished(error: describe(error)))
         }
+    }
+
+    /// Stores one usage record for the turn that just ended, when this backend has a feature. Only numbers the agent reported
+    /// go in: the response's `usage` object, and the cost change from `usage_update` notifications. The turn's length is the one
+    /// thing ironpet measures itself.
+    private func recordUsage(_ result: JSON, started: Date) {
+        guard let feature = usageFeature, let store = usageStore ?? UsageStore.shared else { return }
+        var event = UsageEvent(at: started, feature: feature, model: modelReportedInTurn ?? modelAtTurnStart ?? currentModel ?? "unknown",
+                               duration: Date().timeIntervalSince(started))
+        UsageEvent.applyACPUsage(result["usage"] as? JSON, to: &event)
+        if let now = reportedCost {
+            let before = costAccounted?.currency == now.currency ? costAccounted?.amount ?? 0 : 0
+            if now.amount != before || costAccounted?.currency != now.currency {
+                // A smaller total means the agent restarted its count, so the new total is all there is to add.
+                event.cost = now.amount >= before ? now.amount - before : now.amount
+                event.currency = now.currency
+            }
+            costAccounted = now
+        }
+        store.record(event)
     }
 
     /// Stop: tells the agent to end the turn and keeps its process for the next message.
@@ -188,6 +229,9 @@ final class ACPBackend {
         client = nil
         transport = nil
         sessionReady = false
+        // The next session starts its own cost count.
+        reportedCost = nil
+        costAccounted = nil
     }
 
     func authenticate(_ method: AuthMethod) async throws {
@@ -311,6 +355,9 @@ final class ACPBackend {
     private func ensureSession(_ turn: ACPTurn) async throws {
         guard let client else { throw ACPError(code: -1, message: "The agent stopped") }
         if sessionReady, sessionID != nil { return }
+        // A new or reloaded session counts cost from its own start. A reload's replayed updates set the baseline again.
+        reportedCost = nil
+        costAccounted = nil
         var params: JSON = ["cwd": turn.workspace.path, "mcpServers": restricted ? [JSON]() : Self.defaultMCPServers()]
         let sessionCapabilities = capabilities["sessionCapabilities"] as? JSON ?? [:]
         if sessionCapabilities["additionalDirectories"] != nil, !restricted {
@@ -329,6 +376,8 @@ final class ACPBackend {
                 readModels(result)
                 sessionReady = true
                 freshSession = false
+                // What the session spent before this run is not this run's cost.
+                costAccounted = reportedCost
                 return
             } catch let error as ACPError where error.isAuthRequired || client.isClosed {
                 throw error
@@ -447,12 +496,20 @@ final class ACPBackend {
             emit(.commands(SlashCommand.parse(update["availableCommands"] as? [JSON] ?? [])))
             return
         }
+        // The session's running cost is state too: a reload replays it, and the replayed total is the baseline for new turns.
+        if update["sessionUpdate"] as? String == "usage_update", let cost = update["cost"] as? JSON,
+           let amount = (cost["amount"] as? NSNumber)?.doubleValue, let currency = cost["currency"] as? String {
+            reportedCost = (amount, currency)
+        }
         guard !replaying else { return }
         switch update["sessionUpdate"] as? String {
         case "agent_message_chunk":
             if let content = update["content"] as? JSON, content["type"] as? String == "text", let text = content["text"] as? String, !text.isEmpty {
                 emitTranscript(.assistant(text))
             }
+        case "usage_update":
+            // The Claude Code adapter names the model the usage belongs to, since `usage_update` has no field for it.
+            if promptInFlight, let model = (update["_meta"] as? JSON)?["_claude/model"] as? String { modelReportedInTurn = model }
         case "tool_call":
             let call = ACPToolCall(json: update)
             tools[call.id] = call

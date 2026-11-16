@@ -122,6 +122,7 @@ struct SettingsView: View {
                 IntegrationsSettings(telegram: model.telegram).tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }.tag("integrations")
                 VoiceSettings(model: model).tabItem { Label("Voice", systemImage: "mic") }.tag("voice")
                 MeetingSettings(model: model).tabItem { Label("Meetings", systemImage: "person.2.wave.2") }.tag("meetings")
+                UsageSettings().tabItem { Label("Usage", systemImage: "chart.bar") }.tag("usage")
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
