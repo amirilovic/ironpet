@@ -47,6 +47,35 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertEqual(IronPetSection.allCases.filter(\.hidesBubbles), [.chat, .agents, .alerts, .tasks, .actions])
     }
 
+    func testCommandDigitsPickTheSidebarRowsInOrder() {
+        let all = IronPetSection.shown(chat: true, transcripts: true, automations: true)
+        XCTAssertEqual((1...7).map { IronPetSection.forShortcut("\($0)", in: all) },
+                       [.chat, .agents, .alerts, .tasks, .transcripts, .actions, .automations])
+        XCTAssertNil(IronPetSection.forShortcut("8", in: all))
+        XCTAssertNil(IronPetSection.forShortcut("0", in: all))
+        XCTAssertNil(IronPetSection.forShortcut("f", in: all))
+        XCTAssertNil(IronPetSection.forShortcut(nil, in: all))
+    }
+
+    func testHiddenRowsDoNotTakeANumber() {
+        let noChat = IronPetSection.shown(chat: false, transcripts: true, automations: true)
+        XCTAssertEqual(IronPetSection.forShortcut("1", in: noChat), .agents)
+        XCTAssertNil(IronPetSection.forShortcut("7", in: noChat))
+    }
+
+    private func keyEvent(_ characters: String, flags: NSEvent.ModifierFlags = .command) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                         characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: 0)!
+    }
+
+    func testCommandDigitsDoNothingWhileTheWindowIsNotKey() {
+        let model = IronPetWindowModel()
+        let panel = IronPetPanel(model: model, session: nil, content: EmptyView())
+        XCTAssertFalse(panel.isKeyWindow)
+        XCTAssertFalse(panel.performKeyEquivalent(with: keyEvent("4")))
+        XCTAssertEqual(model.section, .chat)
+    }
+
     func testASizeSavedOnABiggerDisplayShrinksToTheScreen() {
         let small = CGRect(x: 0, y: 0, width: 1024, height: 640)
         XCTAssertEqual(IronPetPanel.fitted(CGSize(width: 1800, height: 1000), in: small), CGSize(width: 1008, height: 624))
