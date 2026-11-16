@@ -102,6 +102,10 @@ final class ACPBackend {
     /// MCP servers every unrestricted session gets, as ACP `mcpServers` entries. ironpet's own automation tools go here.
     nonisolated(unsafe) static var defaultMCPServers: () -> [JSON] = { [] }
 
+    /// Receives transcript updates (text, tool calls) that arrive while no prompt is in flight, such as a background
+    /// subagent's result after its turn ended.
+    var onBackground: ((AgentEvent) -> Void)?
+
     /// Called when the agent asks to run something. Answer once.
     var onPermission: ((ACPToolCall, @escaping (ApprovalDecision) -> Void) -> Void)?
 
@@ -162,11 +166,13 @@ final class ACPBackend {
     func cancel() {
         onEvent = nil
         guard let client, !client.isClosed else { return }
-        if let sessionID { client.notify("session/cancel", ["sessionId": sessionID]) }
         let waiting = pendingPermissions
         pendingPermissions = [:]
         waiting.values.forEach { $0(.success(["outcome": ["outcome": "cancelled"]])) }
+        // With no prompt in flight there is no turn to cancel. Claude Code's adapter answers `session/cancel` with an
+        // interrupt that also stops the background subagents, so an idle chat must not send one.
         guard promptInFlight else { return }
+        if let sessionID { client.notify("session/cancel", ["sessionId": sessionID]) }
         // An agent that ignores the cancel would block the chat. After five seconds, restart it on the next message.
         // A later prompt on the same process is not the one that was cancelled, so it is left alone.
         let cancelled = promptCount
@@ -196,6 +202,19 @@ final class ACPBackend {
         onEvent?(event)
     }
 
+    /// Text and tool updates belong to the running turn. With no prompt in flight, they come from work the agent
+    /// started earlier, and the chat shows them without a turn.
+    private func emitTranscript(_ event: AgentEvent) {
+        if promptInFlight { onEvent?(event) } else { onBackground?(event) }
+    }
+
+    /// What ironpet tells the agent it supports. Claude Code's adapter holds `session/prompt` open while a background
+    /// subagent runs, unless the client says it takes subagent traffic after the response.
+    nonisolated static func clientCapabilities(for agent: ACPAgent) -> JSON {
+        guard agent.id == "claude" else { return JSON() }
+        return ["_meta": ["jetbrains": ["air": ["version": 1, "capabilities": ["backgroundSubagents"]]]]]
+    }
+
     private func describe(_ error: Error) -> String {
         let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         if timedOut { return "The agent did not answer in time. \(text)" }
@@ -223,7 +242,7 @@ final class ACPBackend {
         logCLIVersion()
         do {
             let result = try await guarded(client, seconds: 60) {
-                try await client.request("initialize", ["protocolVersion": 1, "clientCapabilities": JSON(),
+                try await client.request("initialize", ["protocolVersion": 1, "clientCapabilities": Self.clientCapabilities(for: agent),
                                                           "clientInfo": ["name": "ironpet", "title": "ironpet", "version": "0.1.0"]])
             }
             capabilities = result["agentCapabilities"] as? JSON ?? [:]
@@ -432,12 +451,12 @@ final class ACPBackend {
         switch update["sessionUpdate"] as? String {
         case "agent_message_chunk":
             if let content = update["content"] as? JSON, content["type"] as? String == "text", let text = content["text"] as? String, !text.isEmpty {
-                emit(.assistant(text))
+                emitTranscript(.assistant(text))
             }
         case "tool_call":
             let call = ACPToolCall(json: update)
             tools[call.id] = call
-            emit(.toolStarted(id: call.id, summary: call.summary))
+            emitTranscript(.toolStarted(id: call.id, summary: call.summary))
             finishIfDone(update, call)
         case "tool_call_update":
             guard let id = update["toolCallId"] as? String else { return }
@@ -445,7 +464,7 @@ final class ACPBackend {
             let before = call.summary
             call.merge(update)
             tools[id] = call
-            if call.summary != before, !finishedTools.contains(id) { emit(.toolUpdated(id: id, summary: call.summary)) }
+            if call.summary != before, !finishedTools.contains(id) { emitTranscript(.toolUpdated(id: id, summary: call.summary)) }
             finishIfDone(update, call)
         default:
             break
@@ -454,7 +473,7 @@ final class ACPBackend {
 
     private func finishIfDone(_ update: JSON, _ call: ACPToolCall) {
         guard let status = update["status"] as? String, status == "completed" || status == "failed", finishedTools.insert(call.id).inserted else { return }
-        emit(.toolFinished(id: call.id, ok: status == "completed"))
+        emitTranscript(.toolFinished(id: call.id, ok: status == "completed"))
     }
 
     private func agentRequest(_ method: String, _ params: JSON, _ respond: @escaping (Result<JSON, ACPError>) -> Void) {

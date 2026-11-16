@@ -45,6 +45,12 @@ final class ACPBackendTests: XCTestCase {
                     if c.get("method") == "session/cancel":
                         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "cancelled"}}); break
                 continue
+            if "BACKGROUND" in text:
+                update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "started"}})
+                send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+                time.sleep(0.3)
+                update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "RESULT"}})
+                continue
             if "PERMISSION" in text:
                 update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "`touch x`", "kind": "execute", "status": "pending", "rawInput": {"command": "touch x"}})
                 send({"jsonrpc": "2.0", "id": 900, "method": "session/request_permission", "params": {"sessionId": sid,
@@ -120,6 +126,35 @@ final class ACPBackendTests: XCTestCase {
         let capabilities = try XCTUnwrap((initialize["params"] as? JSON)?["clientCapabilities"] as? JSON)
         XCTAssertNil(capabilities["fs"])
         XCTAssertNil(capabilities["terminal"])
+        backend.shutdown()
+    }
+
+    func testClaudeDeclaresThatSubagentTrafficMayFollowThePromptResponse() {
+        let claude = ACPAgent(id: "claude", name: "Claude Code", command: "claude", args: [], helper: nil)
+        let air = (ACPBackend.clientCapabilities(for: claude)["_meta"] as? JSON)?["jetbrains"] as? JSON
+        XCTAssertEqual(((air?["air"] as? JSON)?["capabilities"]) as? [String], ["backgroundSubagents"])
+        XCTAssertTrue(ACPBackend.clientCapabilities(for: agent).isEmpty, "other agents get no extension")
+    }
+
+    func testUpdatesAfterThePromptResponseGoToTheBackgroundHandler() async {
+        let backend = ACPBackend(agent: agent)
+        var late: [AgentEvent] = []
+        backend.onBackground = { late.append($0) }
+        let events = await run(backend, turn("BACKGROUND"))
+        XCTAssertEqual(text(events), "started", "the turn ends at the response, without the later result")
+        guard case .finished(let error) = events.last, error == nil else { return XCTFail("expected a clean finish") }
+        for _ in 0..<40 where late.isEmpty { try? await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertEqual(text(late), "RESULT")
+        backend.shutdown()
+    }
+
+    func testStopWithNoTurnRunningSendsNoCancel() async {
+        let backend = ACPBackend(agent: agent)
+        _ = await run(backend, turn("BACKGROUND"))
+        backend.cancel()
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertTrue(logged().filter { $0["method"] as? String == "session/cancel" }.isEmpty,
+                      "the adapter's cancel interrupts Claude Code, which also stops background subagents")
         backend.shutdown()
     }
 
