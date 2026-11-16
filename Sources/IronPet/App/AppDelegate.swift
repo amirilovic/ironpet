@@ -176,7 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setUpAutomations() {
         let store = AutomationStore(defaults: { [config] in
             AutomationMigration.defaults(from: config.config, sentryConfigured: AutomationDefaults.sentryConfigured)
-        })
+        }, builtIns: [AutomationDefaults.reviewTasks()])
         let engine = AutomationEngine(env: .init(
             now: { [weak self] in Date().addingTimeInterval(self?.testClockOffset ?? 0) },
             isAgentWorking: { [weak self] in
@@ -211,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         service.nudge = { [weak self] moods in self?.pet.nudge(moods, each: moods == [.done] ? 3 : 4) }
         let workspace = store.paths.workspace
         service.runPrompt = { automation, prompt in await AutomationPrompt.run(automation, prompt: prompt, workspace: workspace) }
+        service.hasOpenTasks = { [tasks] in tasks.tasks.contains { $0.status != .done } }
         service.sendToChat = { [weak self] id, message in self?.chat.submitFromAutomation(message, automation: id) ?? false }
         service.chatRunPending = { [weak self] id in self?.chat.hasAutomationRun(id) ?? false }
         chat.onAutomation = { [weak service] id, event in service?.chatOutcome(id, event) }

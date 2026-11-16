@@ -6,6 +6,19 @@ enum AutomationDefaults {
     static let githubID = "github-alerts"
     static let sentryID = "sentry-alerts"
 
+    /// The built-in task review. Every 10 minutes it asks the chat to run the `ironpet-tasks` skill.
+    static let reviewTasksID = "review-tasks"
+    static let reviewTasksPrompt = "/ironpet-tasks"
+    /// The only reply that counts as "nothing to do". The chat hides such a turn.
+    static let reviewTasksNoChange = "ironpet-tasks: no changes"
+
+    static func reviewTasks(enabled: Bool = true) -> Automation {
+        Automation(id: reviewTasksID, name: "Review tasks", enabled: enabled,
+                   trigger: .init(type: "interval", minutes: 10, clock: "wall"),
+                   action: .init(type: "prompt", prompt: reviewTasksPrompt), createdBy: "user",
+                   note: "Asks the chat to review the task list. Skipped when no task is open, and hidden when nothing changed.")
+    }
+
     /// The `gh` binary, which the GitHub script runs.
     static var ghExecutable: URL? {
         ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"].map(URL.init(fileURLWithPath:))

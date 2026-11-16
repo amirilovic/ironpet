@@ -50,6 +50,8 @@ final class AutomationService {
     var sendToChat: ((_ automationID: String, _ message: String) -> Bool)?
     /// True while a message from this automation is queued or running in the chat.
     var chatRunPending: (_ automationID: String) -> Bool = { _ in false }
+    /// True when a task is in backlog, in progress or needs the user. The built-in task review does not run otherwise.
+    var hasOpenTasks: () -> Bool = { true }
     var runShell: (_ command: String, _ timeout: TimeInterval) async -> CommandResult = { command, timeout in
         await CommandRunner.run(shell: command, timeout: timeout, environment: CommandRunner.defaultEnvironment())
     }
@@ -248,6 +250,7 @@ final class AutomationService {
             askApproval(a)
             return
         }
+        if a.id == AutomationDefaults.reviewTasksID, !hasOpenTasks() { return record(a.id, "skipped", "skipped: no open tasks") }
         let values = templateValues(a, item: fire.item)
         switch a.action.type {
         case "shell":
@@ -316,6 +319,7 @@ final class AutomationService {
         switch event {
         case .started: record(id, "running", "running in the chat")
         case .finished: record(id, "ok", "finished in the chat")
+        case .noChange: record(id, "ok", "no changes")
         case .failed(let reason): record(id, "failed", "failed in the chat: \(reason)")
         case .cancelled(let reason): record(id, "skipped", "not finished: \(reason)")
         }
