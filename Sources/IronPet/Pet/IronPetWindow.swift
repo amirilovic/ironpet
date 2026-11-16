@@ -31,6 +31,18 @@ enum IronPetSection: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The sections the sidebar lists, in order. Chat, Transcripts and Automations need their backing object.
+    static func shown(chat: Bool, transcripts: Bool, automations: Bool) -> [IronPetSection] {
+        allCases.filter { ($0 != .chat || chat) && ($0 != .transcripts || transcripts) && ($0 != .automations || automations) }
+    }
+
+    /// The section ⌘1 to ⌘9 select: the Nth row of `sections`. Nil for ⌘0, any other key, or a digit past the last row.
+    static func forShortcut(_ characters: String?, in sections: [IronPetSection]) -> IronPetSection? {
+        guard let characters, characters.count == 1, let digit = Int(characters), (1...9).contains(digit),
+              digit <= sections.count else { return nil }
+        return sections[digit - 1]
+    }
+
     /// The sections that show what a bubble would announce, so bubbles wait while one is open. The others leave them
     /// visible, so an approval is not missed while reading a transcript or editing an automation.
     var hidesBubbles: Bool { [.chat, .agents, .alerts, .tasks, .actions].contains(self) }
@@ -111,6 +123,11 @@ final class IronPetPanel: NSPanel {
         return CGSize(width: max(size.width, minimumSize.width), height: max(size.height, minimumSize.height))
     }
 
+    /// The rows the sidebar shows; ⌘1 to ⌘9 index into this list.
+    private var sidebarSections: [IronPetSection] {
+        IronPetSection.shown(chat: session != nil, transcripts: true, automations: true)
+    }
+
     private var onChat: Bool { session != nil && model.section == .chat }
 
     override var canBecomeKey: Bool { true }
@@ -154,6 +171,11 @@ final class IronPetPanel: NSPanel {
         }
         if onChat, flags == .command, event.charactersIgnoringModifiers == "f", isKeyWindow {
             revealFind()
+            return true
+        }
+        if flags == .command, isKeyWindow,
+           let target = IronPetSection.forShortcut(event.charactersIgnoringModifiers, in: sidebarSections) {
+            model.section = target
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -295,9 +317,7 @@ struct IronPetWindowView: View {
     }
 
     private var shown: [IronPetSection] {
-        IronPetSection.allCases.filter {
-            ($0 != .chat || chat != nil) && ($0 != .transcripts || meetings != nil) && ($0 != .automations || settings != nil)
-        }
+        IronPetSection.shown(chat: chat != nil, transcripts: meetings != nil, automations: settings != nil)
     }
 
     private var sidebar: some View {
@@ -325,6 +345,12 @@ struct IronPetWindowView: View {
         Label(section.title, systemImage: section.symbol)
             .badge(count(section))
             .tag(section)
+            .help(shortcutHint(section))
+    }
+
+    private func shortcutHint(_ section: IronPetSection) -> String {
+        guard let index = shown.firstIndex(of: section), index < 9 else { return section.title }
+        return "\(section.title) (⌘\(index + 1))"
     }
 
     private func count(_ section: IronPetSection) -> Int {

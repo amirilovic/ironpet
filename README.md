@@ -73,6 +73,7 @@ macOS will ask for these permissions as you use the features:
 | See watched agents, alerts and tasks | Click Ghost when something needs attention, or right-click → Show agents. One window with a sidebar holds Agents, Alerts, Tasks, Actions, Automations and Settings |
 | Allow an action | **Allow** or <kbd>⌘↩</kbd> on the approval card |
 | Move Ghost | Drag him; he stays where you leave him |
+| Switch section | <kbd>⌘1</kbd> to <kbd>⌘7</kbd> in the ironpet window select the Nth sidebar row (Chat, Agents, Alerts, Tasks, Transcripts, Actions, Automations), also while the chat field has focus |
 | Settings | <kbd>⌘,</kbd>, the Settings row in the ironpet window, right-click Ghost → Settings…, or the Dock icon menu. A separate window with General, Integrations, Voice, Meetings and Usage in a sidebar; it reopens on the last page |
 | Make Ghost do tricks (wave, dance, zoomies, nap, say something…) | Right-click Ghost → Actions |
 
