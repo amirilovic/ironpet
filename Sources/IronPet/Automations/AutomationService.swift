@@ -488,7 +488,7 @@ final class AutomationService {
         raw["createdBy"] = by
         var (parsed, errors) = AutomationValidator.parseOne(raw)
         if let a = parsed {
-            errors += AutomationValidator.validate(a, isNew: true)
+            errors += AutomationValidator.validate(a, now: engine.env.now(), isNew: true)
             if store.automations.contains(where: { $0.id == a.id }) { errors.append("an automation with id \"\(a.id)\" already exists") }
         }
         guard errors.isEmpty, let a = parsed else { throw AutomationError(message: errors.joined(separator: "\n")) }
@@ -510,7 +510,7 @@ final class AutomationService {
         guard var a = parsed else { throw AutomationError(message: parseErrors.joined(separator: "\n")) }
         // Whoever changes what can run becomes its author. Changing only timing or text keeps the old author.
         a.createdBy = a.riskText == existing.riskText && changes["createdBy"] == nil ? existing.createdBy : by
-        let errors = parseErrors + AutomationValidator.validate(a)
+        let errors = parseErrors + AutomationValidator.validate(a, now: engine.env.now())
         guard errors.isEmpty else { throw AutomationError(message: errors.joined(separator: "\n")) }
         try store.replace(store.automations.map { $0.id == a.id ? a : $0 })
         return a
@@ -537,7 +537,7 @@ final class AutomationService {
         raw["createdBy"] = "user"
         let (parsed, parseErrors) = AutomationValidator.parseOne(raw)
         guard let a = parsed else { return parseErrors.joined(separator: "\n") }
-        let errors = parseErrors + AutomationValidator.validate(a)
+        let errors = parseErrors + AutomationValidator.validate(a, now: engine.env.now())
         guard errors.isEmpty else { return errors.joined(separator: "\n") }
         do { try store.replace(store.automations.map { $0.id == id ? a : $0 }) } catch { return error.localizedDescription }
         return nil
