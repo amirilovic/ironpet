@@ -58,7 +58,7 @@ final class AutomationService {
     init(store: AutomationStore, engine: AutomationEngine, database: Database? = nil) {
         self.store = store
         self.engine = engine
-        engine.state = AutomationState(database: database ?? Database.open(path: store.paths.database, migrations: AutomationState.migrations).database)
+        engine.state = AutomationState(database: database ?? Database.open(path: store.paths.database, migrations: AppMigrations.all).database)
         engine.set(store.automations)
         engine.onFire = { [weak self] fire in self?.handle(fire) }
         engine.onRecord = { [weak self] id, outcome, text in self?.recordHistory(id, outcome, text) }
@@ -153,28 +153,44 @@ final class AutomationService {
         return engine.state.approved(a.id) != AutomationState.hash(risk)
     }
 
-    private func isRejected(_ a: Automation) -> Bool {
+    func isRejected(_ a: Automation) -> Bool {
         guard let risk = a.riskText else { return false }
         return engine.state.rejected(a.id) == AutomationState.hash(risk)
     }
 
+    /// Whether commands, scripts and prompts an agent writes are approved without asking. Set from the settings.
+    var autoApproveEnabled: () -> Bool = { false }
+
     /// Asks about every enabled automation whose command or prompt is new and not the user's own.
+    /// With auto-approve on, it approves them instead, through the same `approve` as the Approve button.
     func reviewApprovals() {
         let live = Set(store.automations.map(\.id))
         for id in pending.keys where !live.contains(id) { pending[id] = nil }
         for a in store.automations where a.enabled && needsApproval(a) && !isRejected(a) {
+            if autoApproveEnabled() {
+                approve(a.id)
+                notice(AutomationNotice(id: "automation-auto-approved:\(a.id)", symbol: "checkmark.shield.fill", tint: .info,
+                                        title: "Auto-approved \"\(a.name)\"", subtitle: "Created by \(a.createdBy).", expires: 15))
+                continue
+            }
             let hash = AutomationState.hash(a.riskText ?? "")
             if announced[a.id] != hash { askApproval(a) }
         }
     }
 
-    private func askApproval(_ a: Automation) {
-        announced[a.id] = AutomationState.hash(a.riskText ?? "")
-        let detail = (a.riskText ?? "").split(separator: "\n").map { line -> String in
+    /// The command, script or prompt the user is asked to allow, without the internal "shell:" style labels.
+    /// The approval bubble and Settings show this same text.
+    func approvalDetail(_ a: Automation) -> String {
+        (a.riskText ?? "").split(separator: "\n").map { line -> String in
             let text = String(line)
             for prefix in ["shell:", "poll:", "prompt:", "http:"] where text.hasPrefix(prefix) { return String(text.dropFirst(prefix.count)) }
             return text
         }.joined(separator: "\n")
+    }
+
+    private func askApproval(_ a: Automation) {
+        announced[a.id] = AutomationState.hash(a.riskText ?? "")
+        let detail = approvalDetail(a)
         let kind = a.action.type == "prompt" ? "prompt" : "command"
         notice(AutomationNotice(
             id: Self.approvalID(a.id), symbol: "hand.raised.fill", tint: .warn,
@@ -387,12 +403,13 @@ final class AutomationService {
             ?? [title, text(action, "subtitle"), text(action, "label"), level, text(action, "url")].map { $0 ?? "" }.joined(separator: "\u{1}"))
         let known = engine.state.alertHash(a.id, id)
         guard known != fingerprint else { return nil }
-        engine.state.setAlertHash(a.id, id, fingerprint)
         let signal = Signal(id: signalID, title: title, subtitle: text(action, "subtitle") ?? text(action, "body") ?? "",
                             url: text(action, "url").flatMap(URL.init(string:)), label: text(action, "label") ?? a.name,
                             symbol: text(action, "symbol") ?? (level == "good" ? "checkmark.seal.fill" : level == "bad" ? "xmark.octagon.fill" : "bell.badge.fill"),
                             mood: level == "info" ? .done : mood(for: level), ask: text(action, "ask"))
-        alert(signal, !firstRun)
+        engine.state.setAlertHash(a.id, id, fingerprint, signal: signal)
+        // An empty stored hash is an alert from before payloads were stored, so it comes back without a bubble.
+        alert(signal, !firstRun && known != "")
         return nil
     }
 
@@ -472,7 +489,7 @@ final class AutomationService {
         raw["createdBy"] = by
         var (parsed, errors) = AutomationValidator.parseOne(raw)
         if let a = parsed {
-            errors += AutomationValidator.validate(a, isNew: true)
+            errors += AutomationValidator.validate(a, now: engine.env.now(), isNew: true)
             if store.automations.contains(where: { $0.id == a.id }) { errors.append("an automation with id \"\(a.id)\" already exists") }
         }
         guard errors.isEmpty, let a = parsed else { throw AutomationError(message: errors.joined(separator: "\n")) }
@@ -494,7 +511,7 @@ final class AutomationService {
         guard var a = parsed else { throw AutomationError(message: parseErrors.joined(separator: "\n")) }
         // Whoever changes what can run becomes its author. Changing only timing or text keeps the old author.
         a.createdBy = a.riskText == existing.riskText && changes["createdBy"] == nil ? existing.createdBy : by
-        let errors = parseErrors + AutomationValidator.validate(a)
+        let errors = parseErrors + AutomationValidator.validate(a, now: engine.env.now())
         guard errors.isEmpty else { throw AutomationError(message: errors.joined(separator: "\n")) }
         try store.replace(store.automations.map { $0.id == a.id ? a : $0 })
         return a
@@ -521,7 +538,7 @@ final class AutomationService {
         raw["createdBy"] = "user"
         let (parsed, parseErrors) = AutomationValidator.parseOne(raw)
         guard let a = parsed else { return parseErrors.joined(separator: "\n") }
-        let errors = parseErrors + AutomationValidator.validate(a)
+        let errors = parseErrors + AutomationValidator.validate(a, now: engine.env.now())
         guard errors.isEmpty else { return errors.joined(separator: "\n") }
         do { try store.replace(store.automations.map { $0.id == id ? a : $0 }) } catch { return error.localizedDescription }
         return nil

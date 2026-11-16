@@ -77,6 +77,8 @@ struct Config: Codable, Equatable {
         var logRetentionDays = 14
         /// When an automation fails, send the error to the chat and ask the agent to fix it.
         var autoFix = true
+        /// Approve commands, scripts and prompts that an agent writes without asking. Off by default.
+        var autoApprove = false
     }
 
     struct Skills: Codable, Equatable {
@@ -136,7 +138,15 @@ struct Config: Codable, Equatable {
         var urlTemplate: String?
     }
 
+    struct Chat: Codable, Equatable {
+        /// `"default"` (plain), a built-in id such as `"paws"`, or `"custom"` for the image in `customImage`.
+        var background = "default"
+        /// File name of the imported image in `~/.ironpet/backgrounds`.
+        var customImage: String?
+    }
+
     var pet = Pet()
+    var chat = Chat()
     /// `"auto"` (the app that started the agent) or the bundle id of a fixed app.
     var openIn = "auto"
     var editors: [Editor] = []
@@ -181,6 +191,16 @@ struct Config: Codable, Equatable {
         for path in [\Reminders.water, \Reminders.stretch, \Reminders.eyes] {
             c.reminders[keyPath: path].minutes = max(1, c.reminders[keyPath: path].minutes)
         }
+        if c.chat.background != ChatBackground.defaultID, c.chat.background != ChatBackground.customID,
+           ChatBackground.builtIn(c.chat.background) == nil {
+            c.chat.background = ChatBackground.defaultID
+        }
+        // A file name only: a hand-edited "../x" must not read or delete anything outside the backgrounds folder.
+        if let file = c.chat.customImage {
+            let name = (file as NSString).lastPathComponent
+            c.chat.customImage = name.isEmpty || name.hasPrefix(".") ? nil : name
+        }
+        if c.chat.background == ChatBackground.customID, c.chat.customImage == nil { c.chat.background = ChatBackground.defaultID }
         c.openIn = c.openIn.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.openIn.isEmpty { c.openIn = Config().openIn }
         c.editors = c.editors.filter { !$0.name.isEmpty && !$0.bundleId.isEmpty }

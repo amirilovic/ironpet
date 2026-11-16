@@ -11,6 +11,6 @@ let package = Package(
     ],
     targets: [
         .executableTarget(name: "IronPet", dependencies: [.product(name: "JMESPath", package: "jmespath.swift"), .product(name: "QuickJS", package: "QuickJS-Swift"), .product(name: "FluidAudio", package: "FluidAudio")], path: "Sources/IronPet"),
-        .testTarget(name: "IronPetTests", dependencies: ["IronPet"], path: "Tests/IronPetTests"),
+        .testTarget(name: "IronPetTests", dependencies: ["IronPet"], path: "Tests/IronPetTests", resources: [.copy("Fixtures")]),
     ]
 )

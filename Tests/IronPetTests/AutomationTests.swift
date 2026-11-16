@@ -18,6 +18,12 @@ final class AutomationTestClock {
     }()
     static let monday8 = calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 8))!
 
+    /// The fixture Monday plus `days`, at `hour:minute` UTC, so a test does not repeat the fixture date.
+    static func monday(plus days: Int = 0, hour: Int, minute: Int = 0) -> Date {
+        let day = calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: monday8))!
+        return calendar.date(byAdding: DateComponents(hour: hour, minute: minute), to: day)!
+    }
+
     var environment: AutomationEngine.Environment {
         AutomationEngine.Environment(now: { self.now }, idleSeconds: { self.idle }, isAgentWorking: { self.working },
                                      isBusy: { self.busy }, calendar: Self.calendar)
@@ -233,19 +239,19 @@ final class AutomationTriggerTests: AutomationTestCase {
         var fired: [Date] = []
         rig.engine.onFire = { _ in fired.append(self.clock.now) }
         // Monday 08:00 start. Walk through 09:00.
-        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 8, minute: 59))!
+        clock.now = AutomationTestClock.monday(plus: 0, hour: 8, minute: 59)
         rig.engine.tick()
         XCTAssertEqual(fired.count, 0)
-        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 9, minute: 1))!
+        clock.now = AutomationTestClock.monday(plus: 0, hour: 9, minute: 1)
         rig.engine.tick()
         XCTAssertEqual(fired.count, 1, "Monday 09:00 fires")
         // Saturday. Tick through Friday evening first, so the tick before 09:00 starts on Saturday.
-        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 20, hour: 23, minute: 59))!
+        clock.now = AutomationTestClock.monday(plus: 4, hour: 23, minute: 59)
         rig.engine.tick()
         let beforeSaturday = fired.count
-        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 8, minute: 59))!
+        clock.now = AutomationTestClock.monday(plus: 5, hour: 8, minute: 59)
         rig.engine.tick()
-        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 9, minute: 1))!
+        clock.now = AutomationTestClock.monday(plus: 5, hour: 9, minute: 1)
         rig.engine.tick()
         XCTAssertEqual(fired.count, beforeSaturday, "Saturday does not")
     }
@@ -300,7 +306,7 @@ final class AutomationTriggerTests: AutomationTestCase {
         let rig = makeRig([daily(["09:00"], weekdays: ["mon"])])
         rig.engine.set(rig.store.automations)
         let next = rig.engine.nextRun(rig.store.automations[0])
-        XCTAssertEqual(next, AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 9)))
+        XCTAssertEqual(next, AutomationTestClock.monday(plus: 0, hour: 9))
     }
 }
 
@@ -495,6 +501,96 @@ final class AutomationApprovalTests: AutomationTestCase {
         let asked = rig.notices.ids.filter { $0 == AutomationService.approvalID("sh") }.count
         rig.service.reviewApprovals()
         XCTAssertEqual(rig.notices.ids.filter { $0 == AutomationService.approvalID("sh") }.count, asked)
+    }
+
+    func testSettingsApproveDismissesTheBubbleAndRunsThePendingFire() async {
+        let rig = makeRig([shell()])
+        var ran: [String] = []
+        var dismissed: [String] = []
+        rig.service.dismissNotice = { dismissed.append($0) }
+        rig.service.runShell = { command, _ in ran.append(command); return CommandResult(code: 0, stdout: "ran") }
+        XCTAssertTrue(rig.service.needsApproval(rig.store.automations[0]), "the row shows Approve and Reject")
+        XCTAssertEqual(rig.service.approvalDetail(rig.store.automations[0]), "echo hi")
+        run(rig, minutes: 5)
+        rig.service.approve("sh")
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        XCTAssertTrue(dismissed.contains(AutomationService.approvalID("sh")), "the bubble is dismissed")
+        await until("the pending run") { ran == ["echo hi"] }
+    }
+
+    func testSettingsRejectShowsRejectedAndApproveStaysAvailable() async {
+        let rig = makeRig([shell()])
+        rig.service.reject("sh")
+        let a = rig.store.automations[0]
+        XCTAssertTrue(rig.service.isRejected(a))
+        XCTAssertTrue(rig.service.needsApproval(a), "Approve is still offered")
+        rig.service.approve("sh")
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        XCTAssertFalse(rig.service.isRejected(rig.store.automations[0]))
+    }
+
+    func testNoApprovalButtonsForTheUsersOwnOrApprovedAutomations() {
+        let rig = makeRig([shell(by: "user")])
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        let rig2 = makeRig([shell()])
+        rig2.service.approve("sh")
+        XCTAssertFalse(rig2.service.needsApproval(rig2.store.automations[0]))
+    }
+
+    private func createShell(_ rig: Rig) async {
+        let args: [String: Any] = ["id": "sh", "name": "Shell", "trigger": ["type": "interval", "minutes": 5, "clock": "wall"],
+                                   "action": ["type": "shell", "command": "echo hi"]]
+        let result = await rig.service.call("create", args, by: "agent:mcp")
+        if case .failure(let error) = result { XCTFail(error.message) }
+    }
+
+    func testAgentCreateAndUpdateNeedApprovalWithAutoApproveOff() async {
+        let rig = makeRig()
+        await createShell(rig)
+        XCTAssertTrue(rig.service.needsApproval(rig.store.automations[0]))
+        XCTAssertNotNil(rig.notices.last(AutomationService.approvalID("sh")))
+        rig.service.approve("sh")
+        _ = await rig.service.call("update", ["id": "sh", "changes": ["action": ["command": "echo changed"]]], by: "agent:mcp")
+        XCTAssertTrue(rig.service.needsApproval(rig.store.automations[0]))
+    }
+
+    func testAutoApproveApprovesAnAgentCreateAndItRunsOnTheNextFire() async {
+        let rig = makeRig()
+        rig.service.autoApproveEnabled = { true }
+        var ran: [String] = []
+        rig.service.runShell = { command, _ in ran.append(command); return CommandResult(code: 0, stdout: "ran") }
+        await createShell(rig)
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        XCTAssertNil(rig.notices.last(AutomationService.approvalID("sh")), "no approval bubble")
+        XCTAssertEqual(rig.notices.last("automation-auto-approved:sh")?.title, "Auto-approved \"Shell\"")
+        run(rig, minutes: 5)
+        await until("the run") { ran == ["echo hi"] }
+    }
+
+    func testAutoApproveApprovesAnAgentUpdate() async {
+        let rig = makeRig()
+        rig.service.autoApproveEnabled = { true }
+        var ran: [String] = []
+        rig.service.runShell = { command, _ in ran.append(command); return CommandResult(code: 0, stdout: "ran") }
+        await createShell(rig)
+        _ = await rig.service.call("update", ["id": "sh", "changes": ["action": ["command": "echo changed"]]], by: "agent:mcp")
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        run(rig, minutes: 5)
+        await until("the changed command runs") { ran.last == "echo changed" }
+    }
+
+    func testTurningAutoApproveOnApprovesPendingButNotRejected() async {
+        let rig = makeRig([shell(), Automation(id: "no", name: "No", trigger: .init(type: "interval", minutes: 5, clock: "wall"),
+                                               action: .init(type: "shell", command: "rm x"), createdBy: "agent:mcp")])
+        rig.service.reject("no")
+        XCTAssertTrue(rig.service.needsApproval(rig.store.automations[0]))
+        var on = false
+        rig.service.autoApproveEnabled = { on }
+        on = true
+        rig.service.reviewApprovals()
+        XCTAssertFalse(rig.service.needsApproval(rig.store.automations[0]))
+        let rejected = rig.store.automations.first { $0.id == "no" }!
+        XCTAssertTrue(rig.service.needsApproval(rejected), "a rejected one stays rejected")
     }
 
     func testTheUsersOwnShellRunsWithoutAsking() async {
@@ -767,6 +863,16 @@ final class AutomationServerTests: AutomationTestCase {
         XCTAssertTrue(history.text.contains("fired"), history.text)
     }
 
+    func testCreateValidatesOnceTriggersAgainstTheInjectedClock() async throws {
+        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2030, month: 1, day: 7, hour: 8))!
+        let action: [String: Any] = ["type": "bubble", "title": "x"]
+        let future = try await tool("automations_create", ["name": "Soon", "trigger": ["type": "once", "at": AutomationClock.format(clock.now.addingTimeInterval(120))], "action": action])
+        XCTAssertFalse(future.isError, future.text)
+        let past = try await tool("automations_create", ["name": "Earlier", "trigger": ["type": "once", "at": AutomationClock.format(clock.now.addingTimeInterval(-60))], "action": action])
+        XCTAssertTrue(past.isError)
+        XCTAssertTrue(past.text.contains("trigger.at is in the past"), past.text)
+    }
+
     func testCreateReportsValidationProblemsToTheAgent() async throws {
         let bad = try await tool("automations_create", ["name": "Bad", "trigger": ["type": "interval", "minutes": 0], "action": ["type": "bubble"]])
         XCTAssertTrue(bad.isError)
@@ -1006,6 +1112,16 @@ final class AutomationScriptEngineTests: AutomationTestCase {
         await rig.engine.pollNow("ci")
         XCTAssertEqual(log.shown.count, 2)
         XCTAssertEqual(log.shown[1].1, true, "new information notifies")
+    }
+
+    func testAnAlertFromBeforePayloadsWereStoredComesBackQuietly() async {
+        let (rig, log) = rig(scripted())
+        rig.engine.state.setAlertHash("ci", "7", "")
+        rig.engine.runScript = { _, state in self.output([self.alert()], state: state ?? "{}") }
+        await rig.engine.pollNow("ci")
+        await rig.engine.pollNow("ci")
+        XCTAssertEqual(log.shown.map(\.1), [false])
+        XCTAssertEqual(rig.engine.state.openAlerts().map(\.id), ["automation:ci:7"])
     }
 
     func testAnExplicitVersionControlsWhatCountsAsChanged() async {
@@ -1432,7 +1548,7 @@ final class AutomationLogTests: AutomationTestCase {
         XCTAssertEqual(db?.schemaVersion, 3)
         db = nil
         let upgraded = try Database(path: file, migrations: AutomationState.migrations)
-        XCTAssertEqual(upgraded.schemaVersion, 4)
+        XCTAssertEqual(upgraded.schemaVersion, 5)
         let state = AutomationState(database: upgraded)
         state.addLog("a", date: Date(), duration: 0, outcome: "ok", summary: "x", detail: "")
         XCTAssertEqual(state.logs().count, 1)
@@ -1570,10 +1686,99 @@ final class AutomationAgentTests: AutomationTestCase {
 
     func testTheSwitchIsOnByDefaultAndCanBeTurnedOff() throws {
         XCTAssertTrue(Config().automations.autoFix)
+        XCTAssertFalse(Config().automations.autoApprove, "off by default")
         let file = dir.appendingPathComponent("config.json")
         try #"{"automations":{"autoFix":false}}"#.write(to: file, atomically: true, encoding: .utf8)
         let loaded = Config.load(from: file).config
         XCTAssertFalse(loaded.automations.autoFix)
         XCTAssertEqual(loaded.automations.logRetentionDays, 14, "the other setting keeps its default")
+        XCTAssertFalse(loaded.automations.autoApprove, "an old config without the key loads as off")
+        try #"{"automations":{"autoApprove":true}}"#.write(to: file, atomically: true, encoding: .utf8)
+        XCTAssertTrue(Config.load(from: file).config.automations.autoApprove)
+    }
+}
+
+final class AutomationScriptStackTests: XCTestCase {
+    func testRunawayRecursionFailsInsteadOfCrashing() async {
+        let host = AutomationScript.HostIO(sh: { _, _ in CommandResult(spawnError: "no") })
+        do {
+            _ = try await AutomationScript.run(script: "function f(n) { return f(n + 1) + 1; } function poll(s) { return { state: f(0) }; }", state: nil, host: host)
+            XCTFail("expected a failure")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.isEmpty)
+        }
+    }
+}
+
+@MainActor
+final class AlertRestoreTests: XCTestCase {
+    private func signal(_ n: String) -> Signal {
+        let ask: String? = "look at \(n)"
+        return Signal(id: "automation:ci:\(n)", title: "Down \(n)", subtitle: "sub \(n)", url: URL(string: "https://x/\(n)"),
+               date: Date(timeIntervalSince1970: 1000 + Double(n)!), label: "Better Stack", symbol: "bell.badge.fill", mood: .failed, ask: ask)
+    }
+
+    private func open(_ database: Database) -> (AutomationState, SignalStore) {
+        let state = AutomationState(database: database)
+        let store = SignalStore()
+        store.onDismiss = { state.closeAlert(signalID: $0) }
+        return (state, store)
+    }
+
+    func testOpenAlertsComeBackQuietlyWithTheirFullPayload() throws {
+        let db = try Database(path: nil, migrations: AutomationState.migrations)
+        let (first, _) = open(db)
+        first.setAlertHash("ci", "1", "h1", signal: signal("1"))
+        first.setAlertHash("ci", "2", "h2", signal: signal("2"))
+        let (_, fresh) = open(db)
+        var notified = 0
+        fresh.onNew = { _ in notified += 1 }
+        fresh.restore(AutomationState(database: db).openAlerts())
+        XCTAssertEqual(fresh.signals, [signal("2"), signal("1")])
+        XCTAssertEqual(notified, 0)
+    }
+
+    func testADismissedAlertStaysDismissedButItsHashIsKept() throws {
+        let db = try Database(path: nil, migrations: AutomationState.migrations)
+        let (state, store) = open(db)
+        state.setAlertHash("ci", "1", "h1", signal: signal("1"))
+        store.restore(state.openAlerts())
+        store.dismiss("automation:ci:1")
+        XCTAssertTrue(AutomationState(database: db).openAlerts().isEmpty)
+        XCTAssertEqual(state.alertHash("ci", "1"), "h1", "listed again unchanged, it is skipped")
+    }
+
+    func testResolvingARestoredAlertRemovesItEverywhere() async throws {
+        let db = try Database(path: nil, migrations: AutomationState.migrations)
+        let state = AutomationState(database: db)
+        state.setAlertHash("ci", "1", "h1", signal: signal("1"))
+        let store = SignalStore()
+        store.restore(state.openAlerts())
+        store.dismiss("automation:ci:1")
+        state.clearAlert("ci", "1")
+        XCTAssertTrue(store.signals.isEmpty)
+        XCTAssertEqual(state.count("automation_alerts"), 0)
+    }
+
+    func testAChangedVersionOverwritesTheStoredPayload() throws {
+        let db = try Database(path: nil, migrations: AutomationState.migrations)
+        let state = AutomationState(database: db)
+        state.setAlertHash("ci", "1", "h1", signal: signal("1"))
+        var changed = signal("1"); changed = Signal(id: changed.id, title: "Down again", subtitle: "s", url: nil, label: "L", symbol: "x", mood: .needsInput, ask: nil)
+        state.setAlertHash("ci", "1", "h2", signal: changed)
+        XCTAssertEqual(state.openAlerts().map(\.title), ["Down again"])
+    }
+
+    func testMigrationFromTheOldSchemaBlanksHashesWithoutPayload() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-alerts-\(UUID().uuidString).db")
+        defer { try? FileManager.default.removeItem(at: file) }
+        var old: Database? = try Database(path: file, migrations: Array(AutomationState.migrations.filter { $0.version <= 4 }))
+        try old?.write { try $0.execute("INSERT INTO automation_alerts(automation, alert, hash) VALUES('ci', '1', 'h')") }
+        old = nil
+        let upgraded = try Database(path: file, migrations: AutomationState.migrations)
+        let state = AutomationState(database: upgraded)
+        XCTAssertEqual(upgraded.schemaVersion, 5)
+        XCTAssertTrue(state.openAlerts().isEmpty)
+        XCTAssertEqual(state.alertHash("ci", "1"), "", "the next run re-adds it, without a bubble")
     }
 }

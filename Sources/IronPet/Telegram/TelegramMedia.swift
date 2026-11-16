@@ -121,7 +121,7 @@ enum TelegramVoice {
     /// Uses the server in Settings → Voice. The Keychain read happens here, off the main thread.
     static let configuredTranscribe: @Sendable (Data, String) async throws -> String = { audio, name in
         let voice = await MainActor.run { ConfigStore.shared.config.voice }
-        let transcriber = Transcriber(baseURL: voice.baseUrl, model: voice.model, apiKey: VoiceKey.load())
+        let transcriber = Transcriber(baseURL: voice.baseUrl, model: voice.model, apiKey: VoiceKey.load(), usageFeature: .voiceTranscription)
         return try await transcribe(audio, name: name, with: transcriber)
     }
 

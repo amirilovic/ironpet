@@ -25,6 +25,14 @@ final class SignalStore: ObservableObject {
     /// Called for signals that should notify (not for state found on the first run).
     var onNew: ((Signal) -> Void)?
 
+    /// Called when the user dismisses a signal (one at a time or all).
+    var onDismiss: ((String) -> Void)?
+
+    /// Puts back alerts that were open when ironpet last quit. Quiet: no `onNew`.
+    func restore(_ restored: [Signal]) {
+        for signal in restored { add(signal, notify: false) }
+    }
+
     func add(_ signal: Signal, notify: Bool) {
         signals.removeAll { $0.id == signal.id }
         signals.insert(signal, at: 0)
@@ -34,6 +42,7 @@ final class SignalStore: ObservableObject {
 
     func dismiss(_ id: String) {
         signals.removeAll { $0.id == id }
+        onDismiss?(id)
     }
 
     func removeAll(where shouldRemove: (Signal) -> Bool) {
@@ -41,7 +50,9 @@ final class SignalStore: ObservableObject {
     }
 
     func dismissAll() {
+        let ids = signals.map(\.id)
         signals = []
+        ids.forEach { onDismiss?($0) }
     }
 
     /// Most urgent mood among open signals and how many share it.

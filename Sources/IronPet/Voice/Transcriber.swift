@@ -31,6 +31,9 @@ struct TimedSegment: Equatable {
     var start: TimeInterval
     var end: TimeInterval
     var text: String
+    /// Whisper's probability that the segment is not speech, when the server returns it.
+    var noSpeechProb: Double? = nil
+    var avgLogprob: Double? = nil
 }
 
 /// Client for the OpenAI transcription API: a multipart `POST {baseUrl}/audio/transcriptions`. Works with OpenAI,
@@ -43,46 +46,76 @@ struct Transcriber {
     var apiKey: String?
     var session: URLSession = .shared
     var timeout: TimeInterval = 120
+    /// The feature whose Usage tab entry a successful request counts under. Nil (connection tests) records nothing.
+    var usageFeature: UsageFeature?
+    /// Where usage goes. Nil uses the app's `UsageStore.shared`.
+    var usageStore: UsageStore?
 
+    /// A voice note. Asks for timed segments and drops the ones the audio does not support (see `SegmentFilter`), so
+    /// silence does not come back as "Thank you.". Falls back to plain `json` the same way `transcribeSegments` does.
     func transcribe(wav: Data) async throws -> String {
-        let data = try await send(wav: wav, format: "json", filename: "voice-note.wav")
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let text = object["text"] as? String else { throw TranscriptionError.malformedResponse }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let segments = try await segments(of: wav, filename: "voice-note.wav", mime: "audio/wav")
+        return Self.joined(segments)
     }
 
     /// Any audio file the server can read, such as a Telegram voice message (OGG/Opus). `mime` is the file's type.
+    /// The silence filter needs the samples, which only a 16-bit PCM WAV gives. Other formats are sent as plain
+    /// `json` and transcribed unfiltered.
     func transcribe(audio: Data, filename: String, mime: String) async throws -> String {
+        if !WAV.samples(of: audio).isEmpty {
+            return Self.joined(try await segments(of: audio, filename: filename, mime: mime))
+        }
         let data = try await send(wav: audio, format: "json", filename: filename, mime: mime)
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let text = object["text"] as? String else { throw TranscriptionError.malformedResponse }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func segments(of wav: Data, filename: String, mime: String) async throws -> [TimedSegment] {
+        let data = try await sendPreferringSegments(wav: wav, filename: filename, mime: mime)
+        var kept = SegmentFilter.filter(try Self.parseSegments(data), wav: wav)
+        // A text-only answer is one untimed segment that the filter cannot check, so check the whole clip.
+        let samples = WAV.samples(of: wav)
+        if kept.count == 1, kept[0].end <= kept[0].start, !samples.isEmpty,
+           SegmentFilter.rms(samples[...]) < SegmentFilter.silentRMS {
+            kept = []
+        }
+        return kept
+    }
+
+    private static func joined(_ segments: [TimedSegment]) -> String {
+        segments.map(\.text).filter { !$0.isEmpty }.joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func sendPreferringSegments(wav: Data, filename: String, mime: String) async throws -> Data {
+        do {
+            return try await send(wav: wav, format: "verbose_json", filename: filename, mime: mime)
+        } catch TranscriptionError.http(let status, _) where status == 400 || status == 422 {
+            return try await send(wav: wav, format: "json", filename: filename, mime: mime)
+        }
+    }
+
     /// Meeting chunks: asks for `verbose_json` to get timed segments. A server that rejects it (OpenAI's
     /// `gpt-4o-*-transcribe` models answer 400) gets one retry with plain `json`. A server that answers with only
     /// `text` (mlx-audio does for Parakeet) yields one segment at the start of the chunk.
     func transcribeSegments(wav: Data) async throws -> [TimedSegment] {
-        let data: Data
-        do {
-            data = try await send(wav: wav, format: "verbose_json", filename: "meeting.wav")
-        } catch TranscriptionError.http(let status, _) where status == 400 || status == 422 {
-            data = try await send(wav: wav, format: "json", filename: "meeting.wav")
-        }
-        return try Self.parseSegments(data)
+        let data = try await sendPreferringSegments(wav: wav, filename: "meeting.wav", mime: "audio/wav")
+        return SegmentFilter.filter(try Self.parseSegments(data), wav: wav)
     }
 
     /// Reads Whisper-style `segments` and Parakeet-style `sentences` (each with `start`, `end`, `text`), from one JSON
     /// object or from newline-delimited JSON. With neither, the whole `text` becomes one segment at 0.
-    static func parseSegments(_ data: Data) throws -> [TimedSegment] {
-        var objects: [[String: Any]] = []
-        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            objects = [object]
-        } else {
-            objects = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).compactMap {
-                (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any]
-            }
+    /// The response as one JSON object, or as newline-delimited JSON objects.
+    static func jsonObjects(_ data: Data) -> [[String: Any]] {
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { return [object] }
+        return String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).compactMap {
+            (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any]
         }
+    }
+
+    static func parseSegments(_ data: Data) throws -> [TimedSegment] {
+        let objects = jsonObjects(data)
         guard !objects.isEmpty else { throw TranscriptionError.malformedResponse }
         var timed: [TimedSegment] = []
         var text: String?
@@ -94,7 +127,9 @@ struct Transcriber {
                       let start = (item["start"] as? NSNumber)?.doubleValue else { continue }
                 let end = (item["end"] as? NSNumber)?.doubleValue ?? start
                 timed.append(TimedSegment(start: start, end: max(start, end),
-                                          text: words.trimmingCharacters(in: .whitespacesAndNewlines)))
+                                          text: words.trimmingCharacters(in: .whitespacesAndNewlines),
+                                          noSpeechProb: (item["no_speech_prob"] as? NSNumber)?.doubleValue,
+                                          avgLogprob: (item["avg_logprob"] as? NSNumber)?.doubleValue))
             }
         }
         if !timed.isEmpty { return timed }
@@ -125,7 +160,15 @@ struct Transcriber {
         guard (200..<300).contains(http.statusCode) else {
             throw TranscriptionError.http(status: http.statusCode, detail: Self.snippet(of: data))
         }
+        recordUsage(data)
         return data
+    }
+
+    /// Stores what the provider reported for this request. A response with no usage and no `duration` records nothing:
+    /// ironpet does not measure the audio itself.
+    private func recordUsage(_ data: Data) {
+        guard let feature = usageFeature, let store = usageStore ?? UsageStore.shared, let usage = TranscriptionUsage.parse(data) else { return }
+        store.record(usage.event(feature: feature, model: model))
     }
 
     func makeRequest() throws -> URLRequest {

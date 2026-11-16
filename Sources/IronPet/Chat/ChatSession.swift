@@ -19,6 +19,24 @@ final class ChatSession: ObservableObject {
         var date: Date? = Date()
         /// Where a user message came from when it was not typed here (`ChatSession.telegramOrigin`).
         var origin: String?
+        /// The earlier message this one answers, when the user used Reply.
+        var reply: Reply?
+    }
+
+    /// A reference to an earlier message, kept with the message that answers it. It stores the full text, so the agent
+    /// still gets the original after the transcript scrolls or the thread is reopened.
+    struct Reply: Codable, Equatable {
+        /// The id of the original item. The quote scrolls to it while it is in the transcript.
+        var itemID: UUID
+        /// "You" or the pet's name.
+        var sender: String
+        /// The original message, or only the selected part of it when `selection` is true.
+        var text: String
+        var date: Date?
+        /// True when the user selected part of the message and asked about that.
+        var selection: Bool? = nil
+        /// True when the user wrote the original. Older saved threads lack it and fall back to the sender name.
+        var fromUser: Bool? = nil
     }
 
     struct QueuedMessage: Identifiable {
@@ -27,6 +45,7 @@ final class ChatSession: ObservableObject {
         let attachments: [URL]
         /// The Telegram chat id when the message came from Telegram. Those are never put back in the Mac input.
         var telegram: Int64? = nil
+        var reply: Reply? = nil
     }
 
     /// What happened to a turn that started from Telegram, for `onTelegram`.
@@ -62,6 +81,9 @@ final class ChatSession: ObservableObject {
     }
 
     @Published var items: [Item] = []
+    /// The Cmd-F find bar. `findFocusTick` counts presses so a second Cmd-F refocuses the field.
+    @Published var findOpen = false
+    @Published var findFocusTick = 0
     @Published var input = "" {
         didSet { if persists { UserDefaults.standard.set(input, forKey: Self.draftKey) } }
     }
@@ -83,6 +105,10 @@ final class ChatSession: ObservableObject {
     }
     /// Messages typed while a turn runs. Each keeps the attachments present when it was queued.
     @Published private(set) var queue: [QueuedMessage] = []
+    /// The message the next send answers. One at a time; choosing another replaces it.
+    @Published var replyingTo: Reply?
+    /// Bumps each time Reply is chosen, so the input takes focus even when the same message is chosen again.
+    @Published private(set) var replyFocusTick = 0
     /// What the agent is doing right now, e.g. "Running `npm test`".
     @Published private(set) var activity: String?
     @Published private(set) var runStartedAt: Date?
@@ -154,9 +180,6 @@ final class ChatSession: ObservableObject {
     /// Reports progress of turns that came from Telegram, with the Telegram chat id.
     var onTelegram: ((Int64, TelegramEvent) -> Void)?
     private var telegramChat: Int64?
-    /// True from the start of a turn that came from Telegram until the next Mac-typed turn. Auto approval is
-    /// ignored while it is set, and a retry after sign-in keeps it.
-    private var telegramTurn = false
 
     private var threadID: String? {
         didSet { if persists { UserDefaults.standard.set(threadID, forKey: Self.threadKey) } }
@@ -174,10 +197,10 @@ final class ChatSession: ObservableObject {
     /// Replaces the agent turn in tests: receives the turn and the callback that delivers its events.
     var turnRunner: ((ACPTurn, @escaping (AgentEvent) -> Void) async -> Void)?
     private var toolItems: [String: UUID] = [:]
+    /// The reply item that late updates extend, so a later result starts its own item.
+    private var backgroundReply: UUID?
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
     private var decided: [String: Bool] = [:]
-    private var dictationTimer: Timer?
-    private var prefilling = false
     let voice = VoiceController()
     private var voiceChanges: AnyCancellable?
     /// The transcription error that offers Retry, so only that card shows the button.
@@ -206,11 +229,10 @@ final class ChatSession: ObservableObject {
         voice.onFailure = { [weak self] message, canRetry in self?.voiceFailed(message, canRetry: canRetry) }
     }
 
-    /// A voice note's text goes into the input to edit, or is sent straight away when "Send after dictation" is on, the same switch Wispr Flow dictation uses.
-    /// It is not run through the dictation heuristics, which would send any multi-word insert.
+    /// A voice note's text goes into the input to edit, or is sent straight away when "Send voice notes automatically" is on.
+    /// This is the only path that sends automatically. Pasted, typed and Wispr Flow text never does.
     func receiveTranscript(_ text: String) {
         let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        prefilling = true
         input = existing.isEmpty ? text : existing + " " + text
         if sendAfterDictation { send() }
     }
@@ -260,16 +282,11 @@ final class ChatSession: ObservableObject {
 
     var isRunning: Bool { state == .running }
 
-    /// Picks the folder from the app the user came from. Outside a coding app, a new chat asks instead
-    /// of silently reusing the last folder; an ongoing chat keeps its folder.
-    func prepareForShow(detected: URL?) {
+    /// Called when the chat opens. The session and folder stay as they are. Only when no folder was ever chosen does
+    /// the picker show.
+    func prepareForShow() {
         if state == .done || state == .failed, approvals.isEmpty { state = .idle }
-        guard !isRunning else { return }
-        if let detected {
-            use(detected)
-        } else if items.isEmpty {
-            needsWorkspace = true
-        }
+        if workspace == nil { needsWorkspace = true }
     }
 
     func use(_ url: URL) {
@@ -396,9 +413,51 @@ final class ChatSession: ObservableObject {
         attachments += files.filter { !attachments.contains($0) }
     }
 
+    /// Starts a reply to a user or assistant message. Tool steps, screenshots and errors cannot be replied to.
+    func reply(to item: Item, selection: String? = nil) {
+        let sender: String
+        let text: String
+        let fromUser: Bool
+        switch item.kind {
+        case .user(let t): sender = "You"; text = t; fromUser = true
+        case .assistant(let t): sender = ConfigStore.shared.config.pet.name; text = t; fromUser = false
+        default: return
+        }
+        let trimmed = selection?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selected = trimmed?.isEmpty == false ? trimmed : nil
+        replyingTo = Reply(itemID: item.id, sender: sender, text: selected ?? text, date: item.date,
+                           selection: selected == nil ? nil : true, fromUser: fromUser)
+        replyFocusTick += 1
+    }
+
+    /// Most characters of the original that reach the agent.
+    static let replyLimit = 4000
+
+    private static let replyTime: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return f
+    }()
+
+    /// The prompt the agent receives for a reply: the original quoted in full, then the user's text.
+    static func replyPrompt(_ reply: Reply, text: String) -> String {
+        var original = reply.text
+        var note = ""
+        if original.count > replyLimit {
+            note = "\n[The original was cut here. It is \(original.count) characters long.]"
+            original = String(original.prefix(replyLimit))
+        }
+        let owner = reply.fromUser ?? (reply.sender == "You") ? "your own" : "\(reply.sender)'s"
+        let when = reply.date.map { " from \(replyTime.string(from: $0))" } ?? ""
+        let quoted = (original + note).components(separatedBy: "\n").map { "> " + $0 }.joined(separator: "\n")
+        let lead = reply.selection == true ? "About this part of" : "Replying to"
+        return "> \(lead) \(owner) message\(when):\n\(quoted)\n\n\(text)"
+    }
+
     func newChat() {
         stop()
         shutdownAgent()
+        replyingTo = nil
         items = []
         threadID = nil
         autoMode = false
@@ -414,6 +473,7 @@ final class ChatSession: ObservableObject {
 
     private func apply(_ thread: ChatThread) {
         if let saved = AgentCatalog.agent(id: thread.agent), saved != agent { select(saved) }
+        replyingTo = nil
         items = thread.items
         threadID = thread.id
         autoMode = false
@@ -436,24 +496,25 @@ final class ChatSession: ObservableObject {
     }
 
     func send() {
-        dictationTimer?.invalidate()
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !attachments.isEmpty else { return }
         if isRunning {
-            queue.append(QueuedMessage(text: prompt, attachments: attachments))
+            queue.append(QueuedMessage(text: prompt, attachments: attachments, reply: replyingTo))
             input = ""
             attachments = []
+            replyingTo = nil
             return
         }
-        if start(prompt: prompt, shots: attachments) {
+        if start(prompt: prompt, shots: attachments, reply: replyingTo) {
             input = ""
             attachments = []
+            replyingTo = nil
         }
     }
 
     /// Starts a turn. Returns false, without sending, when no folder is chosen or the hooks are missing.
     @discardableResult
-    private func start(prompt: String, shots: [URL], telegram: Int64? = nil) -> Bool {
+    private func start(prompt: String, shots: [URL], telegram: Int64? = nil, reply: Reply? = nil) -> Bool {
         var prompt = prompt
         if telegram != nil, workspace == nil {
             // No chat has a folder yet. The no-project folder is what a chat with no code context uses.
@@ -470,12 +531,11 @@ final class ChatSession: ObservableObject {
         if prompt.isEmpty { prompt = telegram == nil ? "Help me with what's on my screen." : "Help me with the attached file." }
         let origin = telegram == nil ? nil : Self.telegramOrigin
         items += shots.map { Item(kind: .screenshot($0.path), origin: origin) }
-        items.append(Item(kind: .user(prompt), origin: origin))
+        items.append(Item(kind: .user(prompt), origin: origin, reply: reply))
         let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
-        telegramTurn = telegram != nil
         telegramChat = telegram
         if let telegram { onTelegram?(telegram, .started) }
-        run(ACPTurn(prompt: prompt, preamble: preamble, workspace: workspace, resume: threadID, model: model,
+        run(ACPTurn(prompt: reply.map { Self.replyPrompt($0, text: prompt) } ?? prompt, preamble: preamble, workspace: workspace, resume: threadID, model: model,
                     images: shots.filter(ImageIntake.isImageFile), files: shots.filter { !ImageIntake.isImageFile($0) }))
         return true
     }
@@ -515,16 +575,16 @@ final class ChatSession: ObservableObject {
         let text = queue.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
         let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let combined = existing.isEmpty ? text : existing + "\n\n" + text
-        if combined != input { prefilling = true }
         input = combined
         attachments += queue.flatMap(\.attachments)
+        if replyingTo == nil { replyingTo = queue.compactMap(\.reply).first }
         queue = []
     }
 
     /// Sends the oldest queued message through the normal path.
     private func sendNextQueued() {
         guard let next = queue.first else { return }
-        if start(prompt: next.text, shots: next.attachments, telegram: next.telegram) {
+        if start(prompt: next.text, shots: next.attachments, telegram: next.telegram, reply: next.reply) {
             queue.removeFirst()
         } else {
             restoreQueue()
@@ -534,15 +594,15 @@ final class ChatSession: ObservableObject {
     /// A message from an allowed Telegram user. It goes into the chat that is open now, the same way typed text
     /// does, and never changes the chat's thread or folder. A busy agent queues it with the Mac's own queue until the
     /// turn ends. `files` are shown and sent like Mac attachments, without touching the draft the user may be composing.
-    func submitFromTelegram(_ text: String, chat: Int64, files: [URL] = []) {
+    func submitFromTelegram(_ text: String, chat: Int64, files: [URL] = [], reply: Reply? = nil) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !files.isEmpty else { return }
         guard !isRunning else {
-            queue.append(QueuedMessage(text: prompt, attachments: files, telegram: chat))
+            queue.append(QueuedMessage(text: prompt, attachments: files, telegram: chat, reply: reply))
             onTelegram?(chat, .queued)
             return
         }
-        start(prompt: prompt, shots: files, telegram: chat)
+        start(prompt: prompt, shots: files, telegram: chat, reply: reply)
     }
 
     /// Applies a decision from Telegram through the same path as the Mac's Allow and Deny buttons.
@@ -582,7 +642,9 @@ final class ChatSession: ObservableObject {
     private func makeBackend() -> ACPBackend {
         acp?.shutdown()
         let backend = ACPBackend(agent: agent)
+        backend.usageFeature = .chat
         backend.onPermission = { [weak self] call, respond in self?.handlePermission(call, respond: respond) }
+        backend.onBackground = { [weak self] event in self?.handleBackground(event) }
         acp = backend
         return backend
     }
@@ -622,35 +684,19 @@ final class ChatSession: ObservableObject {
         shutdownAgent()
     }
 
-    /// Text delivered by the Wispr Flow bridge. Skipped if Wispr managed to type it into the field itself.
+    /// Text delivered by the Wispr Flow bridge. It is inserted but not sent. Skipped if Wispr managed to type it into the field itself.
     func receiveDictation(_ text: String) {
         guard !input.trimmingCharacters(in: .whitespaces).hasSuffix(text) else { return }
         input = input.isEmpty ? text : input + " " + text
-        scheduleAutoSend()
     }
 
-    /// Puts text in the input for the user to review; unlike a dictation it is not sent automatically.
+    /// Puts text in the input for the user to review. It is never sent automatically.
     func prefill(_ text: String) {
-        prefilling = true
         input = text
     }
 
-    /// Wispr Flow inserts a whole dictation at once; typing grows the text one character at a time.
     func inputChanged(from old: String, to new: String) {
         slash.reset()
-        if prefilling {
-            prefilling = false
-            return
-        }
-        if new.count - old.count >= 4 { scheduleAutoSend() }
-    }
-
-    private func scheduleAutoSend() {
-        guard sendAfterDictation else { return }
-        dictationTimer?.invalidate()
-        dictationTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.send() }
-        }
     }
 
     func decide(_ approval: Approval, allow: Bool) {
@@ -668,7 +714,7 @@ final class ChatSession: ObservableObject {
 
     /// Answers the agent's `session/request_permission`: either straight away or through an approval card.
     func handlePermission(_ call: ACPToolCall, respond: @escaping (ApprovalDecision) -> Void) {
-        switch ApprovalRules.policy(for: call, auto: autoMode && !telegramTurn) {
+        switch ApprovalRules.policy(for: call, auto: autoMode) {
         case .allow:
             respond(.allow)
         case .ask(let title, let detail):
@@ -755,11 +801,8 @@ final class ChatSession: ObservableObject {
             if let model, !list.isEmpty, !list.contains(where: { $0.id == model }) { self.model = nil }
         case .commands(let list):
             receiveCommands(list)
-        case .toolUpdated(let id, let summary):
-            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
-               case .tool(_, let ok) = items[index].kind {
-                items[index].kind = .tool(summary, ok: ok)
-            }
+        case .toolUpdated:
+            applyTranscript(event)
         case .needsSignIn(let methods):
             endTurn()
             signInOptions = methods
@@ -774,24 +817,8 @@ final class ChatSession: ObservableObject {
             state = .idle
             finishTelegramTurn(error: "\(agent.name) needs a runtime download. Approve it on the Mac.")
             restoreQueue(telegramReason: "\(agent.name) needs a runtime download. Approve it on the Mac.")
-        case .assistant(let text):
-            activity = "Writing"
-            if case .assistant(let previous) = items.last?.kind {
-                items[items.count - 1].kind = .assistant(previous + text)
-            } else {
-                items.append(Item(kind: .assistant(text)))
-            }
-        case .toolStarted(let id, let summary):
-            activity = Self.presentTense(summary)
-            let item = Item(kind: .tool(summary, ok: nil))
-            toolItems[id] = item.id
-            items.append(item)
-        case .toolFinished(let id, let ok):
-            activity = "Thinking"
-            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
-               case .tool(let summary, _) = items[index].kind {
-                items[index].kind = .tool(summary, ok: ok)
-            }
+        case .assistant, .toolStarted, .toolFinished:
+            applyTranscript(event)
         case .finished(let error):
             endTurn()
             if let error { items.append(Item(kind: .error(error))) }
@@ -804,6 +831,50 @@ final class ChatSession: ObservableObject {
                 onAttention?(error == nil ? "\(name) finished your task" : "\(name)'s task failed")
             }
             if error == nil { sendNextQueued() } else { restoreQueue(telegramReason: "The turn before it failed, so this message did not run.") }
+        }
+    }
+
+    /// Updates that arrive after the turn ended, such as a background subagent's result. They join the transcript
+    /// without a turn, so the chat stays idle and new messages start at once. An update that lands while the next
+    /// turn is still connecting joins that turn's reply instead of being lost.
+    func handleBackground(_ event: AgentEvent) {
+        switch event {
+        case .assistant, .toolStarted, .toolUpdated, .toolFinished: applyTranscript(event)
+        default: break
+        }
+    }
+
+    /// Text and tool items. Outside a running turn, text opens a new item instead of extending the last reply.
+    private func applyTranscript(_ event: AgentEvent) {
+        switch event {
+        case .assistant(let text):
+            if isRunning { activity = "Writing" }
+            if case .assistant(let previous) = items.last?.kind, isRunning || items.last?.id == backgroundReply {
+                items[items.count - 1].kind = .assistant(previous + text)
+            } else {
+                let item = Item(kind: .assistant(text))
+                backgroundReply = isRunning ? nil : item.id
+                items.append(item)
+            }
+        case .toolStarted(let id, let summary):
+            if isRunning { activity = Self.presentTense(summary) }
+            let item = Item(kind: .tool(summary, ok: nil))
+            toolItems[id] = item.id
+            items.append(item)
+        case .toolUpdated(let id, let summary):
+            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
+               case .tool(_, let ok) = items[index].kind {
+                items[index].kind = .tool(summary, ok: ok)
+            }
+        case .toolFinished(let id, let ok):
+            if isRunning { activity = "Thinking" }
+            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
+               case .tool(let summary, _) = items[index].kind {
+                items[index].kind = .tool(summary, ok: ok)
+            }
+            if !isRunning { saveThread() }
+        default:
+            break
         }
     }
 

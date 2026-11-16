@@ -10,6 +10,14 @@ enum Markdown {
         var indent: Int
         var marker: String
         var text: String
+
+        /// `- [ ] todo` and `- [x] done` render as checkboxes.
+        var task: (done: Bool, text: String)? {
+            for (prefix, done) in [("[ ] ", false), ("[x] ", true), ("[X] ", true)] where text.hasPrefix(prefix) {
+                return (done, String(text.dropFirst(prefix.count)))
+            }
+            return nil
+        }
     }
 
     enum Block: Equatable {
@@ -21,6 +29,27 @@ enum Markdown {
         case code(language: String?, text: String, closed: Bool)
         case table(header: [String], rows: [[String]])
         case rule
+    }
+
+    /// The text each block draws, in order, for search. Closed mermaid diagrams render as an image and have none.
+    static func segments(of block: Block) -> [String] {
+        func shown(_ markdown: String) -> String { String(inline(markdown).characters) }
+        switch block {
+        case .heading(_, let text), .paragraph(let text), .quote(let text):
+            return [shown(text)]
+        case .list(_, let items):
+            return items.map { shown($0.task?.text ?? $0.text) }
+        case .code(let language, let text, let closed):
+            return language?.lowercased() == "mermaid" && closed ? [] : [text]
+        case .table(let header, let rows):
+            return (header + rows.flatMap { $0 }).map(shown)
+        case .rule:
+            return []
+        }
+    }
+
+    static func segments(of text: String) -> [String] {
+        parse(text).flatMap { segments(of: $0) }
     }
 
     static func parse(_ text: String) -> [Block] {
@@ -131,8 +160,9 @@ enum Markdown {
     }
 
     static func inline(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+        let parsed = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(text)
+        return FilePathLinks.link(parsed)
     }
 
     private static func fence(_ trimmed: String) -> String? {
@@ -197,45 +227,62 @@ enum Markdown {
 /// Renders a reply's markdown as SwiftUI views. The caller sets the base font.
 struct MarkdownView: View {
     let text: String
+    /// Highlights for the open find bar. Nil for rows with no match.
+    var find: ChatFind.RowHighlight?
+    /// Redraws when a background check finds that a path in the text exists, so it turns into a link.
+    @ObservedObject private var paths = PathCache.shared
 
     var body: some View {
+        let blocks = Markdown.parse(text)
+        // Only a row with a match needs the segment numbers, so streaming without find parses nothing extra.
+        let starts = find == nil ? [] : blocks.reduce(into: [0]) { $0.append($0.last! + Markdown.segments(of: $1).count) }
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(Markdown.parse(text).enumerated()), id: \.offset) { _, block in
-                view(for: block)
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                view(for: block, segment: starts.isEmpty ? 0 : starts[index])
             }
         }
         .textSelection(.enabled)
+        .environment(\.openURL, OpenURLAction { FilePathLinks.handle($0) })
+    }
+
+    /// The reply font set by the caller, which the link cursor layout has to match.
+    static let baseSize: CGFloat = 13.5
+
+    private func linked(_ text: String, _ segment: Int, size: CGFloat = baseSize, lineSpacing: CGFloat = 0, weight: NSFont.Weight = .regular) -> some View {
+        let parsed = Markdown.inline(text)
+        return ChatFind.text(parsed, segment: segment, find: find).lineSpacing(lineSpacing)
+            .linkCursor(parsed, size: size, lineSpacing: lineSpacing, weight: weight)
     }
 
     @ViewBuilder
-    private func view(for block: Markdown.Block) -> some View {
+    private func view(for block: Markdown.Block, segment: Int) -> some View {
         switch block {
         case .heading(let level, let text):
-            Text(Markdown.inline(text))
+            linked(text, segment, size: level == 1 ? 17 : level == 2 ? 15.5 : 14, weight: level <= 2 ? .bold : .semibold)
                 .font(.system(size: level == 1 ? 17 : level == 2 ? 15.5 : 14, weight: level <= 2 ? .bold : .semibold))
                 .padding(.top, 2)
         case .paragraph(let text):
-            Text(Markdown.inline(text)).lineSpacing(2)
+            linked(text, segment, lineSpacing: 2)
         case .list(let ordered, let items):
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    ListRow(item: item, ordered: ordered)
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    ListRow(item: item, ordered: ordered, segment: segment + index, find: find)
                 }
             }
         case .quote(let text):
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 1.5).fill(Color.secondary.opacity(0.4)).frame(width: 3)
-                Text(Markdown.inline(text)).foregroundStyle(.secondary)
+                linked(text, segment).foregroundStyle(.secondary)
             }
             .fixedSize(horizontal: false, vertical: true)
         case .code(let language, let text, let closed):
             if language?.lowercased() == "mermaid", closed {
                 MermaidBlock(code: text)
             } else {
-                CodeBlock(language: language, code: text)
+                CodeBlock(language: language, code: text, segment: segment, find: find)
             }
         case .table(let header, let rows):
-            TableBlock(header: header, rows: rows)
+            TableBlock(header: header, rows: rows, segment: segment, find: find)
         case .rule:
             Rectangle().fill(Color.primary.opacity(0.12)).frame(height: 1).padding(.vertical, 2)
         }
@@ -245,22 +292,21 @@ struct MarkdownView: View {
 private struct ListRow: View {
     let item: Markdown.ListItem
     let ordered: Bool
+    let segment: Int
+    let find: ChatFind.RowHighlight?
+    @ObservedObject private var paths = PathCache.shared
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             bullet.frame(minWidth: ordered ? 18 : 10, alignment: .trailing)
-            Text(Markdown.inline(task?.text ?? item.text)).lineSpacing(2)
+            let text = Markdown.inline(task?.text ?? item.text)
+            ChatFind.text(text, segment: segment, find: find).lineSpacing(2)
+                .linkCursor(text, size: MarkdownView.baseSize, lineSpacing: 2)
         }
         .padding(.leading, CGFloat(item.indent) * 14)
     }
 
-    /// `- [ ] todo` and `- [x] done` render as checkboxes.
-    private var task: (done: Bool, text: String)? {
-        for (prefix, done) in [("[ ] ", false), ("[x] ", true), ("[X] ", true)] where item.text.hasPrefix(prefix) {
-            return (done, String(item.text.dropFirst(prefix.count)))
-        }
-        return nil
-    }
+    private var task: (done: Bool, text: String)? { item.task }
 
     @ViewBuilder
     private var bullet: some View {
@@ -278,6 +324,8 @@ private struct ListRow: View {
 private struct CodeBlock: View {
     let language: String?
     let code: String
+    let segment: Int
+    let find: ChatFind.RowHighlight?
     @State private var copied = false
 
     var body: some View {
@@ -295,12 +343,13 @@ private struct CodeBlock: View {
                         .font(.system(size: 10.5))
                 }
                 .buttonStyle(.borderless)
+                .pointerCursor()
                 .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 10)
             .padding(.top, 6)
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
+                ChatFind.text(AttributedString(code), segment: segment, find: find)
                     .font(.system(size: 12, design: .monospaced))
                     .fixedSize()
                     .padding(.horizontal, 10)
@@ -317,20 +366,24 @@ private struct CodeBlock: View {
 private struct TableBlock: View {
     let header: [String]
     let rows: [[String]]
+    let segment: Int
+    let find: ChatFind.RowHighlight?
+    @ObservedObject private var paths = PathCache.shared
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
                 GridRow {
-                    ForEach(Array(header.enumerated()), id: \.offset) { _, cell in
-                        Text(Markdown.inline(cell)).fontWeight(.semibold)
+                    ForEach(Array(header.enumerated()), id: \.offset) { column, cell in
+                        ChatFind.text(Markdown.inline(cell), segment: segment + column, find: find).fontWeight(.semibold)
                     }
                 }
                 Rectangle().fill(Color.primary.opacity(0.12)).frame(height: 1).gridCellColumns(max(header.count, 1))
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                let rowStarts = rows.reduce(into: [segment + header.count]) { $0.append($0.last! + $1.count) }
+                ForEach(Array(rows.enumerated()), id: \.offset) { r, row in
                     GridRow {
-                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-                            Text(Markdown.inline(cell))
+                        ForEach(Array(row.enumerated()), id: \.offset) { column, cell in
+                            ChatFind.text(Markdown.inline(cell), segment: rowStarts[r] + column, find: find)
                         }
                     }
                 }
@@ -364,7 +417,7 @@ private struct MermaidBlock: View {
                 .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.08)))
         } else {
-            CodeBlock(language: "mermaid", code: code)
+            CodeBlock(language: "mermaid", code: code, segment: 0, find: nil)
         }
     }
 }

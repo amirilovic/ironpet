@@ -69,6 +69,13 @@ final class AutomationState {
             CREATE INDEX automation_logs_by_automation ON automation_logs(automation, id);
             CREATE INDEX automation_logs_by_time ON automation_logs(at);
             """),
+        // Alerts used to live in memory only. The payload lets ironpet restore open alerts at launch. Hash rows from
+        // before this migration have no payload, so their hash is blanked. The automation then re-adds them on its next
+        // run, and an empty stored hash tells the service to do it without a bubble.
+        .init(5, "automations: open alert payloads", sql: """
+            ALTER TABLE automation_alerts ADD COLUMN payload TEXT;
+            UPDATE automation_alerts SET hash = '';
+            """),
     ]
 
     private let database: Database
@@ -76,7 +83,6 @@ final class AutomationState {
     /// Uses the app's shared database. `nil` makes a private in-memory one, for tests and previews.
     init(database: Database? = nil) {
         self.database = database ?? Database.open(path: nil, migrations: Self.migrations).database
-        prune()
     }
 
     // MARK: Seen sets
@@ -185,8 +191,39 @@ final class AutomationState {
         (read { try $0.rows("SELECT hash FROM automation_alerts WHERE automation = ? AND alert = ?", [automation, alert]).first?.first as? String }) ?? nil
     }
 
-    func setAlertHash(_ automation: String, _ alert: String, _ hash: String) {
-        write { try $0.execute("INSERT OR REPLACE INTO automation_alerts(automation, alert, hash) VALUES(?, ?, ?)", [automation, alert, hash]) }
+    /// Remembers the alert's fingerprint and, while it is open, its payload so it can be restored after a restart.
+    func setAlertHash(_ automation: String, _ alert: String, _ hash: String, signal: Signal? = nil) {
+        let payload = signal.flatMap { try? JSONEncoder().encode(StoredSignal($0)) }.flatMap { String(data: $0, encoding: .utf8) }
+        write { try $0.execute("INSERT OR REPLACE INTO automation_alerts(automation, alert, hash, payload) VALUES(?, ?, ?, ?)", [automation, alert, hash, payload]) }
+    }
+
+    /// The user dismissed the alert. The hash stays so a script that lists it again unchanged does not bring it back.
+    func closeAlert(signalID: String) {
+        write { try $0.execute("UPDATE automation_alerts SET payload = NULL WHERE 'automation:' || automation || ':' || alert = ?", [signalID]) }
+    }
+
+    /// Alerts that are open (not dismissed, not resolved), oldest first.
+    func openAlerts() -> [Signal] {
+        let rows = read { try $0.rows("SELECT automation, alert, payload FROM automation_alerts WHERE payload IS NOT NULL") } ?? []
+        return rows.compactMap { row -> Signal? in
+            guard let automation = row[0] as? String, let alert = row[1] as? String, let text = row[2] as? String,
+                  let stored = try? JSONDecoder().decode(StoredSignal.self, from: Data(text.utf8)) else { return nil }
+            return stored.signal(id: "automation:\(automation):\(alert)")
+        }.sorted { $0.date < $1.date }
+    }
+
+    private struct StoredSignal: Codable {
+        var title: String, subtitle: String, url: String?, date: Double, label: String, symbol: String, mood: String, ask: String?
+
+        init(_ s: Signal) {
+            title = s.title; subtitle = s.subtitle; url = s.url?.absoluteString; date = s.date.timeIntervalSince1970
+            label = s.label; symbol = s.symbol; mood = s.mood.rawValue; ask = s.ask
+        }
+
+        func signal(id: String) -> Signal {
+            Signal(id: id, title: title, subtitle: subtitle, url: url.flatMap(URL.init(string:)), date: Date(timeIntervalSince1970: date),
+                   label: label, symbol: symbol, mood: PetMood(rawValue: mood) ?? .needsInput, ask: ask)
+        }
     }
 
     func clearAlert(_ automation: String, _ alert: String) {

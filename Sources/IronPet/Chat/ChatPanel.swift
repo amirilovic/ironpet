@@ -17,9 +17,7 @@ final class ChatPanel: NSPanel {
                    styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
-        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            standardWindowButton(button)?.isHidden = true
-        }
+        hideStandardWindowButtons()
         backgroundColor = .windowBackgroundColor
         hasShadow = true
         level = .floating
@@ -46,6 +44,12 @@ final class ChatPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
 
+    /// AppKit re-shows the buttons on layout, key and appearance changes. Hide them again each pass.
+    override func update() {
+        super.update()
+        hideStandardWindowButtons()
+    }
+
     /// Intercepts ⌘V only when the pasteboard holds an image and no text; text paste stays with the field.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -56,12 +60,24 @@ final class ChatPanel: NSPanel {
                 return true
             }
         }
+        if flags == .command, event.charactersIgnoringModifiers == "f", isKeyWindow {
+            session.findOpen = true
+            session.findFocusTick += 1
+            focusFind()
+            return true
+        }
         return super.performKeyEquivalent(with: event)
     }
 
     /// Esc stops a running turn first, like the stop button; only an idle chat closes.
     override func cancelOperation(_ sender: Any?) {
         if session.dismissSlash() { return }
+        if session.findOpen {
+            session.findOpen = false
+            // The find bar leaves the view tree on the next update; the composer is the first field after that.
+            DispatchQueue.main.async { [weak self] in self?.focusInput() }
+            return
+        }
         if session.isRunning { session.stop() } else { close() }
     }
 
@@ -87,6 +103,25 @@ final class ChatPanel: NSPanel {
     func focusInput() {
         guard let field = contentView.flatMap(Self.firstTextInput) else { return }
         makeFirstResponder(field)
+    }
+
+    /// Moves focus to the find field and selects its text. The bar enters the view tree on the next SwiftUI update,
+    /// so retry briefly until the field exists. `FocusState` alone loses to the composer, which keeps first responder.
+    private func focusFind(attempt: Int = 0) {
+        // Esc during the retries closes the bar; do not pull focus back to a field that is going away.
+        guard session.findOpen else { return }
+        if let field = contentView.flatMap({ Self.findField(in: $0) }) {
+            makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+        } else if attempt < 30 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in self?.focusFind(attempt: attempt + 1) }
+        }
+    }
+
+    private static func findField(in view: NSView) -> NSTextField? {
+        if let field = view as? NSTextField, !field.isHidden, field.accessibilityIdentifier() == FindBar.fieldID { return field }
+        for sub in view.subviews { if let found = findField(in: sub) { return found } }
+        return nil
     }
 
     private static func firstTextInput(in view: NSView) -> NSView? {

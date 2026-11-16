@@ -177,12 +177,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .init(paused: r.paused, idleResetMinutes: r.idleResetMinutes, snoozeMinutes: r.snoozeMinutes)
         }
         // The app's one database. Features add their migrations to this list, in version order.
-        let database = Database.open(path: Paths.root.appendingPathComponent("ironpet.db"), migrations: AutomationState.migrations).database
+        let database = Database.open(path: Paths.root.appendingPathComponent("ironpet.db"), migrations: AppMigrations.all).database
+        UsageStore.shared = UsageStore(database: database)
         let service = AutomationService(store: store, engine: engine, database: database)
         service.notice = { [weak self] notice in self?.announcer.automation(notice) }
         service.dismissNotice = { [weak self] id in self?.announcer.bubbles.dismiss(id) }
         service.alert = { [weak self] signal, notify in self?.signals.add(signal, notify: notify) }
         service.resolveAlert = { [weak self] id in self?.signals.dismiss(id) }
+        // Alerts the user has not dismissed come back after a restart, quietly. Dismissing one clears its stored payload.
+        signals.restore(service.engine.state.openAlerts())
+        signals.onDismiss = { [state = service.engine.state] id in state.closeAlert(signalID: id) }
         service.nudge = { [weak self] moods in self?.pet.nudge(moods, each: moods == [.done] ? 3 : 4) }
         let workspace = store.paths.workspace
         service.runPrompt = { automation, prompt in await AutomationPrompt.run(automation, prompt: prompt, workspace: workspace) }
@@ -191,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.showLogs = { [weak self] id in self?.logWindow.show(automation: id) }
         service.logRetentionDays = { [config] in config.config.automations.logRetentionDays }
         service.autoFixEnabled = { [config] in config.config.automations.autoFix }
+        service.autoApproveEnabled = { [config] in config.config.automations.autoApprove }
         service.requestFix = { [weak self] automation, trigger, error in
             self?.sendToChat(AutomationAgentPrompts.fix(automation, trigger: trigger, error: error), show: false,
                              title: "\(automation.name) failed", busyBody: "Ask \(self?.chat.agent.name ?? "the agent") to fix it?")
@@ -421,6 +426,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return CGRect(x: frame.minX, y: screen.frame.height - frame.maxY, width: frame.width, height: frame.height)
                 },
                 openSession: { [weak self] id in self?.openSession(id) },
+                scrollChat: { [weak self] fraction, path in
+                    // The transcript is the tallest scroll view; the composer's text view has one too.
+                    @MainActor func find(_ view: NSView?) -> [NSScrollView] {
+                        guard let view else { return [] }
+                        return (view as? NSScrollView).map { [$0] } ?? [] + view.subviews.flatMap { find($0) }
+                    }
+                    let scrolls = find(self?.chatPanel.contentView)
+                    guard let scroll = scrolls.max(by: { ($0.documentView?.bounds.height ?? 0) < ($1.documentView?.bounds.height ?? 0) }), let doc = scroll.documentView else { return [String: Any]() }
+                    let visible = scroll.contentView.bounds
+                    if let fraction {
+                        let maxTop = max(0, doc.bounds.height - visible.height)
+                        scroll.contentView.scroll(to: NSPoint(x: visible.minX, y: maxTop * fraction))
+                        scroll.reflectScrolledClipView(scroll.contentView)
+                    }
+                    let now = scroll.contentView.bounds
+                    let result: [String: Any] = ["top": now.minY, "bottomGap": doc.bounds.height - now.maxY, "content": doc.bounds.height, "viewport": now.height]
+                    if let path {
+                        if let view = self?.chatPanel.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                            view.cacheDisplay(in: view.bounds, to: rep)
+                            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                        }
+                    }
+                    return result
+                },
                 showSettings: { [weak self] tab, snapshot in
                     self?.settingsWindow.show()
                     if let tab { self?.settingsModel.tab = tab }
@@ -513,11 +542,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chatPanel.isVisible && chatPanel.isKeyWindow && NSApp.isActive ? chatPanel.close() : showChat()
     }
 
-    /// `keepThread`: leave the chat's session and folder as they are instead of following the app the user came from.
-    private func showChat(keepThread: Bool = false) {
+    /// Opening the chat never changes its session or folder. Only the user does, with New Chat, the folder picker,
+    /// a saved thread or the agent switch.
+    private func showChat() {
         let front = NSWorkspace.shared.frontmostApplication
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
-        if !keepThread { chat.prepareForShow(detected: WorkspaceDetector.workspace(of: previousApp ?? front)) }
+        chat.prepareForShow()
         chat.isVisible = true
         wispr.start()
         NSApp.activate()
@@ -562,7 +592,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.jump(to: session)
     }
 
-    /// Starts a new chat and sends `prompt` to the agent. Without `show`, the chat stays hidden and Ghost says when the agent
+    /// Sends `prompt` to the agent in the current chat and folder. Without `show`, the chat stays hidden and Ghost says when the agent
     /// needs something. When the chat is busy with a turn or an approval, nothing is replaced: a bubble offers to send it.
     private func sendToChat(_ prompt: String, show: Bool, title: String, busyBody: String) {
         if chat.isRunning || !chat.approvals.isEmpty {
@@ -572,43 +602,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           .init(title: "Not now") {}]))
             return
         }
-        chat.newChat()
-        chat.useNoProject()
-        chat.input = prompt
-        chat.send()
-        if show { showChat() } else {
+        let sent = sendInCurrentChat(prompt)
+        // Without a folder the prompt waits in the input, so show the chat for the user to pick one.
+        if show || !sent { showChat() } else {
             announcer.automation(AutomationNotice(
                 id: "automation-chat:\(title)", symbol: "wrench.and.screwdriver.fill", tint: .info, title: title,
                 body: "Asked \(chat.agent.name) to fix it.", buttons: [.init(title: "Open chat", primary: true) { [weak self] in self?.showChat() }], expires: 20))
         }
     }
 
-    /// "Ask Ghost": a new chat with the prompt ready to send.
+    /// "Ask Ghost": opens the chat in the current session and folder with the prompt ready to send. A draft the user
+    /// was typing stays below the prompt, separated by a blank line.
     private func ask(_ prompt: String) {
-        chat.newChat()
         showChat()
-        chat.prefill(prompt)
+        let draft = chat.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A second press on the same Ask leaves the input as it is.
+        if draft.hasPrefix(prompt) { return }
+        chat.prefill(draft.isEmpty ? prompt : prompt + "\n\n" + draft)
+    }
+
+    /// Sends `prompt` in the current session and folder. A draft the user was typing and any attachments come back
+    /// after the send. If the send does not go through (no folder chosen yet), the prompt waits in the input above
+    /// the draft, and prefill keeps the dictation auto-send from firing on it.
+    @discardableResult
+    private func sendInCurrentChat(_ prompt: String) -> Bool {
+        let draft = chat.input
+        let staged = chat.attachments
+        chat.attachments = []
+        chat.input = prompt
+        chat.send()
+        chat.attachments = staged
+        if chat.input.isEmpty {
+            chat.input = draft
+            return true
+        } else {
+            chat.prefill(draft.isEmpty ? chat.input : draft + "\n\n" + chat.input)
+            return false
+        }
     }
 
     /// "Build a new pet": opens the chat and sends the request in the current thread. The session and folder stay as
     /// they are. A draft the user was typing comes back after the send. While the agent is running, or before a folder
     /// is chosen, the request waits in the input box instead.
     private func requestPet(_ description: String) {
-        showChat(keepThread: true)
+        showChat()
         PetPrompt.ensureSkillInstalled()
-        let draft = chat.input
-        let staged = chat.attachments
-        chat.attachments = []
-        chat.input = PetPrompt.build(description: description)
-        chat.send()
-        chat.attachments = staged
-        if chat.input.isEmpty {
-            chat.input = draft
-        } else {
-            // The send did not go through. Keep the draft above the waiting request, and use prefill so the
-            // dictation auto-send does not fire on the larger input.
-            chat.prefill(draft.isEmpty ? chat.input : draft + "\n\n" + chat.input)
-        }
+        sendInCurrentChat(PetPrompt.build(description: description))
     }
 
     // MARK: Meetings

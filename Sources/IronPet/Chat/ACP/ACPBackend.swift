@@ -99,8 +99,18 @@ final class ACPBackend {
     /// A restricted run gets only its own working folder: no memory or screenshot folders. Meeting summaries use it.
     var restricted = false
 
+    /// The feature this backend's turns count under in the Usage tab. Nil records nothing, which is the default for anything
+    /// that is not an ironpet feature.
+    var usageFeature: UsageFeature?
+    /// Where usage goes. Nil uses the app's `UsageStore.shared`.
+    var usageStore: UsageStore?
+
     /// MCP servers every unrestricted session gets, as ACP `mcpServers` entries. ironpet's own automation tools go here.
     nonisolated(unsafe) static var defaultMCPServers: () -> [JSON] = { [] }
+
+    /// Receives transcript updates (text, tool calls) that arrive while no prompt is in flight, such as a background
+    /// subagent's result after its turn ended.
+    var onBackground: ((AgentEvent) -> Void)?
 
     /// Called when the agent asks to run something. Answer once.
     var onPermission: ((ACPToolCall, @escaping (ApprovalDecision) -> Void) -> Void)?
@@ -121,6 +131,14 @@ final class ACPBackend {
     private var currentModel: String?
     private var modelConfigID: String?
     private var timedOut = false
+    /// The session's cumulative cost as the agent last reported it in a `usage_update`. ACP reports cost for the whole session,
+    /// so one turn's cost is the difference from where it stood when the turn began.
+    private var reportedCost: (amount: Double, currency: String)?
+    /// The part of `reportedCost` already stored in a usage record. A turn's cost is what came in since, which also covers a
+    /// `usage_update` that arrives between turns.
+    private var costAccounted: (amount: Double, currency: String)?
+    private var modelReportedInTurn: String?
+    private var modelAtTurnStart: String?
 
     var processID: Int32? { transport?.processID }
     /// The model the session is using, as the agent last reported or accepted it.
@@ -138,6 +156,7 @@ final class ACPBackend {
         // A cancelled turn can still be winding down. Wait for it, but never longer than the cancel watchdog allows.
         for _ in 0..<60 where promptInFlight { try? await Task.sleep(nanoseconds: 100_000_000) }
         self.onEvent = onEvent
+        var started: Date?
         do {
             try await connect(turn.workspace)
             try await ensureSession(turn)
@@ -147,26 +166,54 @@ final class ACPBackend {
             promptInFlight = true
             promptCount += 1
             defer { promptInFlight = false }
+            started = Date()
+            modelAtTurnStart = currentModel
+            modelReportedInTurn = nil
             let result = try await client.request("session/prompt", ["sessionId": sessionID, "prompt": blocks])
+            recordUsage(result, started: started ?? Date())
             emit(.finished(error: result["stopReason"] as? String == "refusal" ? "The agent declined this request." : nil))
         } catch ACPLaunchError.runtimeMissing {
             emit(.needsRuntime)
         } catch let error as ACPError where error.isAuthRequired {
             emit(.needsSignIn(authMethods))
         } catch {
+            // A turn that failed after the prompt went out still counts, and may have cost something.
+            if let started { recordUsage([:], started: started) }
             emit(.finished(error: describe(error)))
         }
+    }
+
+    /// Stores one usage record for the turn that just ended, when this backend has a feature. Only numbers the agent reported
+    /// go in: the response's `usage` object, and the cost change from `usage_update` notifications. The turn's length is the one
+    /// thing ironpet measures itself.
+    private func recordUsage(_ result: JSON, started: Date) {
+        guard let feature = usageFeature, let store = usageStore ?? UsageStore.shared else { return }
+        var event = UsageEvent(at: started, feature: feature, model: modelReportedInTurn ?? modelAtTurnStart ?? currentModel ?? "unknown",
+                               duration: Date().timeIntervalSince(started))
+        UsageEvent.applyACPUsage(result["usage"] as? JSON, to: &event)
+        if let now = reportedCost {
+            let before = costAccounted?.currency == now.currency ? costAccounted?.amount ?? 0 : 0
+            if now.amount != before || costAccounted?.currency != now.currency {
+                // A smaller total means the agent restarted its count, so the new total is all there is to add.
+                event.cost = now.amount >= before ? now.amount - before : now.amount
+                event.currency = now.currency
+            }
+            costAccounted = now
+        }
+        store.record(event)
     }
 
     /// Stop: tells the agent to end the turn and keeps its process for the next message.
     func cancel() {
         onEvent = nil
         guard let client, !client.isClosed else { return }
-        if let sessionID { client.notify("session/cancel", ["sessionId": sessionID]) }
         let waiting = pendingPermissions
         pendingPermissions = [:]
         waiting.values.forEach { $0(.success(["outcome": ["outcome": "cancelled"]])) }
+        // With no prompt in flight there is no turn to cancel. Claude Code's adapter answers `session/cancel` with an
+        // interrupt that also stops the background subagents, so an idle chat must not send one.
         guard promptInFlight else { return }
+        if let sessionID { client.notify("session/cancel", ["sessionId": sessionID]) }
         // An agent that ignores the cancel would block the chat. After five seconds, restart it on the next message.
         // A later prompt on the same process is not the one that was cancelled, so it is left alone.
         let cancelled = promptCount
@@ -182,6 +229,9 @@ final class ACPBackend {
         client = nil
         transport = nil
         sessionReady = false
+        // The next session starts its own cost count.
+        reportedCost = nil
+        costAccounted = nil
     }
 
     func authenticate(_ method: AuthMethod) async throws {
@@ -194,6 +244,19 @@ final class ACPBackend {
 
     private func emit(_ event: AgentEvent) {
         onEvent?(event)
+    }
+
+    /// Text and tool updates belong to the running turn. With no prompt in flight, they come from work the agent
+    /// started earlier, and the chat shows them without a turn.
+    private func emitTranscript(_ event: AgentEvent) {
+        if promptInFlight { onEvent?(event) } else { onBackground?(event) }
+    }
+
+    /// What ironpet tells the agent it supports. Claude Code's adapter holds `session/prompt` open while a background
+    /// subagent runs, unless the client says it takes subagent traffic after the response.
+    nonisolated static func clientCapabilities(for agent: ACPAgent) -> JSON {
+        guard agent.id == "claude" else { return JSON() }
+        return ["_meta": ["jetbrains": ["air": ["version": 1, "capabilities": ["backgroundSubagents"]]]]]
     }
 
     private func describe(_ error: Error) -> String {
@@ -223,7 +286,7 @@ final class ACPBackend {
         logCLIVersion()
         do {
             let result = try await guarded(client, seconds: 60) {
-                try await client.request("initialize", ["protocolVersion": 1, "clientCapabilities": JSON(),
+                try await client.request("initialize", ["protocolVersion": 1, "clientCapabilities": Self.clientCapabilities(for: agent),
                                                           "clientInfo": ["name": "ironpet", "title": "ironpet", "version": "0.1.0"]])
             }
             capabilities = result["agentCapabilities"] as? JSON ?? [:]
@@ -292,6 +355,9 @@ final class ACPBackend {
     private func ensureSession(_ turn: ACPTurn) async throws {
         guard let client else { throw ACPError(code: -1, message: "The agent stopped") }
         if sessionReady, sessionID != nil { return }
+        // A new or reloaded session counts cost from its own start. A reload's replayed updates set the baseline again.
+        reportedCost = nil
+        costAccounted = nil
         var params: JSON = ["cwd": turn.workspace.path, "mcpServers": restricted ? [JSON]() : Self.defaultMCPServers()]
         let sessionCapabilities = capabilities["sessionCapabilities"] as? JSON ?? [:]
         if sessionCapabilities["additionalDirectories"] != nil, !restricted {
@@ -310,6 +376,8 @@ final class ACPBackend {
                 readModels(result)
                 sessionReady = true
                 freshSession = false
+                // What the session spent before this run is not this run's cost.
+                costAccounted = reportedCost
                 return
             } catch let error as ACPError where error.isAuthRequired || client.isClosed {
                 throw error
@@ -428,16 +496,24 @@ final class ACPBackend {
             emit(.commands(SlashCommand.parse(update["availableCommands"] as? [JSON] ?? [])))
             return
         }
+        // The session's running cost is state too: a reload replays it, and the replayed total is the baseline for new turns.
+        if update["sessionUpdate"] as? String == "usage_update", let cost = update["cost"] as? JSON,
+           let amount = (cost["amount"] as? NSNumber)?.doubleValue, let currency = cost["currency"] as? String {
+            reportedCost = (amount, currency)
+        }
         guard !replaying else { return }
         switch update["sessionUpdate"] as? String {
         case "agent_message_chunk":
             if let content = update["content"] as? JSON, content["type"] as? String == "text", let text = content["text"] as? String, !text.isEmpty {
-                emit(.assistant(text))
+                emitTranscript(.assistant(text))
             }
+        case "usage_update":
+            // The Claude Code adapter names the model the usage belongs to, since `usage_update` has no field for it.
+            if promptInFlight, let model = (update["_meta"] as? JSON)?["_claude/model"] as? String { modelReportedInTurn = model }
         case "tool_call":
             let call = ACPToolCall(json: update)
             tools[call.id] = call
-            emit(.toolStarted(id: call.id, summary: call.summary))
+            emitTranscript(.toolStarted(id: call.id, summary: call.summary))
             finishIfDone(update, call)
         case "tool_call_update":
             guard let id = update["toolCallId"] as? String else { return }
@@ -445,7 +521,7 @@ final class ACPBackend {
             let before = call.summary
             call.merge(update)
             tools[id] = call
-            if call.summary != before, !finishedTools.contains(id) { emit(.toolUpdated(id: id, summary: call.summary)) }
+            if call.summary != before, !finishedTools.contains(id) { emitTranscript(.toolUpdated(id: id, summary: call.summary)) }
             finishIfDone(update, call)
         default:
             break
@@ -454,7 +530,7 @@ final class ACPBackend {
 
     private func finishIfDone(_ update: JSON, _ call: ACPToolCall) {
         guard let status = update["status"] as? String, status == "completed" || status == "failed", finishedTools.insert(call.id).inserted else { return }
-        emit(.toolFinished(id: call.id, ok: status == "completed"))
+        emitTranscript(.toolFinished(id: call.id, ok: status == "completed"))
     }
 
     private func agentRequest(_ method: String, _ params: JSON, _ respond: @escaping (Result<JSON, ACPError>) -> Void) {

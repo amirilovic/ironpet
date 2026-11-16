@@ -23,6 +23,7 @@ private struct AutomationList: View {
     let createWithAgent: (String) -> Void
     @State private var asking = false
     @State private var editing: Automation?
+    @State private var reviewing: Automation?
     @State private var tick = 0
 
     var body: some View {
@@ -44,11 +45,22 @@ private struct AutomationList: View {
                 }
             }
             Section {
+                Toggle("Auto-approve automation changes", isOn: Binding(
+                    get: { config.config.automations.autoApprove },
+                    set: { on in
+                        config.update { $0.automations.autoApprove = on }
+                        if on { service.reviewApprovals() }
+                    }))
+            } footer: {
+                Text("Agent-written scripts can run shell commands without review.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
                 Toggle("Ask the agent to fix automations that fail", isOn: Binding(
                     get: { config.config.automations.autoFix },
                     set: { on in config.update { $0.automations.autoFix = on } }))
             } footer: {
-                Text("When a poll, script, shell command or prompt fails, ironpet sends the error to a new chat and asks your agent to fix it with the automation tools. Changes to a command, script or prompt still wait for your Approve. At most one request per automation every 6 hours, and only after it has run fine since the last one.")
+                Text("When a poll, script, shell command or prompt fails, ironpet sends the error to the current chat and asks your agent to fix it with the automation tools. Changes to a command, script or prompt still wait for your Approve. At most one request per automation every 6 hours, and only after it has run fine since the last one.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Timing") {
@@ -66,6 +78,7 @@ private struct AutomationList: View {
         }
         .formStyle(.grouped)
         .sheet(isPresented: $asking) { NewAutomationSheet { text in asking = false; if let text { createWithAgent(text) } } }
+        .sheet(item: $reviewing) { automation in ReviewSheet(service: service, opened: automation) { reviewing = nil } }
         .sheet(item: $editing) { automation in EditSheet(service: service, automation: automation) { editing = nil } }
         .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in tick += 1 }
     }
@@ -85,7 +98,15 @@ private struct AutomationList: View {
                     Label(hint, systemImage: "info.circle").font(.caption).foregroundStyle(.orange)
                 }
                 if service.needsApproval(a) {
-                    Label("Waiting for your approval", systemImage: "hand.raised.fill").font(.caption).foregroundStyle(.orange)
+                    let rejected = service.isRejected(a)
+                    Label(rejected ? "Rejected" : "Waiting for your approval", systemImage: rejected ? "xmark.circle.fill" : "hand.raised.fill")
+                        .font(.caption).foregroundStyle(rejected ? Color.red : Color.orange)
+                    HStack(spacing: 6) {
+                        Button("Review…") { reviewing = a }
+                        Button("Approve") { service.approve(a.id); tick += 1 }.buttonStyle(.borderedProminent)
+                        if !rejected { Button("Reject") { service.reject(a.id); tick += 1 } }
+                    }
+                    .controlSize(.small).padding(.top, 2)
                 }
             }
             Spacer()
@@ -135,6 +156,39 @@ private struct AutomationList: View {
             Text("\(Int(value.wrappedValue)) min").monospacedDigit().frame(minWidth: 56, alignment: .trailing)
         }
         .fixedSize()
+    }
+}
+
+/// Shows what an automation would run, so the user reads it before pressing Approve.
+private struct ReviewSheet: View {
+    let service: AutomationService
+    let opened: Automation
+    let done: () -> Void
+
+    /// The stored automation, so an edit made while the sheet is open is what the user reads and approves.
+    private var automation: Automation { service.store.automations.first { $0.id == opened.id } ?? opened }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Allow \(automation.name)?").font(.headline)
+            Text("Created by \(automation.createdBy). It wants to run this \(automation.action.type == "prompt" ? "prompt" : "command"):")
+                .font(.caption).foregroundStyle(.secondary)
+            ScrollView {
+                Text(service.approvalDetail(automation))
+                    .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(6)
+            }
+            .frame(minHeight: 180, maxHeight: 360)
+            .border(Color.secondary.opacity(0.3))
+            HStack {
+                Spacer()
+                Button("Close", action: done)
+                if !service.isRejected(automation) { Button("Reject") { service.reject(automation.id); done() } }
+                Button("Approve") { service.approve(automation.id); done() }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(width: 520)
     }
 }
 

@@ -13,6 +13,7 @@ final class ACPBackendTests: XCTestCase {
     mode = os.environ.get("FAKE_MODE", "")
     def send(o): sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
     sid = None
+    turns = 0
     def update(u): send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": u}})
     for line in sys.stdin:
         m = json.loads(line); log.write(line); log.flush()
@@ -45,6 +46,12 @@ final class ACPBackendTests: XCTestCase {
                     if c.get("method") == "session/cancel":
                         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "cancelled"}}); break
                 continue
+            if "BACKGROUND" in text:
+                update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "started"}})
+                send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+                time.sleep(0.3)
+                update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "RESULT"}})
+                continue
             if "PERMISSION" in text:
                 update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "`touch x`", "kind": "execute", "status": "pending", "rawInput": {"command": "touch x"}})
                 send({"jsonrpc": "2.0", "id": 900, "method": "session/request_permission", "params": {"sessionId": sid,
@@ -54,6 +61,13 @@ final class ACPBackendTests: XCTestCase {
                 ok = reply["result"]["outcome"].get("optionId") == "yes"
                 update({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed" if ok else "failed"})
             update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pid=%d" % os.getpid()}})
+            if mode == "usage":
+                turns += 1
+                update({"sessionUpdate": "usage_update", "used": 100, "size": 1000, "cost": {"amount": [0.05, 0.12][min(turns, 2) - 1], "currency": "USD"},
+                        "_meta": {"_claude/model": "claude-real"}})
+                send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn",
+                      "usage": {"inputTokens": 120, "outputTokens": 30, "totalTokens": 150, "cachedReadTokens": 400, "cachedWriteTokens": 10}}})
+                continue
             send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
     """#
 
@@ -120,6 +134,35 @@ final class ACPBackendTests: XCTestCase {
         let capabilities = try XCTUnwrap((initialize["params"] as? JSON)?["clientCapabilities"] as? JSON)
         XCTAssertNil(capabilities["fs"])
         XCTAssertNil(capabilities["terminal"])
+        backend.shutdown()
+    }
+
+    func testClaudeDeclaresThatSubagentTrafficMayFollowThePromptResponse() {
+        let claude = ACPAgent(id: "claude", name: "Claude Code", command: "claude", args: [], helper: nil)
+        let air = (ACPBackend.clientCapabilities(for: claude)["_meta"] as? JSON)?["jetbrains"] as? JSON
+        XCTAssertEqual(((air?["air"] as? JSON)?["capabilities"]) as? [String], ["backgroundSubagents"])
+        XCTAssertTrue(ACPBackend.clientCapabilities(for: agent).isEmpty, "other agents get no extension")
+    }
+
+    func testUpdatesAfterThePromptResponseGoToTheBackgroundHandler() async {
+        let backend = ACPBackend(agent: agent)
+        var late: [AgentEvent] = []
+        backend.onBackground = { late.append($0) }
+        let events = await run(backend, turn("BACKGROUND"))
+        XCTAssertEqual(text(events), "started", "the turn ends at the response, without the later result")
+        guard case .finished(let error) = events.last, error == nil else { return XCTFail("expected a clean finish") }
+        for _ in 0..<40 where late.isEmpty { try? await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertEqual(text(late), "RESULT")
+        backend.shutdown()
+    }
+
+    func testStopWithNoTurnRunningSendsNoCancel() async {
+        let backend = ACPBackend(agent: agent)
+        _ = await run(backend, turn("BACKGROUND"))
+        backend.cancel()
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertTrue(logged().filter { $0["method"] as? String == "session/cancel" }.isEmpty,
+                      "the adapter's cancel interrupts Claude Code, which also stops background subagents")
         backend.shutdown()
     }
 
@@ -283,5 +326,96 @@ final class ACPBackendTests: XCTestCase {
         let events = await run(backend, turn("hi"))
         guard case .finished(let error)? = events.last else { return XCTFail("expected a finish") }
         XCTAssertTrue(error?.contains("not found") == true, error ?? "")
+    }
+
+    // MARK: Usage
+
+    private func usageStore() throws -> UsageStore {
+        UsageStore(database: try Database(path: nil, migrations: AppMigrations.all))
+    }
+
+    private func recorded(_ store: UsageStore) -> UsageSummary {
+        store.summary(days: 7)
+    }
+
+    func testTurnWithReportedUsageStoresOneChatRecord() async throws {
+        setenv("FAKE_MODE", "usage", 1)
+        let store = try usageStore()
+        let backend = ACPBackend(agent: agent)
+        backend.usageFeature = .chat
+        backend.usageStore = store
+        _ = await run(backend, turn("hello"))
+        let rows = recorded(store).rows
+        XCTAssertEqual(rows.count, 1)
+        let row = try XCTUnwrap(rows.first)
+        XCTAssertEqual(row.feature, .chat)
+        XCTAssertEqual(row.model, "claude-real", "the model the agent names in usage_update wins over the session default")
+        XCTAssertEqual(row.requests, 1)
+        XCTAssertEqual([row.inputTokens, row.outputTokens, row.cacheReadTokens, row.cacheWriteTokens, row.totalTokens], [120, 30, 400, 10, 150])
+        XCTAssertEqual(row.cost ?? 0, 0.05, accuracy: 1e-9)
+        XCTAssertEqual(row.currency, "USD")
+        XCTAssertNotNil(row.duration)
+        backend.shutdown()
+    }
+
+    func testCostIsTheChangeInSessionCostNotTheRunningTotal() async throws {
+        setenv("FAKE_MODE", "usage", 1)
+        let store = try usageStore()
+        let backend = ACPBackend(agent: agent)
+        backend.usageFeature = .chat
+        backend.usageStore = store
+        _ = await run(backend, turn("one"))
+        _ = await run(backend, turn("two"))
+        let row = try XCTUnwrap(recorded(store).rows.first)
+        XCTAssertEqual(row.requests, 2)
+        XCTAssertEqual(row.cost ?? 0, 0.12, accuracy: 1e-9, "0.05 for the first turn plus 0.07 for the second")
+        backend.shutdown()
+    }
+
+    func testAgentWithoutUsageStoresTurnAndDurationOnly() async throws {
+        let store = try usageStore()
+        let backend = ACPBackend(agent: agent)
+        backend.usageFeature = .chat
+        backend.usageStore = store
+        _ = await run(backend, turn("hello"))
+        let row = try XCTUnwrap(recorded(store).rows.first)
+        XCTAssertEqual(row.requests, 1)
+        XCTAssertNotNil(row.duration)
+        XCTAssertEqual(row.model, "m1", "the session's current model when the agent names none")
+        for value in [row.inputTokens, row.outputTokens, row.cacheReadTokens, row.cacheWriteTokens, row.totalTokens] { XCTAssertNil(value) }
+        XCTAssertNil(row.cost)
+        XCTAssertFalse(recorded(store).hasCost)
+        backend.shutdown()
+    }
+
+    func testBackendWithoutAFeatureRecordsNothing() async throws {
+        setenv("FAKE_MODE", "usage", 1)
+        let store = try usageStore()
+        let backend = ACPBackend(agent: agent)
+        backend.usageStore = store
+        _ = await run(backend, turn("hello"))
+        XCTAssertTrue(recorded(store).rows.isEmpty)
+        backend.shutdown()
+    }
+
+    func testAutomationPromptCountsUnderAutomations() async throws {
+        let store = try usageStore()
+        let previous = UsageStore.shared
+        UsageStore.shared = store
+        defer { UsageStore.shared = previous }
+        let automation = Automation(id: "a", name: "A", trigger: .init(type: "interval", minutes: 5, clock: "wall"),
+                                    action: .init(type: "prompt", title: "A"), createdBy: "user")
+        let result = await AutomationPrompt.run(automation, prompt: "hi", workspace: dir.appendingPathComponent("ws"), agentOverride: agent)
+        guard case .success = result else { return XCTFail("the prompt run failed: \(result)") }
+        XCTAssertEqual(recorded(store).rows.map(\.feature), [.automations])
+    }
+
+    func testMeetingSummaryRunnerCountsUnderMeetingSummaries() async throws {
+        let store = try usageStore()
+        let runner = MeetingController.makeSummaryRunner(agent)
+        runner.usageStore = store
+        _ = await run(runner, turn("summarize"))
+        XCTAssertEqual(recorded(store).rows.map(\.feature), [.meetingSummary])
+        runner.shutdown()
     }
 }
