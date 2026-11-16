@@ -648,8 +648,8 @@ def scenario_setup():
 
 
 WINDOW = "ironpet"
-# The Settings window is titled after the page it shows.
-SETTINGS_PAGES = ["General", "Integrations", "Voice", "Meetings", "Usage"]
+# The Settings window keeps one title; the page name is drawn inside it, not in the title bar.
+SETTINGS = "Settings"
 
 
 def window_shown(title=WINDOW):
@@ -659,15 +659,13 @@ def window_shown(title=WINDOW):
 
 
 def open_settings(page="General"):
-    """Opens the Settings window from the app menu on `page`, and returns its title, or None when it did not open."""
+    """Opens the Settings window from the app menu on `page`, and returns its title ("Settings"), or None when it did not open."""
     activate_app()
     osa('tell application "System Events" to tell process "IronPet" to click menu item "Settings…" of menu 1 of menu bar item 2 of menu bar 1')
-    shown = wait_for(lambda: next((p for p in SETTINGS_PAGES if window_shown(p)), None), 5)
-    if not shown:
+    if not wait_for(lambda: window_shown(SETTINGS), 5):
         return None
-    if shown != page:
-        select_row(shown, page, {"tab": page.lower()})
-    return page if wait_for(lambda: window_shown(page), 3) else None
+    select_row(SETTINGS, page, {"tab": page.lower()})
+    return SETTINGS
 
 
 def show_section(name):

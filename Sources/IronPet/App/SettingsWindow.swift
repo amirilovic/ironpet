@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -71,10 +70,20 @@ final class SettingsWindow {
 
     /// Draws the window's own contents to a PNG, for tests; needs no screen-recording permission.
     func snapshot(to url: URL) -> Bool {
-        guard let view = window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
+        guard let window else { return false }
+        // Composited pixels of this process's own window, so the sidebar material and the traffic lights are included.
+        guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming]) else { return false }
+        guard let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return false }
         return (try? data.write(to: url)) != nil
+    }
+
+    /// The title stays "Settings" for accessibility and the Window menu but is not drawn; the sidebar runs under the
+    /// title bar, and the selected page's name is drawn by `SettingsHeader`.
+    static func configure(_ window: NSWindow) {
+        window.title = "Settings"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
     }
 
     func show() {
@@ -85,13 +94,11 @@ final class SettingsWindow {
             let host = NSHostingController(rootView: SettingsView(model: model))
             host.sizingOptions = []
             let window = NSWindow(contentViewController: host)
-            window.title = SettingsView.page(model.tab)?.title ?? "Settings"
-            window.styleMask = [.titled, .closable, .miniaturizable]
+            Self.configure(window)
             window.isReleasedWhenClosed = false
             window.setContentSize(NSSize(width: SettingsView.width, height: 600))
             window.center()
             self.window = window
-            _ = title
             let center = NotificationCenter.default
             observers = [
                 center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
@@ -108,10 +115,6 @@ final class SettingsWindow {
     }
 
     private var observers: [NSObjectProtocol] = []
-    private lazy var title: AnyCancellable = model.$tab
-        .receive(on: RunLoop.main)
-        .sink { [weak self] tab in self?.window?.title = SettingsView.page(tab)?.title ?? "Settings" }
-
     /// Pauses the pet previews while the window is minimized or covered.
     private func syncGalleryActivity() {
         guard let window else { return }
@@ -151,17 +154,20 @@ struct SettingsView: View {
             }
             .listStyle(.sidebar)
             .frame(width: Self.sidebarWidth)
+            .padding(.top, SettingsHeader.height - 12)
+            .background(.regularMaterial)
             Divider()
             VStack(spacing: 0) {
                 content
                     .padding(.horizontal, 10)
-                    .padding(.top, 12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .safeAreaInset(edge: .top, spacing: 0) { SettingsHeader(title: Self.page(model.tab)?.title ?? "Settings") }
                 Divider()
                 footer
             }
         }
         .frame(width: Self.width)
+        .ignoresSafeArea(.container, edges: .top)
     }
 
     @ViewBuilder private var content: some View {
@@ -190,6 +196,22 @@ struct SettingsView: View {
             .help("Every setting here lives in ~/.ironpet/config.json; edits apply within a few seconds.")
         }
         .padding(12)
+    }
+}
+
+/// The page name in bold on a translucent bar, as tall as the title bar so it lines up with the window controls.
+struct SettingsHeader: View {
+    static let height: CGFloat = 38
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.title3.bold())
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .frame(height: Self.height)
+            .background(.ultraThinMaterial)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 

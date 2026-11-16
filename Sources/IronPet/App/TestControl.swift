@@ -131,6 +131,8 @@ final class TestControl {
         case ("POST", "/test/voice/stop"):
             chat.voice.stop()
         case ("POST", "/test/show-settings"):
+            // "light" or "dark" forces the app's appearance, for screenshots; anything else leaves the system's.
+            if let name = body["appearance"] as? String { NSApp.appearance = NSAppearance(named: name == "dark" ? .darkAqua : .aqua) }
             return Self.encode(["windowId": actions.showSettings(body["tab"] as? String, body["snapshot"] as? String)])
         case ("POST", "/test/stop"):
             chat.stop()
