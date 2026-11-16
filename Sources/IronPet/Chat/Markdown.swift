@@ -160,8 +160,9 @@ enum Markdown {
     }
 
     static func inline(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+        let parsed = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(text)
+        return FilePathLinks.link(parsed)
     }
 
     private static func fence(_ trimmed: String) -> String? {
@@ -228,6 +229,8 @@ struct MarkdownView: View {
     let text: String
     /// Highlights for the open find bar. Nil for rows with no match.
     var find: ChatFind.RowHighlight?
+    /// Redraws when a background check finds that a path in the text exists, so it turns into a link.
+    @ObservedObject private var paths = PathCache.shared
 
     var body: some View {
         let blocks = Markdown.parse(text)
@@ -239,6 +242,7 @@ struct MarkdownView: View {
             }
         }
         .textSelection(.enabled)
+        .environment(\.openURL, OpenURLAction { FilePathLinks.handle($0) })
     }
 
     private func inline(_ text: String, _ segment: Int) -> Text {
@@ -285,6 +289,7 @@ private struct ListRow: View {
     let ordered: Bool
     let segment: Int
     let find: ChatFind.RowHighlight?
+    @ObservedObject private var paths = PathCache.shared
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -355,6 +360,7 @@ private struct TableBlock: View {
     let rows: [[String]]
     let segment: Int
     let find: ChatFind.RowHighlight?
+    @ObservedObject private var paths = PathCache.shared
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
