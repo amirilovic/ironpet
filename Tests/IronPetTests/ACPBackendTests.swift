@@ -54,6 +54,19 @@ final class ACPBackendTests: XCTestCase {
                 time.sleep(0.3)
                 update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "RESULT"}})
                 continue
+            if "SUBAGENT" in text:
+                # Shapes follow claude-agent-acp 0.81: every update from a subagent, text included, carries
+                # _meta.claudeCode.parentToolUseId (the Agent tool call's id). The refining tool_call_update does not.
+                parent = {"claudeCode": {"toolName": "Agent"}}
+                child = {"claudeCode": {"toolName": "Bash", "parentToolUseId": "toolu_agent"}}
+                update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "an offer to start "}})
+                update({"sessionUpdate": "tool_call", "toolCallId": "toolu_agent", "title": "Research", "kind": "other", "status": "pending", "rawInput": {"run_in_background": True}, "_meta": parent})
+                update({"sessionUpdate": "tool_call", "toolCallId": "toolu_sub", "title": "`ls`", "kind": "execute", "status": "pending", "rawInput": {"command": "ls"}, "_meta": child})
+                update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "subagent chatter"}, "_meta": {"claudeCode": {"parentToolUseId": "toolu_agent"}}})
+                update({"sessionUpdate": "tool_call_update", "toolCallId": "toolu_sub", "status": "completed"})
+                update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "recording."}})
+                send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+                continue
             if "PERMISSION" in text:
                 update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "`touch x`", "kind": "execute", "status": "pending", "rawInput": {"command": "touch x"}})
                 send({"jsonrpc": "2.0", "id": 900, "method": "session/request_permission", "params": {"sessionId": sid,
@@ -155,6 +168,26 @@ final class ACPBackendTests: XCTestCase {
         guard case .finished(let error) = events.last, error == nil else { return XCTFail("expected a clean finish") }
         for _ in 0..<40 where late.isEmpty { try? await Task.sleep(nanoseconds: 100_000_000) }
         XCTAssertEqual(text(late), "RESULT")
+        backend.shutdown()
+    }
+
+    func testSubagentCallsAreTaggedWithTheirParentAndItsChatterIsDropped() async {
+        let backend = ACPBackend(agent: agent)
+        let events = await run(backend, turn("SUBAGENT"))
+        XCTAssertEqual(text(events), "an offer to start recording.")
+        let subagent = events.compactMap { event -> (String, String, Bool?)? in
+            if case .subagentTool(let parent, let id, _, let ok) = event { return (parent, id, ok) } else { return nil }
+        }
+        XCTAssertEqual(subagent.map(\.0), ["toolu_agent", "toolu_agent"])
+        XCTAssertEqual(subagent.map(\.1), ["toolu_sub", "toolu_sub"])
+        XCTAssertEqual(subagent.map { $0.2 }, [nil, true], "the update without _meta still finds its parent")
+        let inline = events.compactMap { event -> String? in
+            switch event {
+            case .toolStarted(let id, _), .toolFinished(let id, _): return id
+            default: return nil
+            }
+        }
+        XCTAssertEqual(inline, ["toolu_agent"], "only the main agent's own call is an inline tool event")
         backend.shutdown()
     }
 

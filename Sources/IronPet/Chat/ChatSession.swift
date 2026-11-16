@@ -197,6 +197,10 @@ final class ChatSession: ObservableObject {
     /// Replaces the agent turn in tests: receives the turn and the callback that delivers its events.
     var turnRunner: ((ACPTurn, @escaping (AgentEvent) -> Void) async -> Void)?
     private var toolItems: [String: UUID] = [:]
+    /// A tool row's own summary, before the count of its subagent's tool calls is added.
+    private var toolBase: [String: String] = [:]
+    /// The tool calls each subagent has made, by the subagent's tool-use id, in the order they started.
+    private var subagentCalls: [String: [(id: String, ok: Bool?)]] = [:]
     /// The reply item that late updates extend, so a later result starts its own item.
     private var backgroundReply: UUID?
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
@@ -809,7 +813,7 @@ final class ChatSession: ObservableObject {
             if let model, !list.isEmpty, !list.contains(where: { $0.id == model }) { self.model = nil }
         case .commands(let list):
             receiveCommands(list)
-        case .toolUpdated:
+        case .toolUpdated, .subagentTool:
             applyTranscript(event)
         case .needsSignIn(let methods):
             endTurn()
@@ -847,7 +851,7 @@ final class ChatSession: ObservableObject {
     /// turn is still connecting joins that turn's reply instead of being lost.
     func handleBackground(_ event: AgentEvent) {
         switch event {
-        case .assistant, .toolStarted, .toolUpdated, .toolFinished: applyTranscript(event)
+        case .assistant, .toolStarted, .toolUpdated, .toolFinished, .subagentTool: applyTranscript(event)
         default: break
         }
     }
@@ -867,13 +871,26 @@ final class ChatSession: ObservableObject {
         case .toolStarted(let id, let summary):
             if isRunning { activity = Self.presentTense(summary) }
             let item = Item(kind: .tool(summary, ok: nil))
+            toolBase[id] = summary
             toolItems[id] = item.id
             items.append(item)
         case .toolUpdated(let id, let summary):
             if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
                case .tool(_, let ok) = items[index].kind {
-                items[index].kind = .tool(summary, ok: ok)
+                toolBase[id] = summary
+                items[index].kind = .tool(composedSummary(id), ok: ok)
             }
+        case .subagentTool(let parent, let id, let summary, let ok):
+            // A subagent's calls count on its own row. They never open an item, so the reply's text keeps one message.
+            if isRunning, ok == nil { activity = Self.presentTense(summary) }
+            var calls = subagentCalls[parent] ?? []
+            if let index = calls.firstIndex(where: { $0.id == id }) { calls[index].ok = ok } else { calls.append((id, ok)) }
+            subagentCalls[parent] = calls
+            if let itemID = toolItems[parent], let index = items.firstIndex(where: { $0.id == itemID }),
+               case .tool(_, let parentOK) = items[index].kind {
+                items[index].kind = .tool(composedSummary(parent), ok: parentOK)
+            }
+            if !isRunning { saveThread() }
         case .toolFinished(let id, let ok):
             if isRunning { activity = "Thinking" }
             if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
@@ -884,6 +901,14 @@ final class ChatSession: ObservableObject {
         default:
             break
         }
+    }
+
+    /// A tool row's summary with its subagent's tool-call count, e.g. "Run research · 3 tool calls".
+    private func composedSummary(_ id: String) -> String {
+        let base = toolBase[id] ?? ""
+        let count = subagentCalls[id]?.count ?? 0
+        guard count > 0 else { return base }
+        return "\(base) · \(count) tool call\(count == 1 ? "" : "s")"
     }
 
     private func endTurn() {
