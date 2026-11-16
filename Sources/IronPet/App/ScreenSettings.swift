@@ -73,7 +73,7 @@ private struct ScreenSettingsBody: View {
         Section {
             Toggle("Screen capture", isOn: Binding(get: { capture.enabled }, set: { on in update { $0.enabled = on } }))
         } footer: {
-            Text("Off by default. When on, ironpet reads the text of the window you are using through Accessibility, with rules that know how to read chats and documents, and keeps it in ~/.ironpet/ironpet.db on this Mac. Secrets that rules recognise (keys, tokens, passwords, credentials in URLs) are replaced by [redacted:…] before the text is stored. A model on this Mac then filters it. After a delay, captures from apps you allow below go to your chosen agent, which compares them with your open tasks and suggests tasks. Nothing is added without a click. Password managers, secure fields, private browser windows and local files are never captured. When off, nothing is read, no model runs and macOS shows no permission prompt.")
+            Text("Off by default. When on, ironpet reads the text of the window you are using through Accessibility, with rules that know how to read chats and documents, and keeps it in ~/.ironpet/ironpet.db on this Mac. Secrets that rules recognise (keys, tokens, passwords, credentials in URLs) are replaced by [redacted:…] before the text is stored. A model on this Mac then filters it. After a delay, captures from apps you allow below go to your chosen agent, which looks up your tasks and suggests what needs your action. Nothing is added without a click. Password managers, secure fields, private browser windows and local files are never captured. When off, nothing is read, no model runs and macOS shows no permission prompt.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
