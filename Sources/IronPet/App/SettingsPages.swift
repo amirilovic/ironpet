@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// What the settings window needs from the rest of the app, beyond `ConfigStore`.
+/// What the Settings pages need from the rest of the app, beyond `ConfigStore`.
 @MainActor
 final class SettingsModel: ObservableObject {
     struct Actions {

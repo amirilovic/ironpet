@@ -654,7 +654,13 @@ def open_settings():
     """Opens the ironpet window on Settings › General from the app menu."""
     activate_app()
     osa('tell application "System Events" to tell process "IronPet" to click menu item "Settings…" of menu 1 of menu bar item 2 of menu bar 1')
-    return wait_for(lambda: window_open(WINDOW), 5)
+    return wait_for(window_shown, 5)
+
+
+def window_shown():
+    """The ironpet window exactly; `window_open` matches substrings, and "Welcome to ironpet" contains its title."""
+    activate_app()
+    return osa(f'tell application "System Events" to tell process "IronPet" to return exists window "{WINDOW}"') == "true"
 
 
 def show_section(name):
@@ -672,6 +678,7 @@ def show_section(name):
     """
     if osa(script) != "ok":
         # The sidebar's accessibility tree differs between macOS versions; the test endpoint selects the same row.
+        print(f"  note: the {name} sidebar row was not found through accessibility; selected it through /test/show-settings")
         call("POST", "/test/show-settings", {"tab": name.lower()})
     time.sleep(0.5)
 

@@ -159,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.pet.tick()
                 self.bubblePanel.follow(self.pet.panel.frame)
-                self.bubblePanel.isSuppressed = self.chatPanel.isVisible || self.pet.isWindowVisible
+                self.bubblePanel.isSuppressed = self.chatPanel.isVisible || self.pet.suppressesBubbles
             }
         })
         timers.append(Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
@@ -912,6 +912,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showAutomationLogs() {
+        pet.closeWindow()
         logWindow.show()
     }
 

@@ -102,6 +102,8 @@ final class PetController: NSObject {
     }
 
     var isWindowVisible: Bool { builtWindow?.isVisible ?? false }
+    /// The main sections show what bubbles would announce. Settings does not, so an approval still shows there.
+    var suppressesBubbles: Bool { isWindowVisible && IronPetSection.main.contains(windowModel.section) }
     var windowNumber: Int { builtWindow?.windowNumber ?? 0 }
 
     func snapshotWindow(to url: URL) -> Bool { builtWindow?.snapshot(to: url) ?? false }
@@ -187,6 +189,11 @@ final class PetController: NSObject {
         refreshMood()
     }
 
+    /// The pet previews animate only while the General page is on screen.
+    private func syncGallery() {
+        settings?.pets.setWindowShown(isWindowVisible && windowModel.section == .general)
+    }
+
     private var taskList: TaskStore { tasks ?? TaskStore.shared ?? Self.noTasks }
 
     private func makeWindow() -> IronPetPanel {
@@ -218,9 +225,13 @@ final class PetController: NSObject {
         let window = IronPetPanel(content: IronPetWindowView(model: windowModel, store: store, signals: signals,
                                                              tasks: taskList, settings: settings, actions: actions))
         window.onVisibilityChange = { [weak self] visible in
-            self?.settings?.pets.setWindowShown(visible)
+            self?.syncGallery()
             if !visible { self?.refreshMood() }
         }
+        windowModel.$section
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.syncGallery() }
+            .store(in: &cancellables)
         return window
     }
 

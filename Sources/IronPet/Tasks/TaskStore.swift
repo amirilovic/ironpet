@@ -55,7 +55,7 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    /// What the Tasks tab counts: work that is open and moving or waiting on the user.
+    /// What the Tasks section counts: work that is open and moving or waiting on the user.
     var activeCount: Int { tasks.filter { $0.status == .needsYou || $0.status == .inProgress }.count }
 
     func history(_ id: String) -> [TaskEvent] {

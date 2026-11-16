@@ -5,7 +5,7 @@ import Foundation
 @MainActor
 enum TaskMCP {
     static let guide = """
-        ironpet keeps one task list for the user, shown in Ghost's Tasks tab. You own it: create a task when the user asks you \
+        ironpet keeps one task list for the user, shown in the Tasks section of Ghost's window. You own it: create a task when the user asks you \
         to track something or a piece of work clearly starts, keep its status current, and close it with a note of what happened.
         status is one of:
         - backlog: noted, nobody is on it yet.

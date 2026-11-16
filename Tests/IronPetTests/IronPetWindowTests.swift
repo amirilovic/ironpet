@@ -48,6 +48,14 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertEqual(IronPetSection(rawValue: "automations"), .automations)
     }
 
+    func testASizeSavedOnABiggerDisplayShrinksToTheScreen() {
+        let small = CGRect(x: 0, y: 0, width: 1024, height: 640)
+        XCTAssertEqual(IronPetPanel.fitted(CGSize(width: 1800, height: 1000), in: small), CGSize(width: 1008, height: 624))
+        XCTAssertEqual(IronPetPanel.fitted(CGSize(width: 780, height: 560), in: small), CGSize(width: 780, height: 560))
+        XCTAssertEqual(IronPetPanel.fitted(CGSize(width: 780, height: 560), in: CGRect(x: 0, y: 0, width: 600, height: 400)),
+                       IronPetPanel.minimumSize)
+    }
+
     func testOwnSheetsAndOtherWindowsKeepTheWindowOpen() {
         let panel = IronPetPanel(content: EmptyView())
         let sheet = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)

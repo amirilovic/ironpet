@@ -57,7 +57,7 @@ final class IronPetWindowModel: ObservableObject {
 }
 
 /// Agents, alerts, tasks, actions, automations and settings in one floating panel with a sidebar. Opens next to the
-/// pet like the old agents panel, and closes on Esc, when ironpet stops being the active app, or when the chat or
+/// pet, and closes on Esc, when ironpet stops being the active app, or when the chat or
 /// meeting panel takes over. Its own sheets, popovers, alerts and open panels keep it open.
 final class IronPetPanel: NSPanel {
     static let title = "ironpet"
@@ -87,11 +87,13 @@ final class IronPetPanel: NSPanel {
         let center = NotificationCenter.default
         observers = [
             center.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: self, queue: .main) { [weak self] _ in
-                guard let size = self?.frame.size else { return }
-                UserDefaults.standard.set(NSStringFromSize(size), forKey: Self.sizeKey)
+                MainActor.assumeIsolated {
+                    guard let size = self?.frame.size else { return }
+                    UserDefaults.standard.set(NSStringFromSize(size), forKey: Self.sizeKey)
+                }
             },
             center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.close()
+                MainActor.assumeIsolated { self?.close() }
             },
         ]
     }
@@ -136,10 +138,11 @@ final class IronPetPanel: NSPanel {
         if wasVisible { onVisibilityChange?(false) }
     }
 
-    /// Below the pet when there is room, otherwise above it; always clamped to the pet's screen.
+    /// Below the pet when there is room, otherwise above it; always clamped to the pet's screen, and no larger than it
+    /// (a size saved on a bigger display would push the sidebar off the left edge).
     func show(near anchor: CGRect) {
-        let size = frame.size
         let screen = NSScreen.screens.first { $0.frame.intersects(anchor) }?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        let size = Self.fitted(frame.size, in: screen)
         var origin = CGPoint(x: anchor.midX - size.width / 2, y: anchor.minY - size.height - 4)
         if origin.y < screen.minY { origin.y = anchor.maxY + 4 }
         origin.x = min(max(origin.x, screen.minX + 8), screen.maxX - size.width - 8)
@@ -147,6 +150,11 @@ final class IronPetPanel: NSPanel {
         if !isVisible { setFrame(CGRect(origin: origin, size: size), display: true) }
         makeKeyAndOrderFront(nil)
         onVisibilityChange?(true)
+    }
+
+    static func fitted(_ size: CGSize, in screen: CGRect) -> CGSize {
+        CGSize(width: max(minimumSize.width, min(size.width, screen.width - 16)),
+               height: max(minimumSize.height, min(size.height, screen.height - 16)))
     }
 
     /// Draws the window's own contents to a PNG, for tests; needs no screen-recording permission.
