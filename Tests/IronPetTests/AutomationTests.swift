@@ -18,6 +18,12 @@ final class AutomationTestClock {
     }()
     static let monday8 = calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 8))!
 
+    /// The fixture Monday plus `days`, at `hour:minute` UTC, so a test does not repeat the fixture date.
+    static func monday(plus days: Int = 0, hour: Int, minute: Int = 0) -> Date {
+        let day = calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: monday8))!
+        return calendar.date(byAdding: DateComponents(hour: hour, minute: minute), to: day)!
+    }
+
     var environment: AutomationEngine.Environment {
         AutomationEngine.Environment(now: { self.now }, idleSeconds: { self.idle }, isAgentWorking: { self.working },
                                      isBusy: { self.busy }, calendar: Self.calendar)
@@ -233,19 +239,19 @@ final class AutomationTriggerTests: AutomationTestCase {
         var fired: [Date] = []
         rig.engine.onFire = { _ in fired.append(self.clock.now) }
         // Monday 08:00 start. Walk through 09:00.
-        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 8, minute: 59))!
+        clock.now = AutomationTestClock.monday(plus: 0, hour: 8, minute: 59)
         rig.engine.tick()
         XCTAssertEqual(fired.count, 0)
-        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 9, minute: 1))!
+        clock.now = AutomationTestClock.monday(plus: 0, hour: 9, minute: 1)
         rig.engine.tick()
         XCTAssertEqual(fired.count, 1, "Monday 09:00 fires")
         // Saturday. Tick through Friday evening first, so the tick before 09:00 starts on Saturday.
-        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 20, hour: 23, minute: 59))!
+        clock.now = AutomationTestClock.monday(plus: 4, hour: 23, minute: 59)
         rig.engine.tick()
         let beforeSaturday = fired.count
-        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 8, minute: 59))!
+        clock.now = AutomationTestClock.monday(plus: 5, hour: 8, minute: 59)
         rig.engine.tick()
-        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 9, minute: 1))!
+        clock.now = AutomationTestClock.monday(plus: 5, hour: 9, minute: 1)
         rig.engine.tick()
         XCTAssertEqual(fired.count, beforeSaturday, "Saturday does not")
     }
@@ -300,7 +306,7 @@ final class AutomationTriggerTests: AutomationTestCase {
         let rig = makeRig([daily(["09:00"], weekdays: ["mon"])])
         rig.engine.set(rig.store.automations)
         let next = rig.engine.nextRun(rig.store.automations[0])
-        XCTAssertEqual(next, AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 9)))
+        XCTAssertEqual(next, AutomationTestClock.monday(plus: 0, hour: 9))
     }
 }
 

@@ -76,7 +76,6 @@ final class AutomationState {
     /// Uses the app's shared database. `nil` makes a private in-memory one, for tests and previews.
     init(database: Database? = nil) {
         self.database = database ?? Database.open(path: nil, migrations: Self.migrations).database
-        prune()
     }
 
     // MARK: Seen sets
