@@ -62,6 +62,9 @@ final class ChatSession: ObservableObject {
     }
 
     @Published var items: [Item] = []
+    /// The Cmd-F find bar. `findFocusTick` counts presses so a second Cmd-F refocuses the field.
+    @Published var findOpen = false
+    @Published var findFocusTick = 0
     @Published var input = "" {
         didSet { if persists { UserDefaults.standard.set(input, forKey: Self.draftKey) } }
     }

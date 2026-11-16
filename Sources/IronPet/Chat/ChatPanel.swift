@@ -60,12 +60,23 @@ final class ChatPanel: NSPanel {
                 return true
             }
         }
+        if flags == .command, event.charactersIgnoringModifiers == "f", isKeyWindow {
+            session.findOpen = true
+            session.findFocusTick += 1
+            return true
+        }
         return super.performKeyEquivalent(with: event)
     }
 
     /// Esc stops a running turn first, like the stop button; only an idle chat closes.
     override func cancelOperation(_ sender: Any?) {
         if session.dismissSlash() { return }
+        if session.findOpen {
+            session.findOpen = false
+            // The find bar leaves the view tree on the next update; the composer is the first field after that.
+            DispatchQueue.main.async { [weak self] in self?.focusInput() }
+            return
+        }
         if session.isRunning { session.stop() } else { close() }
     }
 
