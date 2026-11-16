@@ -4,14 +4,17 @@ import Foundation
 /// user's chat keeps its thread, folder and agent. Only read-only tool calls are allowed.
 @MainActor
 enum AutomationPrompt {
-    static func run(_ automation: Automation, prompt: String, workspace: URL, timeout: TimeInterval = 300) async -> Result<String, AutomationError> {
+    /// `agentOverride` lets tests run a scripted agent instead of one from the catalog.
+    static func run(_ automation: Automation, prompt: String, workspace: URL, timeout: TimeInterval = 300,
+                    agentOverride: ACPAgent? = nil) async -> Result<String, AutomationError> {
         let agentID = automation.action.agent ?? UserDefaults.standard.string(forKey: "chatAgent")
-        guard let agent = AgentCatalog.agent(id: agentID) ?? AgentCatalog.agent(id: "cursor") else {
+        guard let agent = agentOverride ?? AgentCatalog.agent(id: agentID) ?? AgentCatalog.agent(id: "cursor") else {
             return .failure(.init(message: "no agent is available"))
         }
         try? FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         let runner = ACPBackend(agent: agent)
         runner.restricted = true
+        runner.usageFeature = .automations
         runner.onPermission = { call, respond in
             if case .allow = ApprovalRules.policy(for: call, auto: false) { respond(.allow) }
             else { respond(.deny("Automations can only read")) }

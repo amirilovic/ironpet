@@ -27,7 +27,7 @@ final class VoiceController: ObservableObject {
     var onFailure: ((String, Bool) -> Void)?
     var makeTranscriber: () -> Transcriber = {
         let voice = ConfigStore.shared.config.voice
-        return Transcriber(baseURL: voice.baseUrl, model: voice.model, apiKey: VoiceKey.load())
+        return Transcriber(baseURL: voice.baseUrl, model: voice.model, apiKey: VoiceKey.load(), usageFeature: .voiceTranscription)
     }
     var isEnabled: () -> Bool = { ConfigStore.shared.config.voice.enabled }
 

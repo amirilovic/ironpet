@@ -52,7 +52,7 @@ final class MeetingController: ObservableObject {
     var isEnabled: () -> Bool = { ConfigStore.shared.config.meetings.enabled }
     var makeTranscriber: () -> Transcriber = {
         let voice = ConfigStore.shared.config.voice
-        return Transcriber(baseURL: voice.baseUrl, model: voice.model, apiKey: KeyCache.key())
+        return Transcriber(baseURL: voice.baseUrl, model: voice.model, apiKey: KeyCache.key(), usageFeature: .meetingTranscription)
     }
 
     /// Reads the Keychain once per meeting, off the main thread. A Keychain approval dialog would otherwise
@@ -532,11 +532,7 @@ final class MeetingController: ObservableObject {
         guard let agent = AgentCatalog.agent(id: config.summaryAgent) else {
             return summaryFinished("", error: "The summary agent \"\(config.summaryAgent)\" is not available. Pick another in Settings → Meetings.")
         }
-        let runner = ACPBackend(agent: agent)
-        // Only the meeting folder is shared, and every permission request is refused, so the agent can read and answer
-        // but not change files or run commands. ironpet writes summary.md itself.
-        runner.restricted = true
-        runner.onPermission = { _, respond in respond(Self.summaryDecision) }
+        let runner = Self.makeSummaryRunner(agent)
         summaryRunner = runner
         let turn = ACPTurn(prompt: Self.summaryPrompt(transcript: text), preamble: nil, workspace: folder, resume: nil,
                            model: config.summaryModel, images: [], files: [])
@@ -557,6 +553,16 @@ final class MeetingController: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.summaryFinished("", error: "The agent did not answer within 10 minutes.")
         }
+    }
+
+    /// Only the meeting folder is shared, and every permission request is refused, so the agent can read and answer
+    /// but not change files or run commands. ironpet writes summary.md itself. Its turns count as meeting summaries in the Usage tab.
+    static func makeSummaryRunner(_ agent: ACPAgent) -> ACPBackend {
+        let runner = ACPBackend(agent: agent)
+        runner.restricted = true
+        runner.usageFeature = .meetingSummary
+        runner.onPermission = { _, respond in respond(summaryDecision) }
+        return runner
     }
 
     /// Every permission request from the summary agent is refused.

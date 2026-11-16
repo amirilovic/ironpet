@@ -58,7 +58,7 @@ final class AutomationService {
     init(store: AutomationStore, engine: AutomationEngine, database: Database? = nil) {
         self.store = store
         self.engine = engine
-        engine.state = AutomationState(database: database ?? Database.open(path: store.paths.database, migrations: AutomationState.migrations).database)
+        engine.state = AutomationState(database: database ?? Database.open(path: store.paths.database, migrations: AppMigrations.all).database)
         engine.set(store.automations)
         engine.onFire = { [weak self] fire in self?.handle(fire) }
         engine.onRecord = { [weak self] id, outcome, text in self?.recordHistory(id, outcome, text) }
