@@ -249,6 +249,15 @@ private struct GeneralSettings: View {
                                                                       set: { model.alsoSystemNotifications = $0 }))
             }
             Section {
+                Toggle("Remind me when a task is due", isOn: Binding(
+                    get: { store.config.tasks.dueReminders }, set: { on in store.update { $0.tasks.dueReminders = on } }))
+            } header: {
+                Text("Tasks")
+            } footer: {
+                Text("\(store.config.pet.name) says once when an open task is due today or overdue, with Done, Snooze and Open. Pause reminders holds these too.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
                 Picker("Open sessions in", selection: Binding(get: { store.config.openIn },
                                                               set: { value in store.update { $0.openIn = value } })) {
                     Text("Auto (the app that started the agent)").tag(Editors.auto)

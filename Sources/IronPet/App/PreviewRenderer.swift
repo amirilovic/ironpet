@@ -95,6 +95,18 @@ enum PreviewRenderer {
                               subtitle: "Your agent is still working, good moment for it.", body: water.body,
                               actions: [.init(title: "Done", style: .primary) {}, .init(title: "Snooze 10 min") {}])
         render(PetScene(atlas: atlas, row: .drinking, frame: 3, bubbles: [reminder]), to: dir, "reminder")
+        let today = Calendar.current.startOfDay(for: Date())
+        let due = [("Fix the flaky login test", today.addingTimeInterval(-86_400)), ("Send the deck to Maya", today),
+                   ("Renew the domain before it lapses on Friday", Date().addingTimeInterval(-600))].map { title, date in
+            TaskItem(id: title, title: title, notes: "", status: .backlog, source: .chat, due: date, links: [],
+                     created: Date(), updated: Date(), closed: nil)
+        }
+        render(PetScene(atlas: atlas, row: .waiting, frame: 0,
+                        bubbles: [Announcer.tasksDueBubble(Array(due.prefix(1)), now: Date(), done: {}, snooze: {}, open: {})]),
+               to: dir, "task-due")
+        render(PetScene(atlas: atlas, row: .waiting, frame: 0,
+                        bubbles: [Announcer.tasksDueBubble(due, now: Date(), done: {}, snooze: {}, open: {})]),
+               to: dir, "task-due-several")
 
         // Ghost works, finishes, asks before running a command, then takes a water break; then it loops.
         var shots: [(row: AtlasRow, frame: Int, bubbles: [Bubble], delay: Double)] = []

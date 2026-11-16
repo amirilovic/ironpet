@@ -47,6 +47,9 @@ final class TaskStore: ObservableObject {
                 try db.execute("ALTER TABLE \(table) ADD COLUMN waiting_on TEXT")
             }
         },
+        .init(305, "tasks: due reminders", sql: """
+            CREATE TABLE IF NOT EXISTS task_due_marks(task TEXT PRIMARY KEY, due REAL NOT NULL, snoozed_until REAL) WITHOUT ROWID;
+            """),
     ]
 
     /// The column names of `table`, empty when it does not exist.
@@ -183,6 +186,7 @@ final class TaskStore: ObservableObject {
         try database.write { db in
             try db.execute("DELETE FROM task_items WHERE id = ?", [id])
             try db.execute("DELETE FROM task_links WHERE task = ?", [id])
+            try db.execute("DELETE FROM task_due_marks WHERE task = ?", [id])
             // The history stays until prune, so a deleted task can still be explained.
             try Self.log(db, id, time, by, .deleted, item.title)
         }
@@ -283,6 +287,36 @@ final class TaskStore: ObservableObject {
     }
 
     func skip(_ suggestionID: String) { removeSuggestion(suggestionID) }
+
+    // MARK: Due reminders
+
+    /// Which tasks were announced as due, by id. Read from the database so a relaunch does not announce them again.
+    func dueMarks() -> [String: TaskDueMark] {
+        let rows = (try? database.read { try $0.rows("SELECT task, due, snoozed_until FROM task_due_marks") }) ?? []
+        var marks: [String: TaskDueMark] = [:]
+        for row in rows {
+            guard let task = row[0] as? String, let due = row[1] as? Double else { continue }
+            marks[task] = TaskDueMark(due: Date(timeIntervalSince1970: due),
+                                      snoozedUntil: (row[2] as? Double).map(Date.init(timeIntervalSince1970:)))
+        }
+        return marks
+    }
+
+    /// Records that these tasks were announced for their current due date, and when to announce them again (nil: never).
+    func markDue(_ items: [TaskItem], snoozedUntil: Date?) {
+        let items = items.filter { $0.due != nil }
+        guard !items.isEmpty else { return }
+        do {
+            try database.write { db in
+                for item in items {
+                    try db.execute("INSERT OR REPLACE INTO task_due_marks(task, due, snoozed_until) VALUES(?, ?, ?)",
+                                   [item.id, item.due!.timeIntervalSince1970, snoozedUntil?.timeIntervalSince1970])
+                }
+            }
+        } catch {
+            NSLog("ironpet: could not store task reminders: \(error.localizedDescription)")
+        }
+    }
 
     private func removeSuggestion(_ id: String) {
         try? database.write { try $0.execute("DELETE FROM task_suggestions WHERE id = ?", [id]) }
@@ -388,6 +422,7 @@ final class TaskStore: ObservableObject {
             try database.write { db in
                 try db.execute("DELETE FROM task_links WHERE task IN (SELECT id FROM task_items WHERE status = 'done' AND closed < ?)", [cutoff])
                 try db.execute("DELETE FROM task_items WHERE status = 'done' AND closed < ?", [cutoff])
+                try db.execute("DELETE FROM task_due_marks WHERE task NOT IN (SELECT id FROM task_items)")
                 try db.execute("DELETE FROM task_events WHERE at < ? AND task NOT IN (SELECT id FROM task_items)", [cutoff])
                 try db.execute("DELETE FROM task_suggestion_keys WHERE at < ?",
                                [time.addingTimeInterval(-Double(Self.keepSuggestedKeysDays) * 86_400).timeIntervalSince1970])
