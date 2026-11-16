@@ -511,8 +511,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return entry
             })
         }
-        server.onAutomation = { [weak self] request, respond in
-            AutomationMCP.route(request, service: { self?.automations }, respond: respond)
+        server.onAgentAPI = { [weak self] request, respond in
+            MCPEndpoint.route(request, automations: { self?.automations }, tasks: { TaskStore.shared }, respond: respond)
         }
         try server.start()
         self.server = server

@@ -797,7 +797,7 @@ final class AutomationServerTests: AutomationTestCase {
         rig = makeRig([bubble("water", minutes: 45)])
         let service = rig.service
         server = EventServer(token: "test-token") { _ in }
-        server.onAutomation = { request, respond in AutomationMCP.route(request, service: { service }, respond: respond) }
+        server.onAgentAPI = { request, respond in MCPEndpoint.route(request, automations: { service }, tasks: { nil }, respond: respond) }
         try server.start(preferredPort: 47400)
         let port = String(server.port)
         AutomationCLI.endpoint = { (port, "test-token") }
@@ -831,8 +831,9 @@ final class AutomationServerTests: AutomationTestCase {
     func testMCPListsToolsAndRejectsABadToken() async throws {
         let reply = try await rpc("tools/list")
         let names = ((reply["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
-        XCTAssertEqual(Set(names), ["automations_list", "automations_get", "automations_create", "automations_update", "automations_delete",
-                                    "automations_pause", "automations_resume", "automations_run_now", "automations_history"])
+        XCTAssertEqual(Set(names.filter { $0.hasPrefix("automations_") }),
+                       ["automations_list", "automations_get", "automations_create", "automations_update", "automations_delete",
+                        "automations_pause", "automations_resume", "automations_run_now", "automations_history"])
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(server.port)/mcp")!)
         request.httpMethod = "POST"
         request.setValue("wrong", forHTTPHeaderField: "x-ironpet-token")
