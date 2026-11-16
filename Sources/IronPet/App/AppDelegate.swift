@@ -77,6 +77,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet = PetController(store: store, signals: signals)
         pet.onAsk = { [weak self] prompt in self?.ask(prompt) }
         pet.onSay = { [weak self] text in self?.announcer.say(text) }
+        pet.onTellGhost = { [weak self] text in self?.sendToChat(text, show: true, title: "Tasks", busyBody: "Send it to the chat?") }
+        pet.onOpenThread = { [weak self] id in
+            guard let self, let thread = ThreadStore.load(id) else { return }
+            self.chat.open(thread)
+            self.showChat()
+        }
+        pet.onOpenSession = { [weak self] id in self?.openSession(id) }
         bubblePanel = BubblePanel(store: announcer.bubbles)
         pet.extraMenuItems = { [weak self] in self?.hookMenuItems() ?? [] }
         pet.chatMood = { [weak self] in self?.chat.mood }
@@ -99,6 +106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         meeting.onSummaryReady = { [weak self] url in
             self?.announcer.meetingSummary(url)
             self?.testControl?.recordMeetingNotified(url)
+            if let text = try? String(contentsOf: url, encoding: .utf8) {
+                self?.suggestTasks(fromSummary: text, meeting: url.deletingLastPathComponent())
+            }
         }
         meeting.onOpenInChat = { [weak self] files in self?.openMeetingInChat(files) }
         if TestControl.isEnabled {
@@ -179,7 +189,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The app's one database. Features add their migrations to this list, in version order.
         let database = Database.open(path: Paths.root.appendingPathComponent("ironpet.db"), migrations: AppMigrations.all).database
         UsageStore.shared = UsageStore(database: database)
-        TaskStore.shared = TaskStore(database: database)
+        let tasks = TaskStore(database: database)
+        TaskStore.shared = tasks
+        pet.tasks = tasks
         let service = AutomationService(store: store, engine: engine, database: database)
         service.notice = { [weak self] notice in self?.announcer.automation(notice) }
         service.dismissNotice = { [weak self] id in self?.announcer.bubbles.dismiss(id) }
@@ -495,6 +507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return true
                 }
             ))
+            control.onMeetingSummaryText = { [weak self] text, meeting in self?.suggestTasks(fromSummary: text, meeting: meeting) }
             testControl = control
             server.onTest = { request, respond in
                 DispatchQueue.main.async { respond(control.handle(request)) }
@@ -657,6 +670,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// The picker is a small window. Once recording starts, the status lives in a pet bubble. The user can hide that
     /// bubble, and the pet then shows a Recording button that brings it back.
+    /// Offers the user's own action items from a meeting summary as tasks. The text stays data: it is stored as
+    /// suggestions and shown, never sent to an agent.
+    private func suggestTasks(fromSummary text: String, meeting: URL) {
+        guard config.config.tasks.meetingSuggestions, let tasks = TaskStore.shared else { return }
+        let added = tasks.suggest(ActionItems.mine(text), meeting: meeting)
+        guard !added.isEmpty else { return }
+        announcer.taskSuggestions(added, addAll: { [weak self] in
+            let before = tasks.tasks.count
+            tasks.acceptAll()
+            self?.announcer.tasksAdded(tasks.tasks.count - before)
+        }, review: { [weak self] in self?.showTasks() })
+    }
+
+    private func showTasks() {
+        pet.showAgents(tab: .tasks)
+    }
+
     private func syncMeetingPanel() {
         let bubbles = announcer.bubbles
         switch meeting.phase {
