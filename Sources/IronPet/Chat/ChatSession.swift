@@ -171,6 +171,8 @@ final class ChatSession: ObservableObject {
     /// Replaces the agent turn in tests: receives the turn and the callback that delivers its events.
     var turnRunner: ((ACPTurn, @escaping (AgentEvent) -> Void) async -> Void)?
     private var toolItems: [String: UUID] = [:]
+    /// The reply item that late updates extend, so a later result starts its own item.
+    private var backgroundReply: UUID?
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
     private var decided: [String: Bool] = [:]
     private var dictationTimer: Timer?
@@ -574,6 +576,7 @@ final class ChatSession: ObservableObject {
         acp?.shutdown()
         let backend = ACPBackend(agent: agent)
         backend.onPermission = { [weak self] call, respond in self?.handlePermission(call, respond: respond) }
+        backend.onBackground = { [weak self] event in self?.handleBackground(event) }
         acp = backend
         return backend
     }
@@ -746,11 +749,8 @@ final class ChatSession: ObservableObject {
             if let model, !list.isEmpty, !list.contains(where: { $0.id == model }) { self.model = nil }
         case .commands(let list):
             receiveCommands(list)
-        case .toolUpdated(let id, let summary):
-            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
-               case .tool(_, let ok) = items[index].kind {
-                items[index].kind = .tool(summary, ok: ok)
-            }
+        case .toolUpdated:
+            applyTranscript(event)
         case .needsSignIn(let methods):
             endTurn()
             signInOptions = methods
@@ -765,24 +765,8 @@ final class ChatSession: ObservableObject {
             state = .idle
             finishTelegramTurn(error: "\(agent.name) needs a runtime download. Approve it on the Mac.")
             restoreQueue(telegramReason: "\(agent.name) needs a runtime download. Approve it on the Mac.")
-        case .assistant(let text):
-            activity = "Writing"
-            if case .assistant(let previous) = items.last?.kind {
-                items[items.count - 1].kind = .assistant(previous + text)
-            } else {
-                items.append(Item(kind: .assistant(text)))
-            }
-        case .toolStarted(let id, let summary):
-            activity = Self.presentTense(summary)
-            let item = Item(kind: .tool(summary, ok: nil))
-            toolItems[id] = item.id
-            items.append(item)
-        case .toolFinished(let id, let ok):
-            activity = "Thinking"
-            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
-               case .tool(let summary, _) = items[index].kind {
-                items[index].kind = .tool(summary, ok: ok)
-            }
+        case .assistant, .toolStarted, .toolFinished:
+            applyTranscript(event)
         case .finished(let error):
             endTurn()
             if let error { items.append(Item(kind: .error(error))) }
@@ -795,6 +779,50 @@ final class ChatSession: ObservableObject {
                 onAttention?(error == nil ? "\(name) finished your task" : "\(name)'s task failed")
             }
             if error == nil { sendNextQueued() } else { restoreQueue(telegramReason: "The turn before it failed, so this message did not run.") }
+        }
+    }
+
+    /// Updates that arrive after the turn ended, such as a background subagent's result. They join the transcript
+    /// without a turn, so the chat stays idle and new messages start at once. An update that lands while the next
+    /// turn is still connecting joins that turn's reply instead of being lost.
+    func handleBackground(_ event: AgentEvent) {
+        switch event {
+        case .assistant, .toolStarted, .toolUpdated, .toolFinished: applyTranscript(event)
+        default: break
+        }
+    }
+
+    /// Text and tool items. Outside a running turn, text opens a new item instead of extending the last reply.
+    private func applyTranscript(_ event: AgentEvent) {
+        switch event {
+        case .assistant(let text):
+            if isRunning { activity = "Writing" }
+            if case .assistant(let previous) = items.last?.kind, isRunning || items.last?.id == backgroundReply {
+                items[items.count - 1].kind = .assistant(previous + text)
+            } else {
+                let item = Item(kind: .assistant(text))
+                backgroundReply = isRunning ? nil : item.id
+                items.append(item)
+            }
+        case .toolStarted(let id, let summary):
+            if isRunning { activity = Self.presentTense(summary) }
+            let item = Item(kind: .tool(summary, ok: nil))
+            toolItems[id] = item.id
+            items.append(item)
+        case .toolUpdated(let id, let summary):
+            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
+               case .tool(_, let ok) = items[index].kind {
+                items[index].kind = .tool(summary, ok: ok)
+            }
+        case .toolFinished(let id, let ok):
+            if isRunning { activity = "Thinking" }
+            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
+               case .tool(let summary, _) = items[index].kind {
+                items[index].kind = .tool(summary, ok: ok)
+            }
+            if !isRunning { saveThread() }
+        default:
+            break
         }
     }
 

@@ -38,6 +38,30 @@ final class ChatQueueTests: XCTestCase {
         session.items.compactMap { if case .user(let text) = $0.kind { text } else { nil } }
     }
 
+    private var assistantTexts: [String] {
+        session.items.compactMap { if case .assistant(let text) = $0.kind { text } else { nil } }
+    }
+
+    func testBackgroundResultAfterTheTurnShowsAsItsOwnReplyAndKeepsTheChatIdle() async {
+        await type("start it")
+        deliver[0](.assistant("started"))
+        await complete(0)
+        XCTAssertFalse(session.isRunning)
+        session.handleBackground(.assistant("RESULT "))
+        session.handleBackground(.assistant("done"))
+        XCTAssertEqual(assistantTexts, ["started", "RESULT done"])
+        XCTAssertFalse(session.isRunning)
+        await type("next")
+        XCTAssertEqual(turns.count, 2, "a new message starts at once instead of queueing")
+        XCTAssertTrue(session.queue.isEmpty)
+    }
+
+    func testBackgroundUpdateDuringTheNextTurnIsKept() async {
+        await type("one")
+        session.handleBackground(.assistant("late result"))
+        XCTAssertEqual(assistantTexts, ["late result"])
+    }
+
     func testS1QueuesWhileRunning() async {
         await type("first")
         await type("a")
