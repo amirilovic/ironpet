@@ -155,13 +155,15 @@ final class TaskStore: ObservableObject {
     /// Stores action items as suggestions. Items already suggested or already a task with the same title are skipped.
     @discardableResult
     func suggest(_ items: [(title: String, due: String?)], meeting: URL) -> [TaskSuggestion] {
-        let existing = Set(tasks.map { $0.title.lowercased() } + suggestions.map { $0.title.lowercased() })
+        // Compared by `ActionItems.normalized`, so a regenerated summary that words an item with another case, spacing or
+        // closing full stop does not offer it a second time.
+        let existing = Set(tasks.map { ActionItems.normalized($0.title) } + suggestions.map { ActionItems.normalized($0.title) })
         let time = now()
         var added: [TaskSuggestion] = []
         var taken = Set(suggestions.map(\.id))
         for item in items {
-            guard let title = try? TaskValidator.title(item.title), !existing.contains(title.lowercased()),
-                  !added.contains(where: { $0.title.lowercased() == title.lowercased() }) else { continue }
+            guard let title = try? TaskValidator.title(item.title), !existing.contains(ActionItems.normalized(title)),
+                  !added.contains(where: { ActionItems.normalized($0.title) == ActionItems.normalized(title) }) else { continue }
             let id = AutomationValidator.slug(title, taken: taken)
             taken.insert(id)
             added.append(TaskSuggestion(id: id, title: title, due: item.due, meeting: meeting, created: time))

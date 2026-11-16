@@ -11,19 +11,57 @@ enum ActionItems {
 
     /// Every checklist item in the section, in order. "None." and a missing section give an empty list.
     static func parse(_ markdown: String) -> [Item] {
+        entries(markdown).map(\.item)
+    }
+
+    /// One checklist line of the section, with its position in the text and whether it is ticked.
+    private struct Entry {
+        var line: Int
+        var checked: Bool
+        var item: Item
+    }
+
+    private static func entries(_ markdown: String) -> [Entry] {
         var inSection = false
-        var items: [Item] = []
-        for raw in markdown.components(separatedBy: .newlines) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
+        var found: [Entry] = []
+        for (number, raw) in markdown.components(separatedBy: "\n").enumerated() {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.hasPrefix("#") {
                 let heading = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces).lowercased()
                 inSection = heading == "action items"
                 continue
             }
-            guard inSection, let body = checklistBody(line) else { continue }
-            items.append(item(body))
+            guard inSection, let (checked, body) = checklistBody(line) else { continue }
+            found.append(Entry(line: number, checked: checked, item: item(body)))
         }
-        return items
+        return found
+    }
+
+    /// The text of an item for comparing two summaries: case, runs of spaces and a closing full stop do not count.
+    static func normalized(_ title: String) -> String {
+        var text = title.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        while let last = text.last, ".,;:!".contains(last) { text.removeLast() }
+        return text
+    }
+
+    /// Ticks the items of a regenerated summary that were ticked in the one it replaces, matched by their text.
+    /// An item the model worded differently comes back unticked.
+    static func carryChecked(from old: String, into new: String) -> String {
+        let ticked = Set(entries(old).filter(\.checked).map { normalized($0.item.title) })
+        guard !ticked.isEmpty else { return new }
+        var lines = new.components(separatedBy: "\n")
+        for entry in entries(new) where !entry.checked && ticked.contains(normalized(entry.item.title)) {
+            guard let box = lines[entry.line].range(of: "[ ]") else { continue }
+            lines[entry.line].replaceSubrange(box, with: "[x]")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The user's own items in a regenerated summary that the summary it replaces did not have. The ones it had were
+    /// already offered, and the user may have skipped them.
+    static func newMine(old: String?, new: String) -> [(title: String, due: String?)] {
+        let known = Set((old.map(parse) ?? []).map { normalized($0.title) })
+        return mine(new).filter { !known.contains(normalized($0.title)) }
     }
 
     /// The items that are the user's own, as suggestions for `TaskStore.suggest`.
@@ -32,10 +70,10 @@ enum ActionItems {
     }
 
     /// `- [ ] text` or `* [ ] text`, also already ticked ones, which are still open work from the meeting's view.
-    private static func checklistBody(_ line: String) -> String? {
+    private static func checklistBody(_ line: String) -> (checked: Bool, body: String)? {
         for prefix in ["- [ ]", "* [ ]", "- [x]", "- [X]", "* [x]", "* [X]"] where line.hasPrefix(prefix) {
             let body = line.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
-            return body.isEmpty ? nil : body
+            return body.isEmpty ? nil : (!prefix.hasSuffix("[ ]"), body)
         }
         return nil
     }

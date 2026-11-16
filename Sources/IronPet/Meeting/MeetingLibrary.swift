@@ -8,6 +8,8 @@ struct MeetingRecord: Identifiable, Equatable {
     let preview: String
     let hasSummary: Bool
     let hasTranscript: Bool
+    /// The folder still has `mic-NNN.wav` or `them-NNN.wav` chunks, so it can be transcribed again.
+    var hasAudio = false
 
     var id: String { folder.lastPathComponent }
     var transcriptURL: URL { folder.appendingPathComponent("transcript.md") }
@@ -21,6 +23,8 @@ struct MeetingRecord: Identifiable, Equatable {
 @MainActor
 final class MeetingLibrary: ObservableObject {
     @Published private(set) var meetings: [MeetingRecord] = []
+    /// Rebuilds a meeting's transcript and summary. Lives here so the list and the work on it share one place.
+    let regenerator = MeetingRegenerator()
     private let root: URL
 
     init(root: URL = Paths.meetings) {
@@ -46,11 +50,13 @@ final class MeetingLibrary: ObservableObject {
         let hasSummary = FileManager.default.fileExists(atPath: summary.path)
         let hasTranscript = FileManager.default.fileExists(atPath: transcript.path)
         let preview = (hasSummary ? head(of: summary) : hasTranscript ? head(of: transcript) : nil).flatMap(firstLine) ?? ""
-        return MeetingRecord(folder: folder, date: date, preview: preview, hasSummary: hasSummary, hasTranscript: hasTranscript)
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return MeetingRecord(folder: folder, date: date, preview: preview, hasSummary: hasSummary, hasTranscript: hasTranscript,
+                             hasAudio: files.contains { MeetingFolderScan.chunkName($0) != nil })
     }
 
     /// `yyyy-MM-dd-HHmm`, with the `-2`, `-3` … suffix a second meeting in the same minute gets.
-    static func date(folderName: String) -> Date? {
+    nonisolated static func date(folderName: String) -> Date? {
         let parts = folderName.split(separator: "-")
         guard parts.count == 4 || parts.count == 5, parts.dropFirst(4).allSatisfy({ Int($0) != nil }) else { return nil }
         let formatter = DateFormatter()

@@ -4,9 +4,17 @@ import SwiftUI
 /// The Transcripts section: past meetings newest first, and the summary or transcript of the one selected.
 struct TranscriptsView: View {
     @ObservedObject var library: MeetingLibrary
+    @ObservedObject private var regenerator: MeetingRegenerator
     /// The folder of the meeting being recorded or summarized; it cannot be deleted.
     let activeFolder: () -> URL?
     let onAsk: ([URL]) -> Void
+
+    init(library: MeetingLibrary, activeFolder: @escaping () -> URL?, onAsk: @escaping ([URL]) -> Void) {
+        self.library = library
+        self.regenerator = library.regenerator
+        self.activeFolder = activeFolder
+        self.onAsk = onAsk
+    }
 
     @State private var selection: String?
     @State private var page: Page = .summary
@@ -18,7 +26,14 @@ struct TranscriptsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: IronPetSection.transcripts.title) { EmptyView() }
+            PageHeader(title: IronPetSection.transcripts.title) {
+                if let progress = regenerator.progress {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text(progress.label).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
             if library.meetings.isEmpty {
                 EmptyState(symbol: "waveform", title: "No meetings yet",
                            detail: "Start one from \(ConfigStore.shared.config.pet.name)'s right-click menu; its transcript and summary show up here.")
@@ -37,6 +52,11 @@ struct TranscriptsView: View {
         }
         .onChange(of: selection) { load() }
         .onChange(of: page) { load() }
+        // A run changed files on disk: the list previews and the open text may be new.
+        .onChange(of: regenerator.completed) {
+            library.reload()
+            load()
+        }
     }
 
     private var selected: MeetingRecord? { library.meetings.first { $0.id == selection } }
@@ -47,10 +67,17 @@ struct TranscriptsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(meeting.date.formatted(date: .abbreviated, time: .shortened))
                         .font(.system(size: 12.5, weight: .medium))
-                    Text(meeting.preview.isEmpty ? (meeting.folder == activeFolder() ? "Recording…" : "No transcript") : meeting.preview)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                    if regenerator.activeID == meeting.id, let progress = regenerator.progress {
+                        HStack(spacing: 5) {
+                            ProgressView().controlSize(.mini)
+                            Text(progress.label).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    } else {
+                        Text(meeting.preview.isEmpty ? (meeting.folder == activeFolder() ? "Recording…" : "No transcript") : meeting.preview)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
                 .padding(.vertical, 2)
                 .tag(meeting.id)
@@ -63,24 +90,10 @@ struct TranscriptsView: View {
     @ViewBuilder private var detail: some View {
         if let meeting = selected {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 8) {
-                    Picker("", selection: $page) {
-                        ForEach(Page.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    Spacer()
-                    Button { onAsk(meeting.chatFiles) } label: {
-                        Label("Ask \(ConfigStore.shared.config.pet.name)", systemImage: "sparkles")
-                    }
-                    .disabled(meeting.chatFiles.isEmpty)
-                    .help("Open the chat with this meeting's transcript and summary attached")
-                    IconButton(symbol: "folder", help: "Reveal in Finder") {
-                        NSWorkspace.shared.activateFileViewerSelecting([meeting.folder])
-                    }
-                    IconButton(symbol: "trash", help: "Move to Trash") { confirmDelete = true }
-                        .disabled(meeting.folder == activeFolder())
+                // At the narrowest window the Ask label would be cut, so it falls back to its icon.
+                ViewThatFits(in: .horizontal) {
+                    toolbar(meeting, askLabel: true)
+                    toolbar(meeting, askLabel: false)
                 }
                 .controlSize(.small)
                 .padding(.horizontal, 12)
@@ -98,8 +111,8 @@ struct TranscriptsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
                 }
-                if let error {
-                    Text(error).font(.caption).foregroundStyle(.red).padding(8)
+                if let message = error ?? regenerator.errors[meeting.id] {
+                    Text(message).font(.caption).foregroundStyle(.red).padding(8)
                 }
             }
             .confirmationDialog("Move this meeting to the Trash?", isPresented: $confirmDelete) {
@@ -108,6 +121,57 @@ struct TranscriptsView: View {
                 Text("Its audio chunks, transcript and summary go to the Trash.")
             }
         }
+    }
+
+    private func toolbar(_ meeting: MeetingRecord, askLabel: Bool) -> some View {
+        HStack(spacing: 8) {
+            Picker("", selection: $page) {
+                ForEach(Page.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            Spacer()
+            Button { onAsk(meeting.chatFiles) } label: {
+                if askLabel {
+                    Label("Ask \(ConfigStore.shared.config.pet.name)", systemImage: "sparkles")
+                } else {
+                    Label("Ask \(ConfigStore.shared.config.pet.name)", systemImage: "sparkles").labelStyle(.iconOnly)
+                }
+            }
+            .disabled(meeting.chatFiles.isEmpty)
+            .help("Open the chat with this meeting's transcript and summary attached")
+            regenerateMenu(meeting)
+            IconButton(symbol: "folder", help: "Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([meeting.folder])
+            }
+            IconButton(symbol: "trash", help: "Move to Trash") { confirmDelete = true }
+                .disabled(meeting.folder == activeFolder() || regenerator.activeID == meeting.id)
+        }
+    }
+
+    /// Click for a new transcript and summary, or pick "Summary only" to keep the transcript, for example after naming a speaker.
+    private func regenerateMenu(_ meeting: MeetingRecord) -> some View {
+        let reason = regenerator.unavailableReason(for: meeting, activeFolder: activeFolder())
+        return Menu {
+            Button("Transcript and summary") { regenerate(meeting, .full) }
+            Button("Summary only") { regenerate(meeting, .summaryOnly) }
+                .disabled(!meeting.hasTranscript)
+        } label: {
+            Label("Regenerate", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
+        } primaryAction: {
+            regenerate(meeting, .full)
+        }
+        .fixedSize()
+        .accessibilityLabel("Regenerate transcript and summary")
+        .disabled(reason != nil)
+        .help(reason ?? "Transcribe the saved audio again and write a new summary, with today's model, speaker names and summary agent. The old files are kept as .prev.md")
+    }
+
+    private func regenerate(_ meeting: MeetingRecord, _ mode: RegenerationMode) {
+        error = nil
+        let folder = activeFolder()
+        Task { await regenerator.regenerate(meeting, mode: mode, activeFolder: folder) }
     }
 
     private func load() {

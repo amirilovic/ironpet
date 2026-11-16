@@ -118,6 +118,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         meeting.onOpenInChat = { [weak self] files in self?.openMeetingInChat(files) }
+        meetings.regenerator.onReplaced = { [weak self] replaced in
+            self?.meetings.reload()
+            // Only items the old summary did not have: the user may have skipped the others.
+            self?.offerTasks(ActionItems.newMine(old: replaced.previousSummary, new: replaced.summary), meeting: replaced.folder)
+        }
+        meeting.regenerateSummaryOf = { [weak self] folder in
+            guard let self, let record = MeetingLibrary.record(folder) else { return false }
+            return await self.meetings.regenerator.regenerate(record, mode: .summaryOnly)
+        }
         if TestControl.isEnabled {
             // No dialog may block an automated run.
             meeting.confirmConsent = { true }
@@ -860,8 +869,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Offers the user's own action items from a meeting summary as tasks. The text stays data: it is stored as
     /// suggestions and shown, never sent to an agent.
     private func suggestTasks(fromSummary text: String, meeting: URL) {
-        guard config.config.tasks.meetingSuggestions, let tasks = TaskStore.shared else { return }
-        let added = tasks.suggest(ActionItems.mine(text), meeting: meeting)
+        offerTasks(ActionItems.mine(text), meeting: meeting)
+    }
+
+    private func offerTasks(_ items: [(title: String, due: String?)], meeting: URL) {
+        guard config.config.tasks.meetingSuggestions, let tasks = TaskStore.shared, !items.isEmpty else { return }
+        let added = tasks.suggest(items, meeting: meeting)
         guard !added.isEmpty else { return }
         announcer.taskSuggestions(added, addAll: { [weak self] in
             let before = tasks.tasks.count

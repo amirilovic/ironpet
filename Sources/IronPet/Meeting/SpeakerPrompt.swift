@@ -62,21 +62,30 @@ struct SpeakerPrompt: View {
                 ForEach(speakers) { speaker in
                     SpeakerRow(controller: controller, clips: clips, speaker: speaker, storedNames: storedNames)
                 }
-                if controller.namesChangedSinceSummary, case .ready = controller.summary {
-                    HStack {
-                        Text("The summary was written before these names.").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Summarize again") { controller.summarize() }.controlSize(.small)
-                    }
-                }
+                RegenerateSummaryRow(controller: controller)
             }
             .onAppear { storedNames = controller.storedNames }
             .onDisappear { clips.stop() }
-        } else if controller.namesChangedSinceSummary, case .ready = controller.summary {
+        } else {
+            RegenerateSummaryRow(controller: controller)
+        }
+    }
+}
+
+/// The one button of the naming flow that follows a name: summarise again, so the summary uses it. Never automatic.
+struct RegenerateSummaryRow: View {
+    @ObservedObject var controller: MeetingController
+
+    var body: some View {
+        if controller.canRegenerateSummary {
             HStack {
-                Text("The summary was written before these names.").font(.caption).foregroundStyle(.secondary)
+                Text("The summary does not have these names yet.").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Summarize again") { controller.summarize() }.controlSize(.small)
+                if controller.regeneratingSummary { ProgressView().controlSize(.small) }
+                Button("Regenerate summary") { controller.regenerateSummary() }
+                    .controlSize(.small)
+                    .disabled(controller.regeneratingSummary)
+                    .help("Summarise the transcript again with the names you gave. The old summary is kept as summary.prev.md")
             }
         }
     }
