@@ -83,6 +83,13 @@ struct Config: Codable, Equatable {
         var autoUpdate = true
     }
 
+    struct Tasks: Codable, Equatable {
+        /// After a meeting summary, offer the action items that belong to "Me" as tasks. Nothing is added without a click.
+        var meetingSuggestions = true
+        /// Done tasks older than this many days are deleted, with their history.
+        var keepDoneDays = 30
+    }
+
     struct Integrations: Codable, Equatable {
         /// Status hooks in `~/.cursor/hooks.json`.
         var cursorHooks = false
@@ -152,6 +159,7 @@ struct Config: Codable, Equatable {
     var integrations = Integrations()
     var automations = Automations()
     var skills = Skills()
+    var tasks = Tasks()
     var voice = Voice()
     var meetings = Meetings()
     var telegram = Telegram()
@@ -204,6 +212,7 @@ struct Config: Codable, Equatable {
         c.reminders.idleResetMinutes = max(1, c.reminders.idleResetMinutes)
         c.reminders.snoozeMinutes = max(1, c.reminders.snoozeMinutes)
         c.automations.logRetentionDays = min(365, max(1, c.automations.logRetentionDays))
+        c.tasks.keepDoneDays = min(365, max(1, c.tasks.keepDoneDays))
         c.voice.baseUrl = c.voice.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         c.voice.model = c.voice.model.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.meetings.summaryModel?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.meetings.summaryModel = nil }

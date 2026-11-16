@@ -17,6 +17,7 @@ A desktop pet for macOS that keeps an eye on your coding agents and does small t
 - **Screen help.** <kbd>⇧⌥⌘G</kbd> captures the front window, <kbd>⌃⌥⌘G</kbd> a region you drag, and opens a chat with the screenshot attached.
 - **Remembers.** Chats are saved and can be reopened. Ghost keeps editable markdown notes about you and each project and reads them at the start of every chat.
 - **Break reminders and automations.** Drink water (45 min), stretch (60 min) and rest your eyes (20 min), counted only while you're at the keyboard; stepping away for 5 minutes resets them. While an agent is working they can come a little early, so you take the break while you'd be waiting anyway. Ghost drinks or stretches along with you. His bubble has **Done** and **Snooze 10 min**. These are ordinary [automations](#automations), so an agent can add, change, pause and delete reminders, scheduled jobs and watchers for you. Toggle or pause them under right-click → Automations.
+- **Tasks.** Ghost keeps your task list. Ask for something to be done later, tell him when you did it, and the agent adds, updates and closes the task, with every change kept in its history. After a meeting summary, Ghost offers the action items that are yours. The Tasks tab in the agents panel shows what needs you, what is in progress and the backlog. See [Tasks](#tasks).
 - **Model and agent picker** (the models come from the agent), per-project folder detection, resizable chat window, launch at login.
 
 | | |
@@ -159,6 +160,16 @@ Every reminder and watcher is an automation in `~/.ironpet/automations.json`. On
 - **Logs.** Settings → Automations has a **Show logs** button (and each row's menu has **Show logs…**, and the right-click menu has Automations → Show logs…). It opens a window with every poll and script run, quiet ones included, plus every reminder, shell command and prompt that ran: time, how long it took, the outcome and the output (exit code, stdout and stderr of a poll, `console.log` lines and actions of a script, the error of a failed run). Filter by automation or show only problems. Logs older than a number of days are deleted: set it under Settings → Automations → Keep logs for, or `automations.logRetentionDays` in `config.json` (default 14, from 1 to 365). At most 2000 lines are kept per automation.
 - **History.** The last 20 runs of each automation (time, outcome, short output) are in `automations_history` and under Settings → Automations.
 
+## Tasks
+
+The task list belongs to the agent, not to you, so nothing is lost by moving cards around. You tell Ghost what happened ("I called the doctor, the appointment is Tuesday at 21:00") and the agent closes the task with that note. A task is **backlog**, **in progress**, **needs you** (only you can take the next step) or **done**, and can link to a chat thread, an agent session, a URL or a file.
+
+- **From the chat, Telegram and voice.** Every chat tells the agent it keeps the list with the `tasks_*` tools: `tasks_list`, `tasks_get`, `tasks_create`, `tasks_update`, `tasks_close` and `tasks_delete`, on the same MCP server as the automation tools. It adds a task when you ask for something later or hand it work that won't finish in the turn, and closes it when you say it's done. It never starts work on a task unless you ask.
+- **From meetings.** After a summary, the action items marked `owner: Me` are offered in a bubble with **Add all** and **Review**. Nothing is added until you choose, and items that are already tasks are left out. Turn it off under Settings → Meetings → Suggest my action items as tasks (`tasks.meetingSuggestions`).
+- **The Tasks tab.** Click Ghost, then Tasks: suggestions, needs you, in progress, backlog, and what was done in the last 7 days. The circle marks a task done, the right-click menu deletes it, and **Tell Ghost…** sends anything else to the chat.
+- **CLI.** Agents outside ironpet (Cursor, Claude Code in a terminal) can use `IronPet tasks list [--all] [--status S]`, `show <id>`, `add <title> [--notes N] [--due D] [--status S] [--url U]`, `update <id> --json '{...}'`, `status <id> <status>`, `done <id> [--note N]` and `delete <id>`. The app must be running.
+- **State.** Tasks, their links and history, and meeting suggestions are in `~/.ironpet/ironpet.db` (`task_*` tables). Done tasks are deleted after `tasks.keepDoneDays` (default 30, from 1 to 365).
+
 ## Configuration
 
 Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rename the pet, pick another from the pet gallery, change or turn off shortcuts, tune reminders, and turn integrations on. Everything is stored in `~/.ironpet/config.json`, which you can also edit by hand or keep in your dotfiles. Changes apply within a couple of seconds. List only the keys you want to change; anything missing uses the default:
@@ -169,6 +180,7 @@ Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rena
   "hotkeys": { "chat": "cmd+opt+g", "captureWindow": "cmd+opt+shift+g", "captureRegion": "" },
   "reminders": { "paused": false, "idleResetMinutes": 5, "snoozeMinutes": 10 },
   "automations": { "logRetentionDays": 14 },
+  "tasks": { "meetingSuggestions": true, "keepDoneDays": 30 },
   "integrations": { "shareMCPSignIns": false },
   "voice": { "enabled": false, "baseUrl": "http://localhost:8000/v1", "model": "mlx-community/parakeet-tdt-0.6b-v3" },
   "meetings": { "enabled": false, "lastApp": "", "summaryAgent": "claude", "summaryModel": "sonnet", "autoSummary": true, "offerToRecordCalls": true },
@@ -242,6 +254,7 @@ All in `~/.ironpet/`:
 | `threads/` | Saved chats |
 | `screenshots/` | Last 30 captures |
 | `config.json` | Your settings |
+| `ironpet.db` | Tasks, automation state and logs, usage |
 | `pets/` | Your pet library: every valid sprite sheet here shows in Settings → Pet |
 | `pet/spritesheet.png` | Optional custom pet art (overrides the bundled Ghost) |
 | `bin/ironpet-hook`, `port`, `token` | Hook bridge |

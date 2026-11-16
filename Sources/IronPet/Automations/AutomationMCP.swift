@@ -1,7 +1,7 @@
 import Foundation
 
-/// The agent-facing side: MCP tools on the loopback server (`POST /mcp`), a plain endpoint for the CLI
-/// (`POST /automations`), the CLI itself, and a stdio bridge so agents that only speak stdio MCP can use the tools.
+/// The agent-facing side: the automation MCP tools (served by `MCPEndpoint` at `POST /mcp`), a plain endpoint for the
+/// CLI (`POST /automations`), the CLI itself, and a stdio bridge so agents that only speak stdio MCP can use the tools.
 /// All of them call `AutomationService.call`, which validates.
 @MainActor
 enum AutomationMCP {
@@ -49,69 +49,15 @@ enum AutomationMCP {
         ]
     }
 
-    /// Handles one MCP JSON-RPC message. Returns the HTTP status line and body.
-    static func handle(_ body: Data, service: AutomationService) async -> (status: String, body: Data) {
-        guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let method = message["method"] as? String else {
-            return ("400 Bad Request", encode(["jsonrpc": "2.0", "id": NSNull(), "error": ["code": -32700, "message": "parse error"]]))
-        }
-        let id = message["id"]
-        guard let id else { return ("202 Accepted", Data()) } // a notification
-        func reply(_ result: [String: Any]) -> (String, Data) { ("200 OK", encode(["jsonrpc": "2.0", "id": id, "result": result])) }
-        switch method {
-        case "initialize":
-            let requested = (message["params"] as? [String: Any])?["protocolVersion"] as? String ?? "2025-03-26"
-            return reply(["protocolVersion": requested, "capabilities": ["tools": [String: Any]()],
-                          "serverInfo": ["name": "ironpet", "version": "0.1.0"],
-                          "instructions": "Create and manage ironpet automations: reminders, watchers and scheduled jobs."])
-        case "ping":
-            return reply([:])
-        case "tools/list":
-            return reply(["tools": tools])
-        case "tools/call":
-            let params = message["params"] as? [String: Any] ?? [:]
-            let name = params["name"] as? String ?? ""
-            guard name.hasPrefix("automations_") else {
-                return ("200 OK", encode(["jsonrpc": "2.0", "id": id, "error": ["code": -32602, "message": "unknown tool \(name)"]]))
-            }
-            let result = await service.call(String(name.dropFirst("automations_".count)), params["arguments"] as? [String: Any] ?? [:], by: "agent:mcp")
-            switch result {
-            case .success(let value): return reply(["content": [["type": "text", "text": text(value)]], "isError": false])
-            case .failure(let error): return reply(["content": [["type": "text", "text": error.message]], "isError": true])
-            }
-        default:
-            return ("200 OK", encode(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "method not found"]]))
-        }
-    }
-
     /// `POST /automations` with `{"op": "list", "args": {...}}`, for the CLI.
     static func handleCLI(_ body: Data, service: AutomationService) async -> (status: String, body: Data) {
         guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let op = message["op"] as? String else {
-            return ("400 Bad Request", encode(["ok": false, "error": "send {\"op\": ..., \"args\": {...}}"]))
+            return ("400 Bad Request", MCPEndpoint.encode(["ok": false, "error": "send {\"op\": ..., \"args\": {...}}"]))
         }
         switch await service.call(op, message["args"] as? [String: Any] ?? [:], by: "agent:cli") {
-        case .success(let value): return ("200 OK", encode(["ok": true, "result": value]))
-        case .failure(let error): return ("200 OK", encode(["ok": false, "error": error.message]))
+        case .success(let value): return ("200 OK", MCPEndpoint.encode(["ok": true, "result": value]))
+        case .failure(let error): return ("200 OK", MCPEndpoint.encode(["ok": false, "error": error.message]))
         }
-    }
-
-    /// Connects `EventServer.onAutomation` to the service. Called on the server's queue; the work runs on the main actor.
-    nonisolated static func route(_ request: HTTPRequest, service: @escaping @MainActor () -> AutomationService?,
-                                  respond: @escaping (String, Data) -> Void) {
-        let path = request.path, body = request.body
-        Task { @MainActor in
-            guard let service = service() else { return respond("503 Service Unavailable", Data()) }
-            let result = path == "/mcp" ? await handle(body, service: service) : await handleCLI(body, service: service)
-            respond(result.status, result.body)
-        }
-    }
-
-    static func encode(_ object: Any) -> Data {
-        (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
-    }
-
-    private static func text(_ value: Any) -> String {
-        let data = (try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])) ?? Data()
-        return String(decoding: data, as: UTF8.self)
     }
 }
 
@@ -204,8 +150,13 @@ enum AutomationCLI {
         default:
             return fail("unknown command \"\(command)\"")
         }
-        let body = (try? JSONSerialization.data(withJSONObject: ["op": op, "args": payload])) ?? Data()
-        guard let response = post(path: "/automations", body: body) else { return fail("ironpet is not running") }
+        return send(path: "/automations", op: op, args: payload)
+    }
+
+    /// Posts `{"op", "args"}` to a CLI endpoint and turns the answer into what the command prints.
+    static func send(path: String, op: String, args: [String: Any]) -> (code: Int32, out: String, err: String) {
+        let body = (try? JSONSerialization.data(withJSONObject: ["op": op, "args": args])) ?? Data()
+        guard let response = post(path: path, body: body) else { return fail("ironpet is not running") }
         guard response.status == 200, let object = (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any] else {
             return fail("the app answered \(response.status)")
         }
@@ -216,7 +167,7 @@ enum AutomationCLI {
         return fail(object["error"] as? String ?? "failed")
     }
 
-    private static func fail(_ message: String) -> (code: Int32, out: String, err: String) {
+    static func fail(_ message: String) -> (code: Int32, out: String, err: String) {
         (1, "", "ironpet: \(message)")
     }
 

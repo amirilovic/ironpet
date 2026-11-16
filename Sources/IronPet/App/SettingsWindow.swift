@@ -468,6 +468,13 @@ private struct MeetingSettings: View {
                 }
             }
             Section {
+                Toggle("Suggest my action items as tasks", isOn: Binding(
+                    get: { store.config.tasks.meetingSuggestions }, set: { on in store.update { $0.tasks.meetingSuggestions = on } }))
+            } footer: {
+                Text("After a summary, \(store.config.pet.name) offers the items marked as yours. Nothing is added until you choose.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
                 ShortcutRow(title: "Start or stop", path: \.meeting, model: model)
             } footer: {
                 Text("No shortcut is set by default, and none is registered while meeting transcripts are off. Pressing it starts the app picker, or stops a meeting that is recording.")

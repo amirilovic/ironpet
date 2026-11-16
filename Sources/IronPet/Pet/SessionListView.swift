@@ -4,12 +4,18 @@ import SwiftUI
 struct SessionListView: View {
     @ObservedObject var store: SessionStore
     @ObservedObject var signals: SignalStore
+    @ObservedObject var tasks: TaskStore
     @ObservedObject private var config = ConfigStore.shared
     let onJump: (AgentSession) -> Void
     let onAsk: (String) -> Void
     let onTrick: (PetController.Trick) -> Void
+    let onTellGhost: (String) -> Void
+    let onOpenThread: (String) -> Void
+    let onOpenSession: (String) -> Void
+    /// Opens on this tab instead of picking one from what needs attention.
+    var initialTab: Tab?
 
-    enum Tab { case agents, alerts, actions }
+    enum Tab { case agents, alerts, tasks, actions }
     @State private var tab: Tab = .agents
 
     var body: some View {
@@ -17,6 +23,7 @@ struct SessionListView: View {
             HStack(spacing: 4) {
                 TabButton(title: "Agents", count: store.ordered.count, selected: tab == .agents) { tab = .agents }
                 TabButton(title: "Alerts", count: signals.signals.count, selected: tab == .alerts) { tab = .alerts }
+                TabButton(title: "Tasks", count: tasks.activeCount + tasks.suggestions.count, selected: tab == .tasks) { tab = .tasks }
                 TabButton(title: "Actions", count: 0, selected: tab == .actions) { tab = .actions }
                 Spacer()
                 trailingAction
@@ -28,19 +35,24 @@ struct SessionListView: View {
                 switch tab {
                 case .agents: agents
                 case .alerts: alerts
+                case .tasks:
+                    TaskListView(tasks: tasks, onTellGhost: onTellGhost, onOpenThread: onOpenThread, onOpenSession: onOpenSession)
                 case .actions: actions
                 }
             }
             .frame(height: 480, alignment: .top)
         }
         .frame(width: 460)
-        .onAppear { tab = Self.defaultTab(store: store, signals: signals) }
+        .onAppear { tab = initialTab ?? Self.defaultTab(store: store, signals: signals, tasks: tasks) }
     }
 
-    /// Agents that need the user win; otherwise show alerts when there are some and no agent is active.
-    private static func defaultTab(store: SessionStore, signals: SignalStore) -> Tab {
+    /// Agents that need the user win; otherwise show alerts when there are some and no agent is active, then tasks
+    /// that wait on the user or on Add / Skip.
+    private static func defaultTab(store: SessionStore, signals: SignalStore, tasks: TaskStore) -> Tab {
         if store.ordered.contains(where: { $0.status == .needsInput || $0.status == .failed }) { return .agents }
-        if !signals.signals.isEmpty, store.ordered.allSatisfy({ $0.status != .running }) { return .alerts }
+        let idle = store.ordered.allSatisfy { $0.status != .running }
+        if !signals.signals.isEmpty, idle { return .alerts }
+        if idle, !tasks.suggestions.isEmpty || tasks.tasks.contains(where: { $0.status == .needsYou }) { return .tasks }
         return .agents
     }
 
@@ -52,12 +64,6 @@ struct SessionListView: View {
                     let count = store.ordered.filter { $0.status == status }.count
                     if count > 0 { CountChip(count: count, color: status.tint) }
                 }
-                if store.ordered.contains(where: { $0.status == .done || $0.status == .failed }) {
-                    Button("Clear finished") { store.acknowledgeAll() }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                        .padding(.leading, 6)
-                }
             }
         case .alerts:
             if !signals.signals.isEmpty {
@@ -65,7 +71,7 @@ struct SessionListView: View {
                     .buttonStyle(.borderless)
                     .font(.caption)
             }
-        case .actions:
+        case .tasks, .actions:
             EmptyView()
         }
     }
@@ -109,7 +115,11 @@ struct SessionListView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(sections, id: \.title) { section in
-                            SectionTitle(section.title)
+                            if section.title == "Finished" {
+                                SectionHeader(section.title, action: "Clear finished") { store.acknowledgeAll() }
+                            } else {
+                                SectionTitle(section.title)
+                            }
                             ForEach(section.sessions) { session in
                                 SessionRow(session: session,
                                            onJump: { onJump(session) },
@@ -430,7 +440,7 @@ private struct CountChip: View {
     }
 }
 
-private struct SectionTitle: View {
+struct SectionTitle: View {
     let text: String
     init(_ text: String) { self.text = text }
 
@@ -445,7 +455,35 @@ private struct SectionTitle: View {
     }
 }
 
-private struct IconButton: View {
+/// A section title with one action for the whole section, such as Clear finished or Add all.
+struct SectionHeader: View {
+    let title: String
+    let action: String
+    let help: String?
+    let perform: () -> Void
+
+    init(_ title: String, action: String, help: String? = nil, perform: @escaping () -> Void) {
+        self.title = title
+        self.action = action
+        self.help = help
+        self.perform = perform
+    }
+
+    var body: some View {
+        HStack {
+            SectionTitle(title)
+            Spacer()
+            Button(action, action: perform)
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
+                .help(help ?? action)
+        }
+    }
+}
+
+struct IconButton: View {
     let symbol: String
     let help: String
     let action: () -> Void
@@ -460,10 +498,11 @@ private struct IconButton: View {
         .buttonStyle(.borderless)
         .foregroundStyle(.secondary)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
-private struct EmptyState: View {
+struct EmptyState: View {
     let symbol: String
     let title: String
     let detail: String

@@ -93,7 +93,7 @@ final class UsageTests: XCTestCase {
 
     func testUsageMigrationDoesNotDisturbAutomationTables() throws {
         let database = try Database(path: nil, migrations: AppMigrations.all)
-        XCTAssertEqual(database.schemaVersion, 100)
+        XCTAssertEqual(database.schemaVersion, AppMigrations.all.map(\.version).max())
         XCTAssertNoThrow(try database.read { try $0.rows("SELECT COUNT(*) FROM automation_runs") })
     }
 

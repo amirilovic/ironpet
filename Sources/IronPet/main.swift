@@ -1,9 +1,12 @@
 import AppKit
 import SwiftUI
 
-// `IronPet automations …` and `IronPet mcp` talk to the running app and never open a window.
+// `IronPet automations …`, `IronPet tasks …` and `IronPet mcp` talk to the running app and never open a window.
 if CommandLine.arguments.dropFirst().first == "automations" {
     exit(AutomationCLI.run(Array(CommandLine.arguments.dropFirst(2))))
+}
+if CommandLine.arguments.dropFirst().first == "tasks" {
+    exit(TaskCLI.run(Array(CommandLine.arguments.dropFirst(2))))
 }
 if CommandLine.arguments.dropFirst().first == "skills" {
     exit(SkillCLI.run(Array(CommandLine.arguments.dropFirst(2))))

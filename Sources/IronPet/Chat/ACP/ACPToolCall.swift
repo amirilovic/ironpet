@@ -108,6 +108,15 @@ enum ApprovalRules {
         return readOnlyMCPVerbs.contains { name == $0 || name.hasPrefix($0 + "_") || name.hasPrefix($0) && tool.dropFirst($0.count).first?.isUppercase == true }
     }
 
+    /// ironpet's own task tools only read and write rows in `ironpet.db` and run nothing, like memory-note edits. Delete still asks.
+    static let ownTaskTools: Set<String> = ["tasks_list", "tasks_get", "tasks_create", "tasks_update", "tasks_close"]
+
+    /// Agents that name MCP tools `mcp__<server>__<tool>` must name the ironpet server; others report the bare tool name.
+    static func isOwnTaskTool(server: String?, tool: String) -> Bool {
+        guard ownTaskTools.contains(tool) else { return false }
+        return server == nil || server == "ironpet"
+    }
+
     static func isDestructive(_ text: String) -> Bool {
         destructive.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
     }
@@ -135,7 +144,7 @@ enum ApprovalRules {
             // MCP servers can change real systems (databases, issue trackers), so anything not read-only asks first.
             let mcp = call.mcp
             let tool = mcp?.tool ?? call.toolName ?? call.title
-            if isReadOnlyMCP(tool) { return .allow }
+            if isReadOnlyMCP(tool) || isOwnTaskTool(server: mcp?.server, tool: tool) { return .allow }
             let arguments = call.arguments
             let dangerous = isDestructive(arguments)
             if auto, !dangerous { return .allow }

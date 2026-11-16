@@ -72,6 +72,16 @@ final class ApprovalRulesTests: XCTestCase {
         XCTAssertTrue(dropTitle.hasPrefix("Run a destructive tool"))
     }
 
+    func testOwnTaskWritesAllowedButDeleteAndOtherServersAsk() {
+        for tool in ["tasks_create", "tasks_update", "tasks_close"] {
+            XCTAssertEqual(policy(ACPToolCall(id: "1", title: "mcp__ironpet__\(tool)", kind: "other", rawInput: ["title": "x"])), .allow, tool)
+            XCTAssertEqual(policy(ACPToolCall(id: "1", title: tool, kind: "other")), .allow, "bare \(tool)")
+        }
+        if case .allow = policy(ACPToolCall(id: "1", title: "mcp__ironpet__tasks_delete", kind: "other")) { XCTFail("delete must ask") }
+        if case .allow = policy(ACPToolCall(id: "1", title: "mcp__other__tasks_create", kind: "other")) { XCTFail("another server must ask") }
+        XCTAssertEqual(policy(ACPToolCall(id: "1", title: "mcp__ironpet__tasks_list", kind: "other")), .allow)
+    }
+
     func testMCPNameFromAgentMetadata() {
         let call = ACPToolCall(json: ["toolCallId": "1", "title": "Query", "kind": "other", "_meta": ["claudeCode": ["toolName": "mcp__langfuse__getHealth"]]])
         XCTAssertEqual(call.mcp?.server, "langfuse")
