@@ -2,9 +2,12 @@ import AVFoundation
 import XCTest
 @testable import IronPet
 
+/// The Z prefix makes this class run last (XCTest runs classes alphabetically): loading Core ML models in this process
+/// must not happen before the AppKit scroll tests in `TranscriptResizeTests`.
+///
 /// Runs FluidAudio on speech synthesised with two macOS voices. It downloads the models (about 21 MB) the first time,
 /// and skips when it cannot: no network, no `say`, or a Hugging Face outage.
-final class SpeakerDiarizationIntegrationTests: XCTestCase {
+final class ZSpeakerDiarizationIntegrationTests: XCTestCase {
     private func speak(_ voice: String, _ text: String, to url: URL) throws -> [Int16] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
