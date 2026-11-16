@@ -81,7 +81,8 @@ struct TaskSuggestion: Identifiable, Equatable {
         case automation(id: String, name: String)
     }
 
-    /// What a watcher returned in a `suggest_task` action, cleaned by `init?(action:)`.
+    /// One suggestion before it is stored: a meeting action item, or what a watcher returned in a `suggest_task` action
+    /// (cleaned by `init?(action:)`).
     struct Draft: Equatable {
         /// The action's `id`, unique within its automation.
         var key: String
