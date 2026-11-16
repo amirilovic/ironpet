@@ -958,7 +958,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func newChat(_ sender: Any?) {
-        chat.newChat()
+        chat.newChat(reason: "menu New chat")
         showChat()
     }
 }
