@@ -22,7 +22,7 @@ A desktop pet for macOS that keeps an eye on your coding agents and does small t
 
 | | |
 | --- | --- |
-| <img src="docs/screenshots/agents.png" alt="The agents panel listing sessions that need input, are working, failed and are done"> | <img src="docs/screenshots/chat-approval.png" alt="The chat waiting for Allow or Deny before running a command"> |
+| <img src="docs/screenshots/agents.png" alt="The ironpet window listing sessions that need input, are working, failed and are done"> | <img src="docs/screenshots/chat-approval.png" alt="The chat waiting for Allow or Deny before running a command"> |
 | **Agents:** every Cursor and Claude Code session, most urgent first | **Approvals:** edits and commands wait for you |
 | <img src="docs/screenshots/alerts.png" alt="The alerts tab with a failed CI run, a review request and an approval"> | <img src="docs/screenshots/reminder.png" alt="Ghost drinking water next to a break reminder"> |
 | **Alerts:** CI, reviews and Sentry, with Ask Ghost | **Breaks:** Ghost drinks along with you |
@@ -69,10 +69,10 @@ macOS will ask for these permissions as you use the features:
 | --- | --- |
 | Chat with Ghost | <kbd>⌥⌘G</kbd> or click Ghost |
 | Ask about the front window / a region | <kbd>⇧⌥⌘G</kbd> / <kbd>⌃⌥⌘G</kbd> |
-| See watched agents and alerts | Click Ghost when something needs attention, or right-click → Show agents |
+| See watched agents, alerts and tasks | Click Ghost when something needs attention, or right-click → Show agents. One window with a sidebar holds Agents, Alerts, Tasks, Actions, Automations and Settings |
 | Allow an action | **Allow** or <kbd>⌘↩</kbd> on the approval card |
 | Move Ghost | Drag him; he stays where you leave him |
-| Settings | <kbd>⌘,</kbd>, right-click Ghost → Settings…, or the Dock icon menu |
+| Settings | <kbd>⌘,</kbd>, right-click Ghost → Settings…, or the Dock icon menu. Opens the same window on Settings › General |
 | Make Ghost do tricks (wave, dance, zoomies, nap, say something…) | Right-click Ghost → Actions |
 
 When you open the chat from a non-coding app (browser, Slack…), Ghost asks which project the question is about, or you can pick **No project** for a general question.
@@ -171,7 +171,7 @@ The task list belongs to the agent, not to you, so nothing is lost by moving car
 
 - **From the chat, Telegram and voice.** Every chat tells the agent it keeps the list with the `tasks_*` tools: `tasks_list`, `tasks_get`, `tasks_create`, `tasks_update`, `tasks_close` and `tasks_delete`, on the same MCP server as the automation tools. It adds a task when you ask for something later or hand it work that won't finish in the turn, and closes it when you say it's done. It never starts work on a task unless you ask.
 - **From meetings.** After a summary, the action items marked `owner: Me` are offered in a bubble with **Add all** and **Review**. Nothing is added until you choose, and items that are already tasks are left out. Turn it off under Settings → Meetings → Suggest my action items as tasks (`tasks.meetingSuggestions`).
-- **The Tasks tab.** Click Ghost, then Tasks: suggestions, needs you, in progress, backlog, and what was done in the last 7 days. The circle marks a task done, the right-click menu deletes it, and **Tell Ghost…** sends anything else to the chat.
+- **The Tasks section.** Click Ghost, then Tasks in the sidebar: suggestions, needs you, in progress, backlog, and what was done in the last 7 days. The circle marks a task done, the right-click menu deletes it, and **Tell Ghost…** sends anything else to the chat.
 - **CLI.** Agents outside ironpet (Cursor, Claude Code in a terminal) can use `IronPet tasks list [--all] [--status S]`, `show <id>`, `add <title> [--notes N] [--due D] [--status S] [--url U]`, `update <id> --json '{...}'`, `status <id> <status>`, `done <id> [--note N]` and `delete <id>`. The app must be running.
 - **State.** Tasks, their links and history, and meeting suggestions are in `~/.ironpet/ironpet.db` (`task_*` tables). Done tasks are deleted after `tasks.keepDoneDays` (default 30, from 1 to 365).
 
@@ -278,7 +278,7 @@ python3 scripts/e2e.py               # end-to-end tests against real agent runs
 
 `scripts/e2e.py` relaunches the installed app with `--test-mode`, drives real Cursor, Claude Code, Codex, Gemini and OpenCode turns over ACP through test-only endpoints (Allow/Deny in chat and from notifications, folder picker, Auto mode, iTerm jump, screen capture, agent summaries, GitHub alert rules), checks the results on disk and in iTerm, then relaunches the app normally. Run a subset with e.g. `python3 scripts/e2e.py cursor claude`.
 
-`setup` and `settings` drive the real welcome and Settings windows through macOS accessibility (System Events): they tick switches, record a shortcut and press it, edit `config.json` by hand, and check `config.json` and the hook files after each step. Your terminal needs Accessibility permission (System Settings → Privacy & Security → Accessibility). They bring ironpet to the front while running, so don't type until they finish. Your `config.json`, hook files and setup state are restored afterwards.
+`setup` and `settings` drive the real welcome window and the Settings pages of the ironpet window through macOS accessibility (System Events): they tick switches, record a shortcut and press it, edit `config.json` by hand, and check `config.json` and the hook files after each step. Your terminal needs Accessibility permission (System Settings → Privacy & Security → Accessibility). They bring ironpet to the front while running, so don't type until they finish. Your `config.json`, hook files and setup state are restored afterwards.
 
 ### Changing the pet
 

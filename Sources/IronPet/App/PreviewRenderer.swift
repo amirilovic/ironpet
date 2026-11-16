@@ -35,13 +35,16 @@ enum PreviewRenderer {
         let signals = SignalStore()
         sampleSignals.forEach { signals.add($0, notify: false) }
         let tasks = sampleTasks()
-        func list(_ sessions: SessionStore, tasks: TaskStore, on tab: SessionListView.Tab? = nil) -> some View {
-            SessionListView(store: sessions, signals: signals, tasks: tasks, onJump: { _ in }, onAsk: { _ in }, onTrick: { _ in },
-                            onTellGhost: { _ in }, onOpenThread: { _ in }, onOpenSession: { _ in }, initialTab: tab).panel()
+        func list(_ sessions: SessionStore, tasks: TaskStore, on section: IronPetSection? = nil) -> some View {
+            let model = IronPetWindowModel()
+            model.section = section ?? IronPetSection.needingAttention(store: sessions, signals: signals, tasks: tasks)
+            return IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, actions: .none)
+                .frame(width: 780, height: 560).panel()
         }
         render(list(sessions, tasks: tasks), to: dir, "agents")
-        // The list opens on Alerts when no agent needs you or is working.
+        // The window opens on Alerts when no agent needs you or is working.
         render(list(SessionStore(), tasks: tasks), to: dir, "alerts")
+        render(list(sessions, tasks: tasks, on: .actions), to: dir, "actions")
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks")
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks-light", scheme: .light)
         let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)

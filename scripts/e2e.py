@@ -647,10 +647,33 @@ def scenario_setup():
         record("Setup: not shown again on the next launch", not wait_for(lambda: window_open("Welcome to ironpet"), 4))
 
 
+WINDOW = "ironpet"
+
+
 def open_settings():
+    """Opens the ironpet window on Settings › General from the app menu."""
     activate_app()
     osa('tell application "System Events" to tell process "IronPet" to click menu item "Settings…" of menu 1 of menu bar item 2 of menu bar 1')
-    return wait_for(lambda: window_open("ironpet Settings"), 5)
+    return wait_for(lambda: window_open(WINDOW), 5)
+
+
+def show_section(name):
+    """Selects a sidebar row of the ironpet window, as a click on its label does."""
+    script = f"""
+    tell application "System Events" to tell process "IronPet"
+      repeat with r in (rows of outline 1 of scroll area 1 of group 1 of window "{WINDOW}")
+        if (exists static text "{name}" of UI element 1 of r) then
+          set selected of r to true
+          return "ok"
+        end if
+      end repeat
+    end tell
+    return "missing"
+    """
+    if osa(script) != "ok":
+        # The sidebar's accessibility tree differs between macOS versions; the test endpoint selects the same row.
+        call("POST", "/test/show-settings", {"tab": name.lower()})
+    time.sleep(0.5)
 
 
 def scenario_settings():
@@ -658,7 +681,7 @@ def scenario_settings():
         if not open_settings():
             return record("Settings: window opens from the app menu", False)
         record("Settings: window opens from the app menu", True)
-        win = "ironpet Settings"
+        win = WINDOW
 
         # Agent hooks toggle installs/removes only that agent's hooks.
         start = hooks_installed("claude")
@@ -676,7 +699,7 @@ def scenario_settings():
         keystroke("j", "control", "option", "command")
         saved = wait_for(lambda: read_config().get("hotkeys", {}).get("chat") == "ctrl+opt+cmd+j", 5)
         record("Settings: recording a shortcut saves it", bool(saved), f"chat={read_config().get('hotkeys', {}).get('chat')}")
-        osa('tell application "System Events" to tell process "IronPet" to click button 1 of window "ironpet Settings"')  # close
+        osa('tell application "System Events" to key code 53')  # Esc closes the window
         time.sleep(0.5)
         osa('tell application "Finder" to activate')
         time.sleep(0.5)
@@ -686,8 +709,7 @@ def scenario_settings():
 
         # Reminders tab writes to config.json.
         open_settings()
-        osa(f'tell application "System Events" to tell process "IronPet" to click radio button 2 of tab group 1 of group 1 of window "{win}"')
-        time.sleep(0.5)
+        show_section("Automations")
         was = read_config().get("reminders", {}).get("paused", False)
         ax(win, "click", "AXCheckBox", "Pause all reminders")
         paused = wait_for(lambda: read_config().get("reminders", {}).get("paused") == (not was), 5)
@@ -697,7 +719,7 @@ def scenario_settings():
         cfg = read_config()
         cfg.setdefault("pet", {})["name"] = "Handy"
         json.dump(cfg, open(CONFIG, "w"))
-        osa(f'tell application "System Events" to tell process "IronPet" to click radio button 1 of tab group 1 of group 1 of window "{win}"')
+        show_section("General")
         shown = wait_for(lambda: ax(win, "value", "AXTextField", "Name") == "Handy", 6)
         record("Settings: hand edits to config.json appear in the window", bool(shown))
 
@@ -913,9 +935,8 @@ def scenario_voice_key():
         try:
             if not open_settings():
                 return record("Voice key: Settings opens", False)
-            win = "ironpet Settings"
-            osa(f'tell application "System Events" to tell process "IronPet" to click radio button 4 of tab group 1 of group 1 of window "{win}"')
-            time.sleep(1)
+            win = WINDOW
+            show_section("Voice")
             ax(win, "focus", "AXTextField", "API key")
             keystroke(secret)
             keystroke("\r")

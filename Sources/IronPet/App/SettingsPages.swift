@@ -27,8 +27,6 @@ final class SettingsModel: ObservableObject {
     let pets = PetGalleryModel()
     private let announcer: Announcer
     let telegram: TelegramBridge
-    /// The selected tab's tag. Tests set it to screenshot a tab.
-    @Published var tab = "general"
 
     init(actions: Actions, announcer: Announcer, telegram: TelegramBridge) {
         self.actions = actions
@@ -55,97 +53,50 @@ final class SettingsModel: ObservableObject {
     }
 }
 
-@MainActor
-final class SettingsWindow {
-    private var window: NSWindow?
-    private let model: SettingsModel
-
-    init(model: SettingsModel) {
-        self.model = model
-    }
-
-    var windowNumber: Int { window?.windowNumber ?? 0 }
-
-    /// Draws the window's own contents to a PNG, for tests; needs no screen-recording permission.
-    func snapshot(to url: URL) -> Bool {
-        guard let view = window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
-        return (try? data.write(to: url)) != nil
-    }
-
-    func show() {
-        model.refresh()
-        if window == nil {
-            // A fixed SwiftUI height plus the hosting controller's auto sizing both set the window height,
-            // which logs "AttributeGraph: cycle detected" on tab switches. Only the width stays in SwiftUI.
-            let host = NSHostingController(rootView: SettingsView(model: model))
-            host.sizingOptions = []
-            let window = NSWindow(contentViewController: host)
-            window.title = "ironpet Settings"
-            window.styleMask = [.titled, .closable, .miniaturizable]
-            window.isReleasedWhenClosed = false
-            window.setContentSize(NSSize(width: 520, height: 600))
-            window.center()
-            self.window = window
-            let center = NotificationCenter.default
-            observers = [
-                center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.syncGalleryActivity() }
-                },
-                center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.model.pets.setWindowShown(false) }
-                },
-            ]
-        }
-        NSApp.activate()
-        window?.makeKeyAndOrderFront(nil)
-        model.pets.setWindowShown(true)
-    }
-
-    private var observers: [NSObjectProtocol] = []
-
-    /// Pauses the pet previews while the window is minimized or covered.
-    private func syncGalleryActivity() {
-        guard let window else { return }
-        model.pets.setWindowShown(window.isVisible && window.occlusionState.contains(.visible))
-    }
-}
-
-struct SettingsView: View {
+/// One Settings page of the ironpet window, with the config.json footer the settings pages share.
+struct SettingsPage: View {
+    let section: IronPetSection
     @ObservedObject var model: SettingsModel
     @ObservedObject private var store = ConfigStore.shared
 
     var body: some View {
         VStack(spacing: 0) {
-            TabView(selection: $model.tab) {
-                GeneralSettings(model: model).tabItem { Label("General", systemImage: "gearshape") }.tag("general")
-                AutomationsSettings(model: model).tabItem { Label("Automations", systemImage: "clock.badge.checkmark") }.tag("automations")
-                IntegrationsSettings(telegram: model.telegram).tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }.tag("integrations")
-                VoiceSettings(model: model).tabItem { Label("Voice", systemImage: "mic") }.tag("voice")
-                MeetingSettings(model: model).tabItem { Label("Meetings", systemImage: "person.2.wave.2") }.tag("meetings")
-                UsageSettings().tabItem { Label("Usage", systemImage: "chart.bar") }.tag("usage")
+            PageHeader(title: section.title) { EmptyView() }
+            content.frame(maxHeight: .infinity)
+            if section != .automations {
+                Divider()
+                footer
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            Divider().padding(.top, 8)
-            HStack {
-                if let error = store.error {
-                    Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                        .lineLimit(2)
-                }
-                Spacer()
-                Button("Open config.json") {
-                    if !FileManager.default.fileExists(atPath: Config.file.path) { try? store.config.save() }
-                    NSWorkspace.shared.open(Config.file)
-                }
-                .help("Every setting here lives in ~/.ironpet/config.json; edits apply within a few seconds.")
-            }
-            .padding(12)
         }
-        .frame(width: 520)
+    }
+
+    @ViewBuilder private var content: some View {
+        switch section {
+        case .automations: AutomationsSettings(model: model)
+        case .integrations: IntegrationsSettings(telegram: model.telegram)
+        case .voice: VoiceSettings(model: model)
+        case .meetings: MeetingSettings(model: model)
+        case .usage: UsageSettings()
+        default: GeneralSettings(model: model)
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            if let error = store.error {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+                    .lineLimit(2)
+            }
+            Spacer()
+            Button("Open config.json") {
+                if !FileManager.default.fileExists(atPath: Config.file.path) { try? store.config.save() }
+                NSWorkspace.shared.open(Config.file)
+            }
+            .help("Every setting here lives in ~/.ironpet/config.json; edits apply within a few seconds.")
+        }
+        .padding(12)
     }
 }
 

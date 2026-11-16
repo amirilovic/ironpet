@@ -13,7 +13,15 @@ final class PetController: NSObject {
     private(set) var view: PetView
     private let store: SessionStore
     private let signals: SignalStore
-    private let agentsPanel = AgentsPanel()
+    private let windowModel = IronPetWindowModel()
+    private var builtWindow: IronPetPanel?
+    /// Built on first use, so it gets the stores the app hands over after `init`.
+    private var window: IronPetPanel {
+        if let builtWindow { return builtWindow }
+        let window = makeWindow()
+        builtWindow = window
+        return window
+    }
     private var lastActivity = Date()
     private var lastTick = Date()
     private var nudge: (mood: PetMood, until: Date)?
@@ -27,9 +35,11 @@ final class PetController: NSObject {
     /// "Ask Ghost" on an alert: open the chat with this prompt ready to send.
     var onAsk: ((String) -> Void)?
     var onCapture: ((_ region: Bool) -> Void)?
-    /// The Tasks tab's list. Falls back to `TaskStore.shared`, then to an empty list.
+    /// The Tasks section's list. Falls back to `TaskStore.shared`, then to an empty list.
     var tasks: TaskStore?
-    /// "Tell Ghost…" in the Tasks tab: send this text to the chat.
+    /// The Automations and Settings sections. Set before the window first opens.
+    var settings: SettingsModel?
+    /// "Tell Ghost…" in the Tasks section: send this text to the chat.
     var onTellGhost: ((String) -> Void)?
     /// A task's thread link: open that chat thread.
     var onOpenThread: ((String) -> Void)?
@@ -91,10 +101,15 @@ final class PetController: NSObject {
         if view.mood == .idle, now.timeIntervalSince(lastActivity) > Self.sleepAfter { refreshMood() }
     }
 
-    var isAgentsVisible: Bool { agentsPanel.isVisible }
+    var isWindowVisible: Bool { builtWindow?.isVisible ?? false }
+    var windowNumber: Int { builtWindow?.windowNumber ?? 0 }
+
+    func snapshotWindow(to url: URL) -> Bool { builtWindow?.snapshot(to: url) ?? false }
+
+    func closeWindow() { builtWindow?.close() }
 
     func jump(to session: AgentSession) {
-        agentsPanel.close()
+        builtWindow?.close()
         SourceJumper.jump(to: session)
         store.acknowledge(session.id)
     }
@@ -146,54 +161,67 @@ final class PetController: NSObject {
     private func handleClick() {
         lastActivity = Date()
         if [.needsInput, .failed, .done].contains(store.summary.status) || !signals.signals.isEmpty || onChatToggle == nil {
-            togglePopover()
+            toggleWindow()
         } else {
             onChatToggle?()
         }
     }
 
-    private func togglePopover() {
-        if agentsPanel.isVisible {
-            agentsPanel.close()
+    private func toggleWindow() {
+        if let builtWindow, builtWindow.isVisible {
+            builtWindow.close()
             refreshMood()
         } else {
-            showAgents(tab: nil)
+            showWindow(nil)
         }
     }
 
-    /// Opens the agents window on `tab`, or on whatever needs attention when nil. Reopens it if it is already showing.
-    func showAgents(tab: SessionListView.Tab?) {
+    /// Opens the ironpet window on `section`, or on whatever needs attention when nil. Switches the section when it is
+    /// already open.
+    func showWindow(_ section: IronPetSection?) {
         lastActivity = Date()
+        windowModel.section = section ?? IronPetSection.needingAttention(store: store, signals: signals, tasks: taskList)
+        settings?.refresh()
         NSApp.activate()
-        agentsPanel.show(SessionListView(
-            store: store, signals: signals, tasks: tasks ?? TaskStore.shared ?? Self.noTasks,
+        window.show(near: panel.frame)
+        refreshMood()
+    }
+
+    private var taskList: TaskStore { tasks ?? TaskStore.shared ?? Self.noTasks }
+
+    private func makeWindow() -> IronPetPanel {
+        let actions = SessionActions(
             onJump: { [weak self] session in self?.jump(to: session) },
             onAsk: { [weak self] prompt in
-                self?.agentsPanel.close()
+                self?.window.close()
                 self?.onAsk?(prompt)
             },
             onTrick: { [weak self] trick in
                 // Bubbles are hidden while this window is open.
-                if trick == .speak { self?.agentsPanel.close() }
+                if trick == .speak { self?.window.close() }
                 self?.perform(trick)
             },
             onTellGhost: { [weak self] text in
-                self?.agentsPanel.close()
+                self?.window.close()
                 self?.onTellGhost?(text)
             },
             onOpenThread: { [weak self] id in
-                self?.agentsPanel.close()
+                self?.window.close()
                 self?.onOpenThread?(id)
             },
             onOpenSession: { [weak self] id in
                 guard let self else { return }
                 if let session = store.sessions[id] { return jump(to: session) }
-                agentsPanel.close()
+                window.close()
                 onOpenSession?(id)
-            },
-            initialTab: tab
-        ), near: panel.frame)
-        refreshMood()
+            })
+        let window = IronPetPanel(content: IronPetWindowView(model: windowModel, store: store, signals: signals,
+                                                             tasks: taskList, settings: settings, actions: actions))
+        window.onVisibilityChange = { [weak self] visible in
+            self?.settings?.pets.setWindowShown(visible)
+            if !visible { self?.refreshMood() }
+        }
+        return window
     }
 
     /// Stands in until the app hands over its store, so the tab shows its empty state instead of failing.
@@ -204,7 +232,7 @@ final class PetController: NSObject {
         view.setAtlas(Atlas.loadDefault())
     }
 
-    @objc private func showAgents(_ sender: Any?) { togglePopover() }
+    @objc private func showAgents(_ sender: Any?) { showWindow(.agents) }
     @objc private func showChat(_ sender: Any?) { onChatToggle?() }
     @objc private func captureWindow(_ sender: Any?) { onCapture?(false) }
     @objc private func captureRegion(_ sender: Any?) { onCapture?(true) }
