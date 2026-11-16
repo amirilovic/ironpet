@@ -47,31 +47,56 @@ struct Transcriber {
     var session: URLSession = .shared
     var timeout: TimeInterval = 120
 
+    /// A voice note. Asks for timed segments and drops the ones the audio does not support (see `SegmentFilter`), so
+    /// silence does not come back as "Thank you.". Falls back to plain `json` the same way `transcribeSegments` does.
     func transcribe(wav: Data) async throws -> String {
-        let data = try await send(wav: wav, format: "json", filename: "voice-note.wav")
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let text = object["text"] as? String else { throw TranscriptionError.malformedResponse }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let segments = try await segments(of: wav, filename: "voice-note.wav", mime: "audio/wav")
+        return Self.joined(segments)
     }
 
     /// Any audio file the server can read, such as a Telegram voice message (OGG/Opus). `mime` is the file's type.
+    /// The silence filter needs the samples, which only a 16-bit PCM WAV gives. Other formats are sent as plain
+    /// `json` and transcribed unfiltered.
     func transcribe(audio: Data, filename: String, mime: String) async throws -> String {
+        if !WAV.samples(of: audio).isEmpty {
+            return Self.joined(try await segments(of: audio, filename: filename, mime: mime))
+        }
         let data = try await send(wav: audio, format: "json", filename: filename, mime: mime)
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let text = object["text"] as? String else { throw TranscriptionError.malformedResponse }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func segments(of wav: Data, filename: String, mime: String) async throws -> [TimedSegment] {
+        let data = try await sendPreferringSegments(wav: wav, filename: filename, mime: mime)
+        var kept = SegmentFilter.filter(try Self.parseSegments(data), wav: wav)
+        // A text-only answer is one untimed segment that the filter cannot check, so check the whole clip.
+        let samples = WAV.samples(of: wav)
+        if kept.count == 1, kept[0].end <= kept[0].start, !samples.isEmpty,
+           SegmentFilter.rms(samples[...]) < SegmentFilter.silentRMS {
+            kept = []
+        }
+        return kept
+    }
+
+    private static func joined(_ segments: [TimedSegment]) -> String {
+        segments.map(\.text).filter { !$0.isEmpty }.joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func sendPreferringSegments(wav: Data, filename: String, mime: String) async throws -> Data {
+        do {
+            return try await send(wav: wav, format: "verbose_json", filename: filename, mime: mime)
+        } catch TranscriptionError.http(let status, _) where status == 400 || status == 422 {
+            return try await send(wav: wav, format: "json", filename: filename, mime: mime)
+        }
+    }
+
     /// Meeting chunks: asks for `verbose_json` to get timed segments. A server that rejects it (OpenAI's
     /// `gpt-4o-*-transcribe` models answer 400) gets one retry with plain `json`. A server that answers with only
     /// `text` (mlx-audio does for Parakeet) yields one segment at the start of the chunk.
     func transcribeSegments(wav: Data) async throws -> [TimedSegment] {
-        let data: Data
-        do {
-            data = try await send(wav: wav, format: "verbose_json", filename: "meeting.wav")
-        } catch TranscriptionError.http(let status, _) where status == 400 || status == 422 {
-            data = try await send(wav: wav, format: "json", filename: "meeting.wav")
-        }
+        let data = try await sendPreferringSegments(wav: wav, filename: "meeting.wav", mime: "audio/wav")
         return SegmentFilter.filter(try Self.parseSegments(data), wav: wav)
     }
 
