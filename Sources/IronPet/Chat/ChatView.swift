@@ -1163,10 +1163,14 @@ private struct UserBubble: View {
                     Image(systemName: "paperplane.fill").font(.system(size: 9))
                     Text("Telegram").font(.system(size: 10))
                 }
+                if source == ChatSession.automationOrigin {
+                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 9))
+                    Text("Automation").font(.system(size: 10))
+                }
                 if let date { Text(timeFormatter.string(from: date)).font(.system(size: 10)) }
             }
             .foregroundStyle(.tertiary)
-            .help(source == ChatSession.telegramOrigin ? "Sent from Telegram" : "")
+            .help(source == ChatSession.telegramOrigin ? "Sent from Telegram" : source == ChatSession.automationOrigin ? "Sent by an automation" : "")
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 50)

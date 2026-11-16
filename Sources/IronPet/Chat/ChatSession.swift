@@ -46,6 +46,17 @@ final class ChatSession: ObservableObject {
         /// The Telegram chat id when the message came from Telegram. Those are never put back in the Mac input.
         var telegram: Int64? = nil
         var reply: Reply? = nil
+        /// The id of the automation that sent the message. Those are never put back in the Mac input.
+        var automation: String? = nil
+    }
+
+    /// What happened to a turn that an automation started, for `onAutomation`.
+    enum AutomationEvent: Equatable {
+        case started
+        case finished
+        case failed(String)
+        /// The user or the chat ended it before or during the run. Not a fault in the automation.
+        case cancelled(String)
     }
 
     /// What happened to a turn that started from Telegram, for `onTelegram`.
@@ -65,6 +76,7 @@ final class ChatSession: ObservableObject {
     enum ApprovalOutcome: Equatable { case allowed, denied, ended }
 
     static let telegramOrigin = "telegram"
+    static let automationOrigin = "automation"
 
     struct Approval: Identifiable {
         let id = UUID()
@@ -179,6 +191,9 @@ final class ChatSession: ObservableObject {
     var isVisible = false
     /// Reports progress of turns that came from Telegram, with the Telegram chat id.
     var onTelegram: ((Int64, TelegramEvent) -> Void)?
+    /// Reports the start and end of a turn that an automation sent (`submitFromAutomation`).
+    var onAutomation: ((String, AutomationEvent) -> Void)?
+    private var automationRun: String?
     private var telegramChat: Int64?
 
     private(set) var threadID: String? {
@@ -519,27 +534,29 @@ final class ChatSession: ObservableObject {
 
     /// Starts a turn. Returns false, without sending, when no folder is chosen or the hooks are missing.
     @discardableResult
-    private func start(prompt: String, shots: [URL], telegram: Int64? = nil, reply: Reply? = nil) -> Bool {
+    private func start(prompt: String, shots: [URL], telegram: Int64? = nil, reply: Reply? = nil, automation: String? = nil) -> Bool {
         var prompt = prompt
-        if telegram != nil, workspace == nil {
+        if telegram != nil || automation != nil, workspace == nil {
             // No chat has a folder yet. The no-project folder is what a chat with no code context uses.
             try? FileManager.default.createDirectory(at: Self.scratchWorkspace, withIntermediateDirectories: true)
             workspace = Self.scratchWorkspace
             needsWorkspace = false
         }
         // A Telegram message uses the chat as it is, so it does not wait for a folder pick.
-        guard telegram != nil || !needsWorkspace, let workspace else {
+        guard telegram != nil || automation != nil || !needsWorkspace, let workspace else {
             needsWorkspace = true
             return false
         }
-        if telegram != nil, state == .done || state == .failed { state = .idle }
+        if telegram != nil || automation != nil, state == .done || state == .failed { state = .idle }
         if prompt.isEmpty { prompt = telegram == nil ? "Help me with what's on my screen." : "Help me with the attached file." }
-        let origin = telegram == nil ? nil : Self.telegramOrigin
+        let origin = telegram != nil ? Self.telegramOrigin : automation != nil ? Self.automationOrigin : nil
         items += shots.map { Item(kind: .screenshot($0.path), origin: origin) }
         items.append(Item(kind: .user(prompt), origin: origin, reply: reply))
         let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
         telegramChat = telegram
         if let telegram { onTelegram?(telegram, .started) }
+        automationRun = automation
+        if let automation { onAutomation?(automation, .started) }
         run(ACPTurn(prompt: reply.map { Self.replyPrompt($0, text: prompt) } ?? prompt, preamble: preamble, workspace: workspace, resume: threadID, model: model,
                     images: shots.filter(ImageIntake.isImageFile), files: shots.filter { !ImageIntake.isImageFile($0) }))
         return true
@@ -568,14 +585,17 @@ final class ChatSession: ObservableObject {
     }
 
     func removeQueued(_ id: UUID) {
+        if let automation = queue.first(where: { $0.id == id })?.automation { onAutomation?(automation, .cancelled("Removed from the queue.")) }
         queue.removeAll { $0.id == id }
     }
 
     /// Puts queued messages back in the input, after any text already there, so nothing is lost. Messages that came
     /// from Telegram go back to Telegram as a failure instead: they are not the Mac user's draft.
-    private func restoreQueue(telegramReason: String = "Cancelled on the Mac before it started.") {
-        for message in queue { if let chat = message.telegram { onTelegram?(chat, .failed(telegramReason)) } }
+    private func restoreQueue(reason: String = "Cancelled on the Mac before it started.") {
+        for message in queue { if let chat = message.telegram { onTelegram?(chat, .failed(reason)) } }
         queue.removeAll { $0.telegram != nil }
+        for message in queue { if let id = message.automation { onAutomation?(id, .cancelled(reason)) } }
+        queue.removeAll { $0.automation != nil }
         guard !queue.isEmpty else { return }
         let text = queue.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
         let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -589,7 +609,7 @@ final class ChatSession: ObservableObject {
     /// Sends the oldest queued message through the normal path.
     private func sendNextQueued() {
         guard let next = queue.first else { return }
-        if start(prompt: next.text, shots: next.attachments, telegram: next.telegram, reply: next.reply) {
+        if start(prompt: next.text, shots: next.attachments, telegram: next.telegram, reply: next.reply, automation: next.automation) {
             queue.removeFirst()
         } else {
             restoreQueue()
@@ -610,6 +630,33 @@ final class ChatSession: ObservableObject {
         start(prompt: prompt, shots: files, telegram: chat, reply: reply)
     }
 
+    /// A prompt from an automation. It goes into the chat that is open now, in the current thread and folder, and
+    /// waits in the queue behind a running turn. The user's draft and attachments stay as they are. Without a folder
+    /// it uses the no-project folder instead of asking. Returns false when this automation's earlier message is still
+    /// queued or running, or the message could not start.
+    @discardableResult
+    func submitFromAutomation(_ text: String, automation: String) -> Bool {
+        let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, !hasAutomationRun(automation) else { return false }
+        guard !isRunning else {
+            queue.append(QueuedMessage(text: prompt, attachments: [], automation: automation))
+            return true
+        }
+        return start(prompt: prompt, shots: [], automation: automation)
+    }
+
+    /// True while a message from this automation is queued or its turn is running.
+    func hasAutomationRun(_ id: String) -> Bool {
+        automationRun == id || queue.contains { $0.automation == id }
+    }
+
+    /// Tells the automation how its turn ended. Called before the next queued message starts.
+    private func finishAutomationTurn(error: String?) {
+        guard let id = automationRun else { return }
+        automationRun = nil
+        onAutomation?(id, error.map { .failed($0) } ?? .finished)
+    }
+
     /// Applies a decision from Telegram through the same path as the Mac's Allow and Deny buttons.
     func decideFromTelegram(id: UUID, allow: Bool) {
         decide(id: id, allow: allow)
@@ -617,7 +664,7 @@ final class ChatSession: ObservableObject {
 
     func hasPendingApproval(_ id: UUID) -> Bool { approvals.contains { $0.id == id } }
 
-    var telegramQueueCount: Int { queue.count }
+    var telegramQueueCount: Int { queue.filter { $0.automation == nil }.count }
 
     func cancelTelegram(chat: Int64) {
         queue.removeAll { $0.telegram == chat }
@@ -626,6 +673,7 @@ final class ChatSession: ObservableObject {
 
     /// Tells Telegram how its turn ended. Called before the next queued message starts, which replaces `telegramChat`.
     private func finishTelegramTurn(error: String?) {
+        finishAutomationTurn(error: error)
         guard let chat = telegramChat else { return }
         telegramChat = nil
         if let error {
@@ -678,6 +726,10 @@ final class ChatSession: ObservableObject {
         activity = nil
         runStartedAt = nil
         if state == .running { state = .idle }
+        if let id = automationRun {
+            automationRun = nil
+            onAutomation?(id, .cancelled("Stopped on the Mac."))
+        }
         if let chat = telegramChat {
             telegramChat = nil
             onTelegram?(chat, .failed("Stopped on the Mac."))
@@ -821,14 +873,14 @@ final class ChatSession: ObservableObject {
             items.append(Item(kind: .error("\(agent.name) needs you to sign in.")))
             state = .failed
             finishTelegramTurn(error: "\(agent.name) needs you to sign in on the Mac.")
-            restoreQueue(telegramReason: "\(agent.name) needs you to sign in on the Mac.")
+            restoreQueue(reason: "\(agent.name) needs you to sign in on the Mac.")
         case .needsRuntime:
             endTurn()
             // Not a failure: the chat waits for the user to allow the download.
             runtimeOffer = agent.name
             state = .idle
             finishTelegramTurn(error: "\(agent.name) needs a runtime download. Approve it on the Mac.")
-            restoreQueue(telegramReason: "\(agent.name) needs a runtime download. Approve it on the Mac.")
+            restoreQueue(reason: "\(agent.name) needs a runtime download. Approve it on the Mac.")
         case .assistant, .toolStarted, .toolFinished:
             applyTranscript(event)
         case .finished(let error):
@@ -842,7 +894,7 @@ final class ChatSession: ObservableObject {
                 let name = ConfigStore.shared.config.pet.name
                 onAttention?(error == nil ? "\(name) finished your task" : "\(name)'s task failed")
             }
-            if error == nil { sendNextQueued() } else { restoreQueue(telegramReason: "The turn before it failed, so this message did not run.") }
+            if error == nil { sendNextQueued() } else { restoreQueue(reason: "The turn before it failed, so this message did not run.") }
         }
     }
 
