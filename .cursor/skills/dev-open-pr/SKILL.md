@@ -71,7 +71,9 @@ The same checks CI runs, from the repo root:
 
 7. **Create the PR** with `gh pr create --base "$BASE"`. Always pass `--body` via a HEREDOC.
 
-8. **Return the PR URL**.
+8. **Add screenshots** for UI changes, as in [Screenshots](#screenshots).
+
+9. **Return the PR URL**.
 
 ## Do not commit
 
@@ -133,6 +135,8 @@ Examples:
 <Not verified: what still needs a manual check, with the steps to do it>
 ```
 
+For UI changes, a **Screenshots** section goes between **What** and **How**; see [Screenshots](#screenshots).
+
 ## Body Writing Rules
 
 ### What
@@ -156,7 +160,28 @@ Examples:
 - Mark `[x]` only for checks already run in this session. Leave the rest `[ ]` with the reason (for example "uses agent quota", "needs a real call").
 - Behavior that only shows in the installed app (hotkeys, Screen Recording, notifications, microphone) is either walked through in `/Applications/IronPet.app` or listed under **Not verified** with steps.
 - Name the e2e scenarios that cover the change (see `.cursor/skills/dev-code-review/app.md` › Gates), whether they ran or not.
-- UI changes: list the rendered preview paths and tell the user to drag them into the PR, since `gh` cannot upload images.
+- UI changes: show the rendered previews in the PR, as in [Screenshots](#screenshots).
+
+## Screenshots
+
+`gh` cannot upload images (GitHub's attachment upload is web-only), so PR screenshots live on the `pr-screenshots` branch, one `pr-<number>/` folder per PR, and the PR body links to them. That branch has no history in common with `main`: never merge it, rebase it or open a PR from it.
+
+- Only images rendered from sample data: `.build/debug/IronPet --render-previews <dir> --sprite build/ghost-sheet.png` (build the sprite with `swift tools/make_pet.swift ghost build/ghost-sheet.png`). Never a capture of the user's screen, sessions, chats or meetings.
+- Upload after `gh pr create`, once the number is known, through a temporary worktree so the PR branch and working tree are untouched:
+
+```bash
+N=<pr number>; SHOTS=<dir with the PNGs>; WT=$(mktemp -d)/pr-screenshots
+git fetch origin pr-screenshots
+git worktree add --detach "$WT" origin/pr-screenshots
+mkdir -p "$WT/pr-$N" && cp "$SHOTS"/*.png "$WT/pr-$N/"
+git -C "$WT" add "pr-$N" && git -C "$WT" commit -m "Screenshots for PR #$N (sample data)"
+git -C "$WT" push origin HEAD:pr-screenshots
+git worktree remove "$WT"
+```
+
+- Add the section with `gh pr edit <N> --body-file <file>`, linking `https://github.com/<owner>/<repo>/blob/pr-screenshots/pr-<N>/<name>.png?raw=true` (a two-column table reads well). Check one link returns `content-type: image/png` with `curl -sIL`.
+- Name what could not be rendered offscreen (on macOS 27 the chat's glass bars come out white, and the Settings window needs the running app) and put the manual check under **Not verified**.
+- A `docs/screenshots/` image the README shows still goes in the PR itself, rendered with `./scripts/screenshots.sh`.
 
 ## Example
 
