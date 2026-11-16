@@ -857,6 +857,16 @@ final class AutomationServerTests: AutomationTestCase {
         XCTAssertTrue(history.text.contains("fired"), history.text)
     }
 
+    func testCreateValidatesOnceTriggersAgainstTheInjectedClock() async throws {
+        clock.now = AutomationTestClock.calendar.date(from: DateComponents(year: 2030, month: 1, day: 7, hour: 8))!
+        let action: [String: Any] = ["type": "bubble", "title": "x"]
+        let future = try await tool("automations_create", ["name": "Soon", "trigger": ["type": "once", "at": AutomationClock.format(clock.now.addingTimeInterval(120))], "action": action])
+        XCTAssertFalse(future.isError, future.text)
+        let past = try await tool("automations_create", ["name": "Earlier", "trigger": ["type": "once", "at": AutomationClock.format(clock.now.addingTimeInterval(-60))], "action": action])
+        XCTAssertTrue(past.isError)
+        XCTAssertTrue(past.text.contains("trigger.at is in the past"), past.text)
+    }
+
     func testCreateReportsValidationProblemsToTheAgent() async throws {
         let bad = try await tool("automations_create", ["name": "Bad", "trigger": ["type": "interval", "minutes": 0], "action": ["type": "bubble"]])
         XCTAssertTrue(bad.isError)
