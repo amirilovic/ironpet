@@ -255,4 +255,4 @@ Follow [review-and-pr.md → PR](review-and-pr.md#pr).
 - [ ] Previews reviewed for UI changes; installed-app and e2e checks run or listed as not run
 - [ ] README, SPEC and SECURITY updated for what changed
 - [ ] Final fresh reviewer status is Approved or Approved with minor changes
-- [ ] PR opened; URL, preview paths to drag in, and checks not run reported to the user
+- [ ] PR opened with its screenshots on `pr-screenshots`; URL and checks not run reported to the user

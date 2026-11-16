@@ -54,6 +54,6 @@ Read and follow `.cursor/skills/dev-open-pr/SKILL.md`. Additionally:
 
 - **Verification** lists the gates the final reviewer ran (with counts) as checked items, the installed-app walk-through and e2e scenarios that ran, and the ones that did not as `[ ]` with the reason.
 - **Safety and privacy** says what the change touches on the user's Mac and points at the `SECURITY.md` lines. Omit it only when the change touches nothing new.
-- For UI changes, add a **Screenshots** section after **Verification** listing each rendered preview's absolute local path with a one-line caption. `gh` cannot upload images, so tell the user to drag those files into the PR description.
+- For UI changes, upload the rendered previews to the `pr-screenshots` branch and show them in a **Screenshots** section, as in `dev-open-pr` › Screenshots.
 
-Return the PR URL to the user, plus anything they still have to do (drag screenshots in, run the e2e scenarios that were skipped, check the installed app).
+Return the PR URL to the user, plus anything they still have to do (run the e2e scenarios that were skipped, check the installed app, look at what could not be rendered).
