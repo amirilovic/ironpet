@@ -17,9 +17,7 @@ final class ChatPanel: NSPanel {
                    styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
-        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            standardWindowButton(button)?.isHidden = true
-        }
+        hideStandardWindowButtons()
         backgroundColor = .windowBackgroundColor
         hasShadow = true
         level = .floating
@@ -45,6 +43,12 @@ final class ChatPanel: NSPanel {
     }
 
     override var canBecomeKey: Bool { true }
+
+    /// AppKit re-shows the buttons on layout, key and appearance changes. Hide them again each pass.
+    override func update() {
+        super.update()
+        hideStandardWindowButtons()
+    }
 
     /// Intercepts ⌘V only when the pasteboard holds an image and no text; text paste stays with the field.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

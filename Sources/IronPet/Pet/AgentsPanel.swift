@@ -11,9 +11,7 @@ final class AgentsPanel: NSPanel {
                    styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
-        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            standardWindowButton(button)?.isHidden = true
-        }
+        hideStandardWindowButtons()
         isMovable = false
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -37,6 +35,12 @@ final class AgentsPanel: NSPanel {
     }
 
     override var canBecomeKey: Bool { true }
+
+    /// AppKit re-shows the buttons on layout, key and appearance changes. Hide them again each pass.
+    override func update() {
+        super.update()
+        hideStandardWindowButtons()
+    }
 
     override func cancelOperation(_ sender: Any?) { close() }
 
