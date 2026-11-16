@@ -17,6 +17,14 @@ struct ChatView: View {
     @State private var resizeEnd: DispatchWorkItem?
     /// How many of the newest items the transcript renders. A resumed session can hold thousands.
     @State private var shownItems = TranscriptGroup.pageSize
+    @State private var findQuery = ""
+    /// The query after a 150 ms pause, so typing does not search and re-render on every keystroke.
+    @State private var activeQuery = ""
+    @State private var findMatches: [ChatFind.Match] = []
+    @State private var findIndex: Int?
+    @State private var findDebounce: DispatchWorkItem?
+    @State private var streamRecount: DispatchWorkItem?
+    @State private var findScrollTick = 0
     /// `--render-previews` only: draw the settings popover's content on its own, since a popover can't render offscreen.
     var settingsOnly = false
 
@@ -34,7 +42,15 @@ struct ChatView: View {
                 transcript
             }
         }
-        .glassBar(.top) { header }
+        .glassBar(.top) {
+            VStack(spacing: 0) {
+                header
+                if session.findOpen {
+                    FindBar(query: $findQuery, label: findLabel, hasMatches: !findMatches.isEmpty,
+                            focusTick: session.findFocusTick, step: stepFind, close: closeFind)
+                }
+            }
+        }
         .glassBar(.bottom) { composer }
         .frame(minWidth: ChatPanel.minimumSize.width, maxWidth: .infinity,
                minHeight: ChatPanel.minimumSize.height, maxHeight: .infinity)
@@ -42,6 +58,9 @@ struct ChatView: View {
         // The panel has a hidden, transparent title bar; without this its 28pt safe area sits empty above the header.
         .ignoresSafeArea(.container, edges: .top)
         .onAppear { inputFocused = true }
+        .onChange(of: findQuery) { scheduleFind() }
+        .onChange(of: session.findOpen) { if !session.findOpen { resetFind() } }
+        .onChange(of: scrollKey) { if session.findOpen { scheduleStreamRecompute() } }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -276,8 +295,9 @@ struct ChatView: View {
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity)
                     }
+                    let highlights = findHighlights
                     ForEach(groupedItems, id: \.id) { group in
-                        groupView(group).id(group.id)
+                        groupView(group, highlights: highlights).id(group.id)
                     }
                     if session.isRunning, session.approvals.isEmpty {
                         TypingIndicator(started: session.runStartedAt).id("typing")
@@ -300,13 +320,15 @@ struct ChatView: View {
                 // Streaming only follows the end while the reader is there. Sending a message always jumps to it.
                 var sent = false
                 if case .user = session.items.last?.kind { sent = true }
-                guard pinnedToBottom || sent else { return }
+                // With the find bar on a match, the view stays on it; only sending jumps away.
+                guard (pinnedToBottom && currentFindMatch == nil) || sent else { return }
                 // Lazy rows below the viewport only have estimated heights, so the first jump can land short.
                 // A second jump after layout settles reaches the real end.
                 proxy.scrollTo("bottom", anchor: .bottom)
                 DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: findScrollTick) { revealCurrentMatch(proxy) }
             // A new chat or another thread starts with the default window again.
             .onChange(of: session.items.first?.id) { shownItems = TranscriptGroup.pageSize }
         }
@@ -341,6 +363,116 @@ struct ChatView: View {
         }
     }
 
+    // MARK: Find
+
+    private var currentFindMatch: ChatFind.Match? {
+        guard session.findOpen, let findIndex, findMatches.indices.contains(findIndex) else { return nil }
+        return findMatches[findIndex]
+    }
+
+    private var findLabel: String {
+        ChatFind.label(query: activeQuery, count: findMatches.count, index: findIndex)
+    }
+
+    /// Rows that hold a match, with what each needs to draw.
+    private var findHighlights: [UUID: ChatFind.RowHighlight] {
+        guard session.findOpen else { return [:] }
+        return ChatFind.highlights(query: activeQuery, matches: findMatches, current: currentFindMatch)
+    }
+
+    private func scheduleFind() {
+        findDebounce?.cancel()
+        let work = DispatchWorkItem {
+            activeQuery = findQuery
+            recomputeFind(keepCurrent: false)
+            findScrollTick += 1
+        }
+        findDebounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    /// A streaming reply changes the transcript on every token. Recount at most once per pause so a long chat stays responsive.
+    private func scheduleStreamRecompute() {
+        // Keep the pending recount instead of re-arming it, or a fast stream would never let it run.
+        guard findQuery == activeQuery, streamRecount == nil else { return }
+        let work = DispatchWorkItem {
+            streamRecount = nil
+            recomputeFind(keepCurrent: true)
+        }
+        streamRecount = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    /// Recounts after the query or the transcript changed. A streaming reply keeps the current match in place.
+    private func recomputeFind(keepCurrent: Bool) {
+        let matches = ChatFind.matches(query: activeQuery, in: session.items)
+        // A new query restarts at the first match even when the set of matches did not change.
+        guard matches != findMatches || !keepCurrent else {
+            if !keepCurrent { findIndex = matches.isEmpty ? nil : 0 }
+            return
+        }
+        let previous = keepCurrent ? currentFindMatch : nil
+        let previousIndex = findIndex
+        findMatches = matches
+        findIndex = ChatFind.reconcile(current: previous, previousIndex: previousIndex, in: matches)
+    }
+
+    private func stepFind(_ delta: Int) {
+        // A pending debounce would replace the matches right after stepping, so apply the typed query first.
+        if findQuery != activeQuery {
+            findDebounce?.cancel()
+            activeQuery = findQuery
+            recomputeFind(keepCurrent: false)
+            if delta < 0, !findMatches.isEmpty { findIndex = findMatches.count - 1 }
+            findScrollTick += 1
+            return
+        }
+        guard let next = ChatFind.step(from: findIndex, count: findMatches.count, by: delta) else { return }
+        findIndex = next
+        findScrollTick += 1
+    }
+
+    private func closeFind() {
+        session.findOpen = false
+        DispatchQueue.main.async { inputFocused = true }
+    }
+
+    private func resetFind() {
+        findDebounce?.cancel()
+        streamRecount?.cancel()
+        streamRecount = nil
+        findQuery = ""
+        activeQuery = ""
+        findMatches = []
+        findIndex = nil
+    }
+
+    /// Scrolls the row holding the current match into view, first widening the window over an older one.
+    private func revealCurrentMatch(_ proxy: ScrollViewProxy) {
+        guard let match = currentFindMatch, let position = session.items.firstIndex(where: { $0.id == match.item }) else { return }
+        let needed = session.items.count - position
+        if needed > shownItems {
+            shownItems = needed + TranscriptGroup.pageSize / 3
+            // The older rows join the lazy stack on the next render, so scroll once they exist.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { scrollToMatch(match, proxy) }
+            return
+        }
+        scrollToMatch(match, proxy)
+    }
+
+    private func scrollToMatch(_ match: ChatFind.Match, _ proxy: ScrollViewProxy) {
+        let target = groupedItems.first { group in
+            switch group {
+            case .item(let item): return item.id == match.item
+            case .tools(let items): return items.contains { $0.id == match.item }
+            }
+        }?.id
+        guard let target else { return }
+        proxy.scrollTo(target, anchor: .center)
+        // Rows below the viewport only have estimated heights, so settle once layout has caught up.
+        DispatchQueue.main.async { proxy.scrollTo(target, anchor: .center) }
+    }
+
     private var scrollKey: String {
         "\(session.items.count)-\(session.approvals.count)-\(session.isRunning)-\(lastAssistantLength)"
     }
@@ -360,26 +492,26 @@ struct ChatView: View {
     }
 
     @ViewBuilder
-    private func groupView(_ group: TranscriptGroup) -> some View {
+    private func groupView(_ group: TranscriptGroup, highlights: [UUID: ChatFind.RowHighlight]) -> some View {
         switch group {
         case .tools(let items):
-            ToolSteps(items: items)
+            ToolSteps(items: items, finds: items.compactMap { item in highlights[item.id].map { (item.id, $0) } })
         case .item(let item):
             switch item.kind {
             case .user(let text):
-                UserBubble(text: text, date: item.date, source: item.origin)
+                UserBubble(text: text, date: item.date, source: item.origin, find: highlights[item.id])
             case .screenshot(let path):
                 HStack {
                     Spacer(minLength: 60)
                     Thumbnail(path: path, height: 110)
                 }
             case .assistant(let text):
-                AssistantBubble(text: text, date: item.date)
+                AssistantBubble(text: text, date: item.date, find: highlights[item.id])
             case .tool:
                 EmptyView()
             case .error(let text):
                 VStack(alignment: .leading, spacing: 8) {
-                    Label(text, systemImage: "exclamationmark.triangle.fill")
+                    Label { ChatFind.text(AttributedString(text), segment: 0, find: highlights[item.id]) } icon: { Image(systemName: "exclamationmark.triangle.fill") }
                         .font(.system(size: 12))
                         .foregroundStyle(.red)
                     if session.voiceRetryItem == item.id {
@@ -719,10 +851,11 @@ private struct UserBubble: View {
     let date: Date?
     /// Where the message came from when it was not typed in this chat, such as "telegram".
     var source: String?
+    var find: ChatFind.RowHighlight?
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
-            Text(text)
+            ChatFind.text(AttributedString(text), segment: 0, find: find)
                 .font(.system(size: 13.5))
                 .foregroundStyle(.white)
                 .textSelection(.enabled)
@@ -747,12 +880,13 @@ private struct UserBubble: View {
 private struct AssistantBubble: View {
     let text: String
     let date: Date?
+    var find: ChatFind.RowHighlight?
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             PetAvatar(size: 24)
             VStack(alignment: .leading, spacing: 3) {
-                MarkdownView(text: text)
+                MarkdownView(text: text, find: find)
                     .font(.system(size: 13.5))
                     .padding(.top, 3)
                 if let date {
@@ -768,6 +902,8 @@ private struct AssistantBubble: View {
 /// While a step is still running, the line shows it with a spinner so you can see progress without expanding.
 private struct ToolSteps: View {
     let items: [ChatSession.Item]
+    /// Highlights for the steps that hold a match, by item id.
+    var finds: [(UUID, ChatFind.RowHighlight)] = []
     @State private var expanded = false
     @State private var hovering = false
 
@@ -805,7 +941,8 @@ private struct ToolSteps: View {
                         if index > 0 { Rectangle().fill(Color.primary.opacity(0.07)).frame(height: 1) }
                         HStack(spacing: 6) {
                             icon(step.ok)
-                            Text(LocalizedStringKey(step.summary)).lineLimit(1).truncationMode(.middle)
+                            stepText(step)
+                                .lineLimit(1).truncationMode(.middle)
                                 .textSelection(.enabled)
                             Spacer(minLength: 0)
                         }
@@ -823,6 +960,19 @@ private struct ToolSteps: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 32)
+        // The step holding the current match opens, so the highlight is visible. Collapsed steps still count.
+        .onChange(of: finds.first { $0.1.current != nil }?.0) { _, id in
+            if id != nil, !expanded { withAnimation(.easeInOut(duration: 0.15)) { expanded = true } }
+        }
+        // A lazy row scrolled to from far away is created with the match already current, so onChange never fires.
+        .onAppear {
+            if finds.contains(where: { $0.1.current != nil }) { expanded = true }
+        }
+    }
+
+    private func stepText(_ step: (id: UUID, summary: String, ok: Bool?)) -> Text {
+        guard let find = finds.first(where: { $0.0 == step.id })?.1 else { return Text(LocalizedStringKey(step.summary)) }
+        return ChatFind.text(Markdown.inline(step.summary), segment: 0, find: find)
     }
 
     @ViewBuilder
