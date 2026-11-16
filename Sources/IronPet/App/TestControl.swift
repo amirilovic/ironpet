@@ -90,6 +90,12 @@ final class TestControl {
             guard let first = chat.approvals.first else { return Self.encode(["ok": false, "error": "no pending approval"]) }
             chat.decide(first, allow: body["allow"] as? Bool ?? false)
             return Self.encode(["ok": true, "title": first.title])
+        case ("GET", "/test/cursor"):
+            // The cursor the app has pushed or set, for checking pointing-hand hover without a screenshot.
+            let cursor = NSCursor.current
+            let name = cursor == NSCursor.pointingHand ? "pointingHand" : cursor == NSCursor.arrow ? "arrow"
+                : cursor == NSCursor.iBeam ? "iBeam" : "other"
+            return Self.encode(["cursor": name])
         case ("POST", "/test/scroll"):
             return Self.encode(actions.scrollChat(body["fraction"] as? Double, body["snapshot"] as? String))
         case ("POST", "/test/open-session"):

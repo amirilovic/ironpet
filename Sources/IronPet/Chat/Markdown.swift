@@ -245,19 +245,24 @@ struct MarkdownView: View {
         .environment(\.openURL, OpenURLAction { FilePathLinks.handle($0) })
     }
 
-    private func inline(_ text: String, _ segment: Int) -> Text {
-        ChatFind.text(Markdown.inline(text), segment: segment, find: find)
+    /// The reply font set by the caller, which the link cursor layout has to match.
+    static let baseSize: CGFloat = 13.5
+
+    private func linked(_ text: String, _ segment: Int, size: CGFloat = baseSize, lineSpacing: CGFloat = 0, weight: NSFont.Weight = .regular) -> some View {
+        let parsed = Markdown.inline(text)
+        return ChatFind.text(parsed, segment: segment, find: find).lineSpacing(lineSpacing)
+            .linkCursor(parsed, size: size, lineSpacing: lineSpacing, weight: weight)
     }
 
     @ViewBuilder
     private func view(for block: Markdown.Block, segment: Int) -> some View {
         switch block {
         case .heading(let level, let text):
-            inline(text, segment)
+            linked(text, segment, size: level == 1 ? 17 : level == 2 ? 15.5 : 14, weight: level <= 2 ? .bold : .semibold)
                 .font(.system(size: level == 1 ? 17 : level == 2 ? 15.5 : 14, weight: level <= 2 ? .bold : .semibold))
                 .padding(.top, 2)
         case .paragraph(let text):
-            inline(text, segment).lineSpacing(2)
+            linked(text, segment, lineSpacing: 2)
         case .list(let ordered, let items):
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
@@ -267,7 +272,7 @@ struct MarkdownView: View {
         case .quote(let text):
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 1.5).fill(Color.secondary.opacity(0.4)).frame(width: 3)
-                inline(text, segment).foregroundStyle(.secondary)
+                linked(text, segment).foregroundStyle(.secondary)
             }
             .fixedSize(horizontal: false, vertical: true)
         case .code(let language, let text, let closed):
@@ -294,7 +299,9 @@ private struct ListRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             bullet.frame(minWidth: ordered ? 18 : 10, alignment: .trailing)
-            ChatFind.text(Markdown.inline(task?.text ?? item.text), segment: segment, find: find).lineSpacing(2)
+            let text = Markdown.inline(task?.text ?? item.text)
+            ChatFind.text(text, segment: segment, find: find).lineSpacing(2)
+                .linkCursor(text, size: MarkdownView.baseSize, lineSpacing: 2)
         }
         .padding(.leading, CGFloat(item.indent) * 14)
     }
@@ -336,6 +343,7 @@ private struct CodeBlock: View {
                         .font(.system(size: 10.5))
                 }
                 .buttonStyle(.borderless)
+                .pointerCursor()
                 .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 10)

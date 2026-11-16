@@ -56,12 +56,15 @@ struct FindBar: View {
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("findLabel")
             Button { step(-1) } label: { Image(systemName: "chevron.up") }
+                .pointerCursor()
                 .help("Previous match (Shift-Return)")
                 .disabled(!hasMatches)
             Button { step(1) } label: { Image(systemName: "chevron.down") }
+                .pointerCursor()
                 .help("Next match (Return)")
                 .disabled(!hasMatches)
             Button(action: close) { Image(systemName: "xmark") }
+                .pointerCursor()
                 .help("Close (Esc)")
         }
         .buttonStyle(.plain)
