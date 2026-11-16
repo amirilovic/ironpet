@@ -156,6 +156,7 @@ struct ChatView: View {
                         .toggleStyle(.switch)
                         .controlSize(.small)
                         .tint(.orange)
+                        .pointerCursor()
                 }
                 .help("Let the agent edit and run commands without asking (destructive commands still ask)")
                 SettingsRow("Send voice notes automatically", last: true) {
@@ -163,6 +164,7 @@ struct ChatView: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .controlSize(.small)
+                        .pointerCursor()
                 }
                 .help("Send a voice note recorded in ironpet as soon as it is transcribed. Pasted, typed and Wispr Flow text is never sent automatically")
             }
@@ -172,11 +174,13 @@ struct ChatView: View {
                     showSettings = false
                 } label: { Label("New chat", systemImage: "square.and.pencil") }
                 .buttonStyle(.borderedProminent)
+                .pointerCursor()
                 historyMenu
                 Button {
                     NSWorkspace.shared.open(Memory.directory)
                     showSettings = false
                 } label: { Label("Memory folder", systemImage: "brain") }
+                .pointerCursor()
                 .help("Open the notes Ghost keeps about you and your projects")
             }
             .controlSize(.small)
@@ -310,6 +314,7 @@ struct ChatView: View {
                     if hiddenItems > 0 {
                         Button("Show earlier messages (\(hiddenItems))") { shownItems += TranscriptGroup.pageSize }
                             .buttonStyle(.plain)
+                            .pointerCursor()
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity)
@@ -353,6 +358,7 @@ struct ChatView: View {
                             .chromeGlass(in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .pointerCursor()
                     .padding(.bottom, 8)
                     .transition(.opacity)
                     .accessibilityIdentifier("jump-to-latest")
@@ -599,6 +605,7 @@ struct ChatView: View {
                         .foregroundStyle(.red)
                     if session.voiceRetryItem == item.id {
                         Button("Retry", action: session.retryVoice)
+                            .pointerCursor()
                             .controlSize(.small)
                             .help("Send the same recording again")
                     }
@@ -629,11 +636,13 @@ struct ChatView: View {
                     Label("Allow", systemImage: "checkmark").frame(minWidth: 70)
                 }
                 .buttonStyle(.borderedProminent)
+                .pointerCursor()
                 .keyboardShortcut(.return, modifiers: .command)
                 Button { session.decide(approval, allow: false) } label: {
                     Label("Deny", systemImage: "xmark").frame(minWidth: 70)
                 }
                 .buttonStyle(.bordered)
+                .pointerCursor()
                 Spacer()
                 Text("⌘↩ to allow").font(.system(size: 10)).foregroundStyle(.secondary)
             }
@@ -655,9 +664,11 @@ struct ChatView: View {
                     Text(session.installingRuntime ? "Downloading…" : "Download Bun").frame(minWidth: 110)
                 }
                 .buttonStyle(.borderedProminent)
+                .pointerCursor()
                 .disabled(session.installingRuntime)
                 Button("Not now") { session.declineRuntime() }
                     .buttonStyle(.bordered)
+                    .pointerCursor()
                     .disabled(session.installingRuntime)
             }
         }
@@ -674,10 +685,12 @@ struct ChatView: View {
                 ForEach(session.signInOptions) { method in
                     Button(method.name) { session.signIn(method) }
                         .buttonStyle(.borderedProminent)
+                        .pointerCursor()
                         .help(method.detail)
                 }
                 Button("Try again") { session.retryAfterFix() }
                     .buttonStyle(.bordered)
+                    .pointerCursor()
             }
         }
         .padding(12)
@@ -760,6 +773,7 @@ struct ChatView: View {
                                     Image(systemName: "xmark.circle.fill").foregroundStyle(.white, .black.opacity(0.6))
                                 }
                                 .buttonStyle(.plain)
+                                .pointerCursor()
                                 .padding(2)
                             }
                     }
@@ -822,6 +836,7 @@ struct ChatView: View {
                             Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
+                        .pointerCursor()
                         .help("Remove from queue")
                     }
                     .padding(.horizontal, 8)
@@ -843,6 +858,7 @@ struct ChatView: View {
                 .tintedCircle(color)
         }
         .buttonStyle(.plain)
+        .pointerCursor()
         .help(help)
     }
 
@@ -939,8 +955,10 @@ private struct UserBubble: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
-            ChatFind.text(FilePathLinks.link(AttributedString(text), underline: true), segment: 0, find: find)
+            let linked = FilePathLinks.link(AttributedString(text), underline: true)
+            ChatFind.text(linked, segment: 0, find: find)
                 .font(.system(size: 13.5))
+                .linkCursor(linked, size: 13.5)
                 .foregroundStyle(.white)
                 .tint(.white)
                 .environment(\.openURL, OpenURLAction { FilePathLinks.handle($0) })
@@ -1018,6 +1036,7 @@ private struct ToolSteps: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .pointerCursor()
             .onHover { hovering = $0 }
             .help(expanded ? "Hide steps" : "Show steps")
 
@@ -1270,6 +1289,7 @@ struct Thumbnail: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.15)))
                 .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+                .pointerCursor()
                 .help("Open screenshot")
         } else {
             // Not an image: show the file's own icon and name, like a Finder attachment.
@@ -1289,6 +1309,7 @@ struct Thumbnail: View {
             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.15)))
             .onTapGesture { NSWorkspace.shared.open(url) }
+            .pointerCursor()
             .help("Open \(url.lastPathComponent)")
         }
     }
@@ -1376,6 +1397,7 @@ private struct PickerRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .pointerCursor()
         .onHover { hovering = $0 }
     }
 }
@@ -1451,6 +1473,7 @@ private struct SlashPopup: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .pointerCursor()
                         .id(command.id)
                     }
                 }

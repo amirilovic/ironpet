@@ -113,6 +113,7 @@ struct CircleHoverIconStyle: ButtonStyle {
                 .background(Color.primary.opacity(configuration.isPressed ? 0.14 : hovering ? 0.08 : 0), in: Circle())
                 .contentShape(Circle())
                 .onHover { hovering = $0 }
+                .pointerCursor()
         }
     }
 }
@@ -130,5 +131,44 @@ struct GlassCircleButtonStyle: ButtonStyle {
             .contentShape(Circle())
             .interactiveGlass(in: Circle())
             .opacity(configuration.isPressed ? 0.7 : 1)
+            .pointerCursor()
     }
+}
+
+/// Shows the pointing-hand cursor while the mouse is over the view. The cursor is pushed on entry and popped on exit
+/// or when the view leaves the hierarchy, so a button that disappears under the mouse cannot leave it stuck.
+private struct PointerCursorModifier: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+    @State private var pushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                hovering = inside
+                sync()
+            }
+            .onChange(of: isEnabled) { sync() }
+            .onDisappear {
+                hovering = false
+                sync()
+            }
+    }
+
+    /// Pushes the hand while the mouse is inside an enabled view, and pops it as soon as either stops being true.
+    private func sync() {
+        let want = hovering && isEnabled
+        if want && !pushed {
+            pushed = true
+            NSCursor.pointingHand.push()
+        } else if !want && pushed {
+            pushed = false
+            NSCursor.pop()
+        }
+    }
+}
+
+extension View {
+    /// The pointing-hand cursor over this view, for buttons and other clickable chrome in the chat.
+    func pointerCursor() -> some View { modifier(PointerCursorModifier()) }
 }
