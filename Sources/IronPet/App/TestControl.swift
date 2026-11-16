@@ -471,7 +471,10 @@ final class TestControl {
     }
 
     private static func json(_ suggestion: TaskSuggestion) -> [String: Any] {
-        ["id": suggestion.id, "title": suggestion.title, "due": suggestion.due ?? NSNull(), "meeting": suggestion.meeting.path]
+        var object: [String: Any] = ["id": suggestion.id, "title": suggestion.title, "due": suggestion.due ?? NSNull(),
+                                     "meeting": suggestion.meeting?.path ?? NSNull(), "url": suggestion.url?.absoluteString ?? NSNull()]
+        if case .automation(let id, let name) = suggestion.origin { object["automation"] = ["id": id, "name": name] }
+        return object
     }
 
     private var telegramTest = ""

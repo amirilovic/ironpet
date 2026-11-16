@@ -5,7 +5,7 @@ description: Create, change and debug ironpet automations, the reminders, watche
 
 # ironpet automations
 
-An automation is a small record in `~/.ironpet/automations.json` that ironpet runs on a schedule. When it fires, Ghost shows a bubble beside the pet, adds an alert to the alerts list, or asks an agent. You manage them with the `automations_*` MCP tools. If the tools are not available, use the CLI: `IronPet automations list|get|add|update|pause|resume|delete|run|history` (the app must be running).
+An automation is a small record in `~/.ironpet/automations.json` that ironpet runs on a schedule. When it fires, Ghost shows a bubble beside the pet, adds an alert to the alerts list, suggests a task, or asks an agent. You manage them with the `automations_*` MCP tools. If the tools are not available, use the CLI: `IronPet automations list|get|add|update|pause|resume|delete|run|history` (the app must be running).
 
 Tools: `automations_list`, `automations_get`, `automations_create`, `automations_update`, `automations_delete`, `automations_pause`, `automations_resume`, `automations_run_now`, `automations_history`.
 
@@ -75,6 +75,8 @@ Rules for the script:
   - `bubble`: a short-lived popup. Fields `title`, `body`, `severity` (`info`, `good`, `warn`, `bad`), `url` (adds an Open button), `symbol`, `expiresSeconds`, `id` (the same id replaces the old bubble).
   - `alert`: an open item in the alerts list. It also sets Ghost's mood and badge. Fields `id` (required), `title`, `subtitle`, `label`, `severity`, `url`, `ask` (the prompt for "Ask Ghost"), `version`. Send `{type:"alert", id, resolved:true}` when the thing is fixed.
   - `prompt`: `prompt`, `title`, `agent`, `model`. Asks an agent in a background session that can only read, and shows the answer. Unlike a top-level `prompt` action, it does not run in the chat.
+  - `suggest_task`: proposes a task from something the watcher found (an email, a Slack message, an issue). Fields `id` (required, stable for that thing, for example the message id), `title` (required), `due` (`YYYY-MM-DD`), `notes`, `url` (http or https). It lands in the Tasks section as a suggestion with Add and Skip, never as a task. Title is cut at 200 characters, notes at 2000, control characters are removed, and a `due` or `url` in another format is dropped. At most 10 per run.
+- A `suggest_task` with an `id` this automation suggested before is ignored, also after the user added or skipped it, so you can return the same items every run. A title that is already a task or a suggestion is ignored too. The first run adds suggestions quietly; later runs show one bubble per run with what is new.
 - An alert is shown with a bubble when it is new or changed. If you list it again unchanged, nothing happens, even if the user dismissed it. The first run (state is null) adds alerts quietly. List every alert that is still true on every run, and resolve the ones that are not.
 - The script has `sh(command, {timeoutSeconds})`, which returns `{code, stdout, stderr, timedOut}`, and `console.log(...)`. At most 8 `sh` calls per run, 60 seconds and 32 MiB in all. There is no `fetch`, no files, no modules, no timers. For the network run `curl` through `sh`.
 - Quote anything you put in a shell command. Prefer fixed commands and read values from the JSON you got back.

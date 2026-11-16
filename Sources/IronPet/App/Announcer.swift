@@ -134,14 +134,19 @@ final class Announcer {
         if alsoSystemNotifications { notifier.announceMeetingSummary(url) }
     }
 
-    /// Action items from a meeting summary that are the user's. Nothing becomes a task until they choose.
+    /// Action items from a meeting summary that are the user's, or tasks a watcher automation proposed. Nothing becomes a
+    /// task until they choose.
     func taskSuggestions(_ suggestions: [TaskSuggestion], addAll: @escaping () -> Void, review: @escaping () -> Void) {
-        guard !suggestions.isEmpty else { return }
+        guard let first = suggestions.first else { return }
         let count = suggestions.count
         var lines = suggestions.prefix(3).map { "• \($0.title)" }
         if count > 3 { lines.append("and \(count - 3) more") }
+        let title = switch first.origin {
+        case .meeting: "\(count) action \(count == 1 ? "item" : "items") from the meeting"
+        case .automation(_, let name): "\(count) suggested \(count == 1 ? "task" : "tasks") from \(name)"
+        }
         bubbles.show(Bubble(id: "task-suggestions", symbol: "checklist", tint: .accentColor,
-                            title: "\(count) action \(count == 1 ? "item" : "items") from the meeting", body: lines.joined(separator: "\n"),
+                            title: title, body: lines.joined(separator: "\n"),
                             actions: [.init(title: "Add all", style: .primary, run: addAll), .init(title: "Review", run: review)],
                             onTap: review, expires: Date().addingTimeInterval(60)))
         chime()

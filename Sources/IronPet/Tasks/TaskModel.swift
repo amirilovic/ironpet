@@ -19,13 +19,14 @@ enum TaskStatus: String, CaseIterable, Codable {
 
 /// What created a task. Shown as a symbol in the list.
 enum TaskSource: String, CaseIterable, Codable {
-    case chat, telegram, meeting, cli, agent, user, capture
+    case chat, telegram, meeting, automation, cli, agent, user, capture
 
     var symbol: String {
         switch self {
         case .chat: return "bubble.left"
         case .telegram: return "paperplane"
         case .meeting: return "person.2"
+        case .automation: return "clock.badge.checkmark"
         case .cli: return "terminal"
         case .agent: return "sparkles"
         case .user: return "person"
@@ -66,14 +67,100 @@ struct TaskEvent: Equatable {
     var detail: String
 }
 
-/// An action item read from a meeting summary that waits for Add or Skip. It is text only and never sent to an agent.
+/// An action item from a meeting summary, or a task a watcher automation proposed, that waits for Add or Skip.
+/// It is text only and never sent to an agent.
 struct TaskSuggestion: Identifiable, Equatable {
+    enum Origin: Equatable {
+        /// The meeting folder.
+        case meeting(URL)
+        case automation(id: String, name: String)
+    }
+
+    /// What a watcher returned in a `suggest_task` action, cleaned by `init?(action:)`.
+    struct Draft: Equatable {
+        /// The action's `id`, unique within its automation.
+        var key: String
+        var title: String
+        var due: String?
+        var notes = ""
+        var url: URL?
+    }
+
     let id: String
     var title: String
+    /// Free text from a meeting ("Friday"); `yyyy-MM-dd` from an automation.
     var due: String?
-    /// The meeting folder.
-    var meeting: URL
+    var notes = ""
+    var url: URL?
+    var origin: Origin
     var created: Date
+
+    var meeting: URL? {
+        if case .meeting(let url) = origin { return url }
+        return nil
+    }
+
+    /// The source of the task it becomes.
+    var source: TaskSource {
+        if case .meeting = origin { return .meeting }
+        return .automation
+    }
+
+    /// "Meeting", or "From" and the automation's name.
+    var originLabel: String {
+        switch origin {
+        case .meeting: return "Meeting"
+        case .automation(_, let name): return "From \(name)"
+        }
+    }
+}
+
+extension TaskSuggestion.Draft {
+    static let maxKey = 200
+    static let maxTitle = 200
+    static let maxNotes = 2000
+    static let maxURL = 2048
+
+    /// Reads a script's `{type: "suggest_task", id, title, due?, notes?, url?}`. The text comes from outside (mail, chat,
+    /// issues), so it is clamped and stripped of control characters, and a due or url that does not parse is dropped.
+    init(action: [String: Any]) throws {
+        func string(_ key: String) -> String? {
+            guard let value = action[key], !(value is NSNull) else { return nil }
+            return (value as? String) ?? "\(value)"
+        }
+        let key = Self.clean(string("id") ?? "", limit: Self.maxKey, newlines: false)
+        guard !key.isEmpty else { throw TaskError(message: "a suggest_task needs an id") }
+        let title = Self.clean(string("title") ?? "", limit: Self.maxTitle, newlines: false)
+        guard !title.isEmpty else { throw TaskError(message: "a suggest_task needs a title") }
+        self.key = key
+        self.title = title
+        if let raw = string("due")?.trimmingCharacters(in: .whitespaces), raw.count == 10, (try? TaskValidator.due(raw)) != nil {
+            due = raw
+        }
+        notes = Self.clean(string("notes") ?? "", limit: Self.maxNotes, newlines: true)
+        while notes.utf8.count > TaskValidator.maxNotes { notes.removeLast() }
+        if let raw = string("url")?.trimmingCharacters(in: .whitespaces), raw.count <= Self.maxURL, let url = URL(string: raw),
+           ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host?.isEmpty == false {
+            self.url = url
+        }
+    }
+
+    /// Drops control characters and bidirectional overrides, folds runs of whitespace in single-line text, trims and clamps.
+    static func clean(_ text: String, limit: Int, newlines: Bool) -> String {
+        let bidi = Set<UInt32>([0x061C, 0x200E, 0x200F] + Array(0x202A...0x202E) + Array(0x2066...0x2069))
+        var scalars = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            if bidi.contains(scalar.value) { continue }
+            if newlines && scalar == "\n" { scalars.append(scalar); continue }
+            if scalar == "\t" || scalar == "\n" || scalar == "\r" { scalars.append(" "); continue }
+            if scalar.properties.generalCategory == .control { continue }
+            scalars.append(scalar)
+        }
+        var result = String(scalars)
+        if !newlines { result = result.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ") }
+        result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.count > limit ? String(result.prefix(limit)).trimmingCharacters(in: .whitespaces) : result
+    }
 }
 
 struct TaskError: Error, LocalizedError, Equatable {
