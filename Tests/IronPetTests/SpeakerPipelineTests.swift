@@ -28,14 +28,21 @@ private final class FakeDiarizer: SpeakerDiarizing, @unchecked Sendable {
     }
 
     func diarize(wav: URL) async throws -> ChunkDiarization {
-        lock.lock(); _calls += 1; lock.unlock()
+        let call = count()
         if fail { throw URLError(.cannotLoadFromNetwork) }
-        // Speaker "a" talks for the first 1.2 s, speaker "b" for 12 s from second 2 on. The longer talker is linked
-        // first, so "b" becomes Speaker 1 and "a" becomes Speaker 2.
-        return ChunkDiarization(speakers: [
-            ChunkSpeaker(localId: "a", embedding: Self.unit(0), turns: [0...1.2]),
-            ChunkSpeaker(localId: "b", embedding: Self.unit(1), turns: [2...14]),
-        ])
+        // Speaker "b" talks for 12 s from second 2 on in every chunk. Speaker "a" talks for 1.2 s in the first chunk
+        // only: a voice's seconds add up over chunks, and a slow machine cuts the recording into more of them, so a
+        // per-chunk "a" could cross the 3 s naming threshold. The longer talker is linked first, so "b" becomes
+        // Speaker 1 and "a" becomes Speaker 2.
+        var speakers = [ChunkSpeaker(localId: "b", embedding: Self.unit(1), turns: [2...14])]
+        if call == 1 { speakers.insert(ChunkSpeaker(localId: "a", embedding: Self.unit(0), turns: [0...1.2]), at: 0) }
+        return ChunkDiarization(speakers: speakers)
+    }
+
+    private func count() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        _calls += 1
+        return _calls
     }
 }
 

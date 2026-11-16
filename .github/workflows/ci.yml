@@ -38,6 +38,16 @@ jobs:
       - name: Unit tests
         run: swift test
 
+      # A test that crashes the process (a signal, not an assertion) leaves only "unexpected signal code" in the log.
+      - name: Crash reports
+        if: failure()
+        run: |
+          for f in $(ls -t ~/Library/Logs/DiagnosticReports/*xctest* /Library/Logs/DiagnosticReports/*xctest* 2>/dev/null | head -3); do
+            echo "== $f"
+            head -c 100000 "$f"
+            echo
+          done
+
       - name: Bundle the app (ad-hoc signed, includes the generated sprite sheet)
         run: |
           ./scripts/bundle.sh

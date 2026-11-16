@@ -304,7 +304,18 @@ final class TranscriptGroupTests: XCTestCase {
 /// Live-resizing the chat window: the scroll position must survive and each frame must stay cheap.
 @MainActor
 final class TranscriptResizeTests: XCTestCase {
-    private func items() throws -> [ChatSession.Item] {
+    /// Plain questions and answers. The shown window is the last `pageSize` items, and in `hugeThread` that is only about
+    /// five turns, since each turn's 55 tool steps fold into one row. That leaves a scroll range of a few hundred points,
+    /// where one re-wrap moves "the middle" to an end. Here the window is many screens tall.
+    private static func conversation() -> [ChatSession.Item] {
+        let markdown = (0..<6).map { "Line \($0) of an answer with **markdown** and `code` that wraps at narrow widths." }.joined(separator: "\n")
+        return (0..<200).flatMap { i -> [ChatSession.Item] in
+            [.init(kind: .user("Question \(i): how does this part of the code work?")),
+             .init(kind: .assistant(i % 3 == 0 ? markdown : "Short answer \(i)."))]
+        }
+    }
+
+    private func items(conversation: Bool = false) throws -> [ChatSession.Item] {
         // IRONPET_FIXTURE: a saved thread; IRONPET_SHOTS: stand-in screenshots. Without them a generated thread.
         if let path = ProcessInfo.processInfo.environment["IRONPET_FIXTURE"] {
             struct Saved: Decodable { var items: [ChatSession.Item] }
@@ -319,7 +330,7 @@ final class TranscriptResizeTests: XCTestCase {
             }
             return items
         }
-        return HugeTranscriptTests.hugeThread(screenshotDir: nil)
+        return conversation ? Self.conversation() : HugeTranscriptTests.hugeThread(screenshotDir: nil)
     }
 
     private func spin(_ seconds: Double) {
@@ -368,9 +379,9 @@ final class TranscriptResizeTests: XCTestCase {
         return (costs.reduce(0, +) / Double(costs.count), costs.max() ?? 0)
     }
 
-    private func open() throws -> ChatPanel {
+    private func open(conversation: Bool = false) throws -> ChatPanel {
         let session = ChatSession(restore: false)
-        session.items = try items()
+        session.items = try items(conversation: conversation)
         let panel = ChatPanel(session: session)
         panel.setContentSize(CGSize(width: 520, height: 640))
         panel.orderFrontRegardless()
@@ -393,11 +404,16 @@ final class TranscriptResizeTests: XCTestCase {
     }
 
     func testResizeInTheMiddleDoesNotJumpToTheTop() throws {
-        let panel = try open()
+        let panel = try open(conversation: true)
+        scroll(panel, toFraction: 0.5)
+        spin(1.5)
+        // Rows only get their real heights once they have been on screen, so the fraction moves after the first pass.
         scroll(panel, toFraction: 0.5)
         spin(1.5)
         let before = try XCTUnwrap(geometry(panel))
         let ratioBefore = before.offset / max(1, before.content - before.viewport)
+        XCTAssertGreaterThan(before.content - before.viewport, 4 * before.viewport, "too little to scroll for a middle")
+        XCTAssertEqual(ratioBefore, 0.5, accuracy: 0.15, "did not reach the middle before resizing")
         let stats = liveResize(panel, widths: [520, 760, 400, 560])
         spin(2)
         let after = try XCTUnwrap(geometry(panel))
@@ -405,10 +421,9 @@ final class TranscriptResizeTests: XCTestCase {
         print("RESIZE middle: scroll fraction \(ratioBefore) -> \(ratioAfter), mean frame cpu \(stats.mean * 1000) ms, worst \(stats.worst * 1000) ms")
         panel.close()
         XCTAssertGreaterThan(after.offset, 100, "jumped to the beginning")
-        // Re-wrapping changes the total height, so the fraction only holds roughly. The generated thread, with its
-        // tall tool runs, drifts more than the saved ones (IRONPET_FIXTURE).
-        let fixture = ProcessInfo.processInfo.environment["IRONPET_FIXTURE"] != nil
-        XCTAssertEqual(ratioAfter, ratioBefore, accuracy: fixture ? 0.15 : 0.3)
+        XCTAssertGreaterThan(after.content - after.viewport - after.offset, 100, "jumped to the end")
+        // Re-wrapping changes the total height, so the fraction only holds roughly.
+        XCTAssertEqual(ratioAfter, ratioBefore, accuracy: 0.15)
         XCTAssertLessThan(stats.mean, 0.1)
     }
 }
