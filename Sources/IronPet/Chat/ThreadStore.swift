@@ -29,7 +29,8 @@ extension ChatThread {
 
 /// Persists threads as JSON files in `~/.ironpet/threads/`.
 enum ThreadStore {
-    static let directory = Paths.root.appendingPathComponent("threads")
+    /// A variable so tests can point it at a temp folder.
+    nonisolated(unsafe) static var directory = Paths.root.appendingPathComponent("threads")
 
     private static let encoder: JSONEncoder = {
         let e = JSONEncoder()

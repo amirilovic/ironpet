@@ -37,6 +37,13 @@ struct TelegramAttachment: Codable, Equatable {
 }
 
 struct TelegramMessage: Codable, Equatable {
+    /// The message this one replies to. Telegram nests it one level only, so the original has no reply of its own here.
+    struct Original: Codable, Equatable {
+        let from: TelegramUser?
+        let text: String?
+        var caption: String? = nil
+    }
+
     struct Chat: Codable, Equatable {
         let id: Int64
         let type: String
@@ -56,9 +63,12 @@ struct TelegramMessage: Codable, Equatable {
     var videoNote: TelegramAttachment? = nil
     /// Photos or documents sent together as an album share this id.
     var mediaGroupId: String? = nil
+    /// Set when the user used Telegram's own Reply.
+    var replyToMessage: Original? = nil
 
     enum CodingKeys: String, CodingKey {
         case from, chat, text, caption, photo, document, voice, audio, video
+        case replyToMessage = "reply_to_message"
         case messageId = "message_id"
         case videoNote = "video_note"
         case mediaGroupId = "media_group_id"

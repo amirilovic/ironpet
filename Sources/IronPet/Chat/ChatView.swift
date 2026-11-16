@@ -31,6 +31,16 @@ struct ChatView: View {
     @State private var findDebounce: DispatchWorkItem?
     @State private var streamRecount: DispatchWorkItem?
     @State private var findScrollTick = 0
+    /// A tap on a quote asks to scroll to its original. Each tap is a new value, so tapping twice scrolls twice.
+    struct JumpRequest: Equatable { let id = UUID(); let target: UUID }
+    @State private var jumpTick: JumpRequest?
+    @State private var highlightedID: UUID?
+    @State private var highlightClear: DispatchWorkItem?
+    struct SelectionAsk { let item: ChatSession.Item; let point: CGPoint }
+    /// The Ask button shown beside a text selection, with where the selection ended.
+    @State private var selectionAsk: SelectionAsk?
+    @State private var hoverTracker = HoverTracker()
+    @State private var selectionMonitor: Any?
     /// `--render-previews` only: draw the settings popover's content on its own, since a popover can't render offscreen.
     var settingsOnly = false
     /// The row SwiftUI reports at the top of the transcript. Tests compare it before and after content arrives, because
@@ -379,6 +389,10 @@ struct ChatView: View {
                 scrollToEnd(proxy)
             }
             .onChange(of: findScrollTick) { revealCurrentMatch(proxy) }
+            .overlay { selectionButton }
+            .onAppear(perform: installSelectionMonitor)
+            .onDisappear { if let monitor = selectionMonitor { NSEvent.removeMonitor(monitor); selectionMonitor = nil }; selectionAsk = nil }
+            .onChange(of: jumpTick) { if let request = jumpTick { jump(to: request.target, proxy) } }
             // A new chat or another thread starts with the default window again.
             .onChange(of: session.items.first?.id) { shownItems = TranscriptGroup.pageSize }
         }
@@ -540,6 +554,95 @@ struct ChatView: View {
         scrollToMatch(match, proxy)
     }
 
+    /// Which message the pointer is over. A plain object, not state, so moving the pointer does not re-render the transcript.
+    final class HoverTracker { var current: UUID?; var buttonFrame: CGRect = .zero }
+
+    private func hoverChanged(_ id: UUID, _ hovering: Bool) {
+        if hovering { hoverTracker.current = id } else if hoverTracker.current == id { hoverTracker.current = nil }
+    }
+
+    /// Asks about the text selected in `item`. With nothing selected it replies to the whole message.
+    private func askAbout(_ item: ChatSession.Item) {
+        session.reply(to: item, selection: SelectionProbe.selectedText())
+        selectionAsk = nil
+    }
+
+    private func copyText(_ item: ChatSession.Item, _ whole: String) {
+        let text = SelectionProbe.selectedText(keepOnPasteboard: true)
+        if text == nil {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(whole, forType: .string)
+        }
+    }
+
+    /// After a mouse-up, checks whether text is selected in the message under the pointer and shows the Ask button there.
+    private func selectionMayHaveChanged(_ event: NSEvent) {
+        if selectionAsk != nil, hoverTracker.buttonFrame.contains(CGPoint(x: event.locationInWindow.x, y: event.locationInWindow.y)) { return }
+        guard let id = hoverTracker.current, let item = session.items.first(where: { $0.id == id }),
+              let window = event.window, window == NSApp.keyWindow else { selectionAsk = nil; return }
+        let point = CGPoint(x: event.locationInWindow.x, y: (window.contentView?.bounds.height ?? 0) - event.locationInWindow.y)
+        DispatchQueue.main.async {
+            if SelectionProbe.selectedText() != nil { selectionAsk = SelectionAsk(item: item, point: point) } else { selectionAsk = nil }
+        }
+    }
+
+    private func installSelectionMonitor() {
+        guard selectionMonitor == nil else { return }
+        selectionMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .scrollWheel]) { event in
+            if event.type == .scrollWheel { if selectionAsk != nil { selectionAsk = nil } } else { selectionMayHaveChanged(event) }
+            return event
+        }
+    }
+
+    @ViewBuilder
+    private var selectionButton: some View {
+        if let ask = selectionAsk {
+            GeometryReader { geo in
+                let origin = geo.frame(in: .global).origin
+                Button {
+                    askAbout(ask.item)
+                } label: {
+                    Label("Ask about this", systemImage: "arrowshape.turn.up.left")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .chromeGlass(in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("ask-about-selection")
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame in
+                    // The monitor compares against window coordinates with a bottom-left origin.
+                    let height = NSApp.keyWindow?.contentView?.bounds.height ?? 0
+                    hoverTracker.buttonFrame = CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height)
+                }
+                .position(x: min(max(ask.point.x - origin.x + 70, 80), geo.size.width - 80),
+                          y: min(max(ask.point.y - origin.y + 24, 20), geo.size.height - 20))
+            }
+        }
+    }
+
+    /// Scrolls to the original message of a quote and highlights it briefly. Nothing happens when it is gone.
+    private func jump(to id: UUID, _ proxy: ScrollViewProxy) {
+        guard let position = session.items.firstIndex(where: { $0.id == id }) else { return }
+        let needed = session.items.count - position
+        let scroll = {
+            follow.leftTheEnd()
+            scrollActivity.noteProgrammaticScroll()
+            proxy.scrollTo(id, anchor: .center)
+            highlightedID = id
+            highlightClear?.cancel()
+            let clear = DispatchWorkItem { highlightedID = nil }
+            highlightClear = clear
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: clear)
+        }
+        if needed > shownItems {
+            shownItems = needed + TranscriptGroup.pageSize / 3
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: scroll)
+        } else {
+            scroll()
+        }
+    }
+
     private func scrollToMatch(_ match: ChatFind.Match, _ proxy: ScrollViewProxy) {
         let target = groupedItems.first { group in
             switch group {
@@ -582,14 +685,19 @@ struct ChatView: View {
         case .item(let item):
             switch item.kind {
             case .user(let text):
-                UserBubble(text: text, date: item.date, source: item.origin, find: highlights[item.id])
+                UserBubble(text: text, date: item.date, reply: item.reply, highlighted: highlightedID == item.id,
+                           onReply: { session.reply(to: item) }, onQuoteTap: { if let reply = item.reply { jumpTick = JumpRequest(target: reply.itemID) } },
+                           onAsk: { askAbout(item) }, onCopy: { copyText(item, text) }, onHoverChange: { hoverChanged(item.id, $0) },
+                           source: item.origin, find: highlights[item.id])
             case .screenshot(let path):
                 HStack {
                     Spacer(minLength: 60)
                     Thumbnail(path: path, height: 110)
                 }
             case .assistant(let text):
-                AssistantBubble(text: text, date: item.date, find: highlights[item.id])
+                AssistantBubble(text: text, date: item.date, highlighted: highlightedID == item.id,
+                                onReply: { session.reply(to: item) }, onAsk: { askAbout(item) }, onCopy: { copyText(item, text) },
+                                onHoverChange: { hoverChanged(item.id, $0) }, find: highlights[item.id])
             case .tool:
                 EmptyView()
             case .error(let text):
@@ -751,6 +859,20 @@ struct ChatView: View {
 
     private var composerInput: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let reply = session.replyingTo {
+                HStack(spacing: 4) {
+                    ReplyQuote(reply: reply)
+                    Button { session.replyingTo = nil } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Cancel reply (Esc)")
+                    .accessibilityLabel("Cancel reply")
+                    .accessibilityIdentifier("reply-cancel")
+                }
+                .padding(.horizontal, 4)
+                .padding(.top, 4)
+            }
             if !session.attachments.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(session.attachments, id: \.self) { url in
@@ -792,7 +914,13 @@ struct ChatView: View {
                         session.moveSlashSelection(1)
                         return .handled
                     }
-                    .onKeyPress(.escape, phases: .down) { _ in session.dismissSlash() ? .handled : .ignored }
+                    .onKeyPress(.escape, phases: .down) { _ in
+                        if session.dismissSlash() { return .handled }
+                        guard session.replyingTo != nil else { return .ignored }
+                        session.replyingTo = nil
+                        return .handled
+                    }
+                    .onChange(of: session.replyFocusTick) { inputFocused = true }
                     .onChange(of: session.input) { old, new in session.inputChanged(from: old, to: new) }
                     // The system focus ring is a rectangle; inside the rounded field it showed as a line at each end.
                     .focusEffectDisabled()
@@ -929,9 +1057,61 @@ private let timeFormatter: DateFormatter = {
     return f
 }()
 
+/// The reply button shown beside a message's time while the pointer is over the row.
+private struct ReplyButton: View {
+    let visible: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrowshape.turn.up.left").font(.system(size: 10))
+        }
+        .buttonStyle(.plain)
+        .help("Reply")
+        .accessibilityLabel("Reply")
+        .accessibilityIdentifier("reply-button")
+        .opacity(visible ? 1 : 0)
+        .allowsHitTesting(visible)
+    }
+}
+
+/// The quoted original: sender and the first two lines. Tapping it jumps to the original message.
+private struct ReplyQuote: View {
+    let reply: ChatSession.Reply
+    var onUser = false
+    var tap: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 1.5).fill(onUser ? Color.white.opacity(0.8) : Color.accentColor).frame(width: 3)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(reply.sender).font(.system(size: 11, weight: .semibold))
+                Text(reply.text).font(.system(size: 11.5)).lineLimit(2).truncationMode(.tail)
+            }
+            .foregroundStyle(onUser ? Color.white : Color.primary)
+            Spacer(minLength: 0)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(6)
+        .background((onUser ? Color.white.opacity(0.18) : Color.primary.opacity(0.07)), in: RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+        .onTapGesture { tap?() }
+        .accessibilityIdentifier("reply-quote")
+    }
+}
+
 private struct UserBubble: View {
     let text: String
     let date: Date?
+    var reply: ChatSession.Reply?
+    var highlighted = false
+    var onReply: () -> Void = {}
+    var onQuoteTap: () -> Void = {}
+    var onAsk: () -> Void = {}
+    var onCopy: () -> Void = {}
+    var onHoverChange: (Bool) -> Void = { _ in }
+    /// Hover is per row, so moving the pointer re-renders this bubble and not the whole transcript.
+    @State private var hovering = false
     /// Where the message came from when it was not typed in this chat, such as "telegram".
     var source: String?
     var find: ChatFind.RowHighlight?
@@ -939,16 +1119,20 @@ private struct UserBubble: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
-            ChatFind.text(FilePathLinks.link(AttributedString(text), underline: true), segment: 0, find: find)
-                .font(.system(size: 13.5))
-                .foregroundStyle(.white)
-                .tint(.white)
-                .environment(\.openURL, OpenURLAction { FilePathLinks.handle($0) })
-                .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 6) {
+                if let reply { ReplyQuote(reply: reply, onUser: true, tap: onQuoteTap) }
+                ChatFind.text(FilePathLinks.link(AttributedString(text), underline: true), segment: 0, find: find)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(.white)
+                    .tint(.white)
+                    .environment(\.openURL, OpenURLAction { FilePathLinks.handle($0) })
+                    .textSelection(.enabled)
+            }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.accentColor, in: UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 5, topTrailingRadius: 16))
             HStack(spacing: 4) {
+                ReplyButton(visible: hovering, action: onReply)
                 if source == ChatSession.telegramOrigin {
                     Image(systemName: "paperplane.fill").font(.system(size: 9))
                     Text("Telegram").font(.system(size: 10))
@@ -960,13 +1144,37 @@ private struct UserBubble: View {
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 50)
+        .background(highlighted ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 10))
+        .animation(.easeOut(duration: 0.25), value: highlighted)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0; onHoverChange($0) }
+        .contextMenu { RowMenu(onReply: onReply, onAsk: onAsk, onCopy: onCopy) }
+    }
+}
+
+/// The right-click menu of a message. A custom menu replaces the system one, so Copy is here too.
+private struct RowMenu: View {
+    let onReply: () -> Void
+    let onAsk: () -> Void
+    let onCopy: () -> Void
+
+    var body: some View {
+        Button("Reply", action: onReply)
+        Button("Ask about selection", action: onAsk)
+        Button("Copy", action: onCopy)
     }
 }
 
 private struct AssistantBubble: View {
     let text: String
     let date: Date?
+    var highlighted = false
+    var onReply: () -> Void = {}
+    var onAsk: () -> Void = {}
+    var onCopy: () -> Void = {}
+    var onHoverChange: (Bool) -> Void = { _ in }
     var find: ChatFind.RowHighlight?
+    @State private var hovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -975,12 +1183,19 @@ private struct AssistantBubble: View {
                 MarkdownView(text: text, find: find)
                     .font(.system(size: 13.5))
                     .padding(.top, 3)
-                if let date {
-                    Text(timeFormatter.string(from: date)).font(.system(size: 10)).foregroundStyle(.tertiary)
+                HStack(spacing: 4) {
+                    if let date { Text(timeFormatter.string(from: date)).font(.system(size: 10)) }
+                    ReplyButton(visible: hovering, action: onReply)
                 }
+                .foregroundStyle(.tertiary)
             }
             Spacer(minLength: 30)
         }
+        .background(highlighted ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 10))
+        .animation(.easeOut(duration: 0.25), value: highlighted)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0; onHoverChange($0) }
+        .contextMenu { RowMenu(onReply: onReply, onAsk: onAsk, onCopy: onCopy) }
     }
 }
 

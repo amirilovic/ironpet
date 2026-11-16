@@ -8,7 +8,7 @@ protocol TelegramChatHost: AnyObject {
     var isRunning: Bool { get }
     var telegramQueueCount: Int { get }
     var onTelegram: ((Int64, ChatSession.TelegramEvent) -> Void)? { get set }
-    func submitFromTelegram(_ text: String, chat: Int64, files: [URL])
+    func submitFromTelegram(_ text: String, chat: Int64, files: [URL], reply: ChatSession.Reply?)
     func hasPendingApproval(_ id: UUID) -> Bool
     func decideFromTelegram(id: UUID, allow: Bool)
     /// Forgets queued messages and the pending answer for a Telegram chat.
@@ -327,19 +327,26 @@ final class TelegramBridge: ObservableObject {
         let media = group.flatMap(TelegramMediaStore.media(in:))
         let text = group.compactMap { ($0.caption ?? $0.text)?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }.joined(separator: "\n")
+        // Telegram's own Reply: the chat gets the original as a structured reply, the same as a Mac reply.
+        var quote: ChatSession.Reply?
+        if let original = group.lazy.compactMap(\.replyToMessage).first,
+           let quoted = (original.text ?? original.caption)?.trimmingCharacters(in: .whitespacesAndNewlines), !quoted.isEmpty {
+            let sender = original.from?.isBot == true ? petName() : "You"
+            quote = .init(itemID: UUID(), sender: sender, text: quoted, date: nil, fromUser: original.from?.isBot != true)
+        }
         if media.isEmpty {
             if text.isEmpty { return reply(chat, "That kind of message is not supported. Send text, a photo, a file or a voice message.") }
             if inboxPending == 0 {
-                handleText(text, chat: chat)
+                handleText(text, chat: chat, reply: quote)
             } else {
-                enqueueIncoming { [self] in handleText(text, chat: chat) }
+                enqueueIncoming { [self] in handleText(text, chat: chat, reply: quote) }
             }
         } else {
-            enqueueIncoming { [self] in await handleMedia(media, text: text, chat: chat) }
+            enqueueIncoming { [self] in await handleMedia(media, text: text, chat: chat, reply: quote) }
         }
     }
 
-    private func handleText(_ text: String, chat: Int64) {
+    private func handleText(_ text: String, chat: Int64, reply quote: ChatSession.Reply?) {
         guard let host else { return }
         switch Self.command(text) {
         case "/start":
@@ -350,13 +357,13 @@ final class TelegramBridge: ObservableObject {
             reply(chat, "Connected. Chat: \(host.telegramTitle). \(petName()) is \(state).")
         default:
             // Anything else, including /review or a path, is a prompt.
-            host.submitFromTelegram(text, chat: chat, files: [])
+            host.submitFromTelegram(text, chat: chat, files: [], reply: quote)
         }
     }
 
     /// Downloads the files, transcribes a voice message, and only then sends one message to the chat. Any failure
     /// replies in Telegram and sends nothing.
-    private func handleMedia(_ media: [TelegramMedia], text: String, chat: Int64) async {
+    private func handleMedia(_ media: [TelegramMedia], text: String, chat: Int64, reply quote: ChatSession.Reply?) async {
         let started = epoch
         // Refuse before downloading anything, so one oversized file does not leave the others half attached.
         for item in media where (item.attachment.fileSize ?? 0) > TelegramMediaStore.maxBytes {
@@ -390,7 +397,7 @@ final class TelegramBridge: ObservableObject {
         guard epoch == started, storage.users().contains(where: { $0.id == chat }) else { return }
         for transcript in transcripts { reply(chat, "🎙 \(transcript)") }
         let message = ([text] + transcripts).filter { !$0.isEmpty }.joined(separator: "\n")
-        host?.submitFromTelegram(message, chat: chat, files: urls)
+        host?.submitFromTelegram(message, chat: chat, files: urls, reply: quote)
     }
 
     /// Runs incoming work one item at a time, in arrival order.

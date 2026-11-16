@@ -262,6 +262,19 @@ final class TelegramTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(client.typing, 0)
     }
 
+    func testTelegramReplyGivesTheAgentTheOriginalText() async {
+        allow(10)
+        answering("ok")
+        var update = telegramMessage("what about this?", from: 10)
+        update.message?.replyToMessage = .init(from: TelegramUser(id: 1, isBot: true, firstName: "Ghost", lastName: nil, username: nil),
+                                               text: "the earlier answer")
+        bridge.handle(update)
+        for _ in 0..<50 where session.state != .done { try? await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertTrue(runs[0].contains("> the earlier answer"), runs[0])
+        XCTAssertTrue(runs[0].hasSuffix("\n\nwhat about this?"), runs[0])
+    }
+
     func testMacTurnsAreNotMirroredAndTelegramMessageWaitsForABusyAgent() async {
         allow(10)
         var release: CheckedContinuation<Void, Never>?
