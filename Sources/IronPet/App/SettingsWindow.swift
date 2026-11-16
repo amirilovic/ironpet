@@ -15,6 +15,8 @@ final class SettingsModel: ObservableObject {
     let actions: Actions
     /// Set once the app has built it, before the window can open.
     var automations: AutomationService?
+    /// The meeting controller, for labelling the voices of the last meeting.
+    var meeting: MeetingController?
     /// Opens the execution log window, for one automation or all of them.
     var showLogs: (String?) -> Void = { _ in }
     /// Sends what the user wants to the chat, for the agent to create the automation.
@@ -430,6 +432,7 @@ private struct MeetingSettings: View {
 
     var body: some View {
         Form {
+            if let meeting = model.meeting { SpeakerLabelSection(controller: meeting) }
             Section {
                 Toggle("Meeting transcripts", isOn: Binding(get: { meetings.enabled }, set: setEnabled))
                     .disabled(testing)

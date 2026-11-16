@@ -101,6 +101,8 @@ final class MeetingController: ObservableObject {
     /// Opens a meeting file. Tests replace it.
     var openFile: (URL) -> Void = { MeetingFileOpener.open($0) }
     var onChange: (() -> Void)?
+    /// Opens Settings → Meetings, where unnamed voices are labelled.
+    var onLabelSpeakers: (() -> Void)?
     /// Agent and model of the last summary run, for `GET /test/meeting`.
     private(set) var lastSummaryRequest: (agent: String, model: String?)?
     private(set) var summaryNotified: [String] = []
@@ -164,6 +166,12 @@ final class MeetingController: ObservableObject {
     /// Closes the picker without recording.
     func dismiss() {
         guard phase == .choosing || phase == .done else { return }
+        // Closing the "meeting saved" bubble must not lose the voices that still need a name: Settings → Meetings
+        // lists them until the next meeting starts.
+        if phase == .done, !speakersToName.isEmpty {
+            setPhase(.idle)
+            return
+        }
         reset()
         setPhase(.idle)
     }
@@ -553,7 +561,9 @@ final class MeetingController: ObservableObject {
         speakerTable.speakers.filter(\.needsName).sorted { $0.seconds > $1.seconds }
     }
 
-    /// People ironpet knows, for the name field's autocomplete.
+    var hasSpeakersToName: Bool { !speakersToName.isEmpty }
+
+    /// One transcript line from this voice, for the name field's autocomplete.
     /// Names in the voice store. Reads and decrypts the file, so views call it once, not on every render.
     var storedNames: [String] { voiceStore.voices().map(\.name) }
 

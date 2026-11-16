@@ -245,7 +245,17 @@ struct MeetingView: View {
                 EmptyView()
             }
             lines
-            SpeakerPrompt(controller: controller)
+            if controller.hasSpeakersToName {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "person.wave.2.fill").foregroundStyle(.secondary)
+                    Text("New voices have been found in the meeting transcript.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Label speaker voices") { controller.onLabelSpeakers?() }.controlSize(.small)
+                }
+                .padding(8)
+                .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+            }
             HStack(spacing: 8) {
                 Button("Open transcript") { controller.openTranscript() }
                 if case .ready = controller.summary { Button("Open summary") { controller.openSummary() } }

@@ -32,6 +32,22 @@ final class SpeakerClipPlayer: ObservableObject {
     }
 }
 
+/// The Settings → Meetings section for the last meeting's unnamed voices. Hidden when there is nothing to label.
+struct SpeakerLabelSection: View {
+    @ObservedObject var controller: MeetingController
+
+    var body: some View {
+        if controller.hasSpeakersToName {
+            Section {
+                SpeakerPrompt(controller: controller)
+            } footer: {
+                Text("Voices found in the last meeting. A name you give is added to the transcript, and ironpet recognises that voice in later meetings.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 /// "Who is this?": the voices of a finished meeting that have no name, each with a clip, a line and a name field.
 struct SpeakerPrompt: View {
     @ObservedObject var controller: MeetingController
@@ -105,6 +121,7 @@ private struct SpeakerRow: View {
             HStack(spacing: 6) {
                 TextField("Name", text: $name)
                     .textFieldStyle(.roundedBorder)
+                    .labelsHidden()
                     .controlSize(.small)
                     .onSubmit { controller.nameSpeaker(speaker.id, as: name) }
                     .onChange(of: name) { _, _ in showNames = true }

@@ -145,6 +145,18 @@ final class SpeakerPipelineTests: XCTestCase {
         XCTAssertTrue(controller.namesChangedSinceSummary)
     }
 
+    func testClosingTheBubbleKeepsUnnamedVoicesForSettingsUntilTheNextMeeting() async throws {
+        let controller = try await meeting(recognise: true, ready: true, diarizer: FakeDiarizer())
+        XCTAssertTrue(controller.hasSpeakersToName)
+        controller.dismiss()
+        XCTAssertEqual(controller.phase, .idle)
+        XCTAssertTrue(controller.hasSpeakersToName, "Settings still lists the voices")
+        controller.nameSpeaker(1, as: "Marko")
+        XCTAssertTrue(try String(contentsOf: controller.transcriptURL!, encoding: .utf8).contains("Marko: general kenobi"))
+        controller.showPicker()
+        XCTAssertFalse(controller.hasSpeakersToName, "a new meeting starts clean")
+    }
+
     func testAStoredVoiceIsNamedInTheNextMeetingAndForgettingItBringsSpeakerNBack() async throws {
         let first = try await meeting(recognise: true, ready: true, diarizer: FakeDiarizer())
         first.nameSpeaker(1, as: "Marko")
