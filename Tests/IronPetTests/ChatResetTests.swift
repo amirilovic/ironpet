@@ -50,6 +50,20 @@ final class ChatResetTests: XCTestCase {
         XCTAssertTrue(session.autoMode)
     }
 
+    func testS1AutoSurvivesNewChatAndRelaunch() async {
+        let defaults = UserDefaults.standard
+        let keys = ["chatAutoMode", "chatThread", "chatDraft", "chatAttachments"]
+        let saved = keys.map { ($0, defaults.object(forKey: $0)) }
+        defer { for (key, value) in saved { defaults.set(value, forKey: key) } }
+        defaults.removeObject(forKey: "chatThread")
+        let first = ChatSession(restore: true)
+        first.autoMode = true
+        first.newChat()
+        XCTAssertTrue(defaults.bool(forKey: "chatAutoMode"), "a new chat must not overwrite the saved Auto value")
+        let relaunched = ChatSession(restore: true)
+        XCTAssertTrue(relaunched.autoMode)
+    }
+
     func testS2OpenThreadKeepsAuto() async {
         session.autoMode = true
         session.open(thread())
