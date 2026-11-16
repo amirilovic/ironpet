@@ -1,0 +1,17 @@
+{
+  "app": {
+    "bundle_id": "com.google.Chrome",
+    "name": "Google Chrome",
+    "pid": 0
+  },
+  "content": {
+    "kind": "page",
+    "text": "Nira Vale Signal map check 08:17 AM\nSol Renn Probe window 07:52 AM",
+    "title": ""
+  },
+  "parser": "generic/v1",
+  "thread_key": "web:https://outlook.invalid/mail/inbox?itemid=fixture-item",
+  "thread_title": "Inbox - Outlook",
+  "url": "https://outlook.invalid/mail/inbox?itemid=fixture-item",
+  "window_title": "Inbox - Outlook"
+}

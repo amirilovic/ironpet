@@ -114,7 +114,7 @@ final class Database {
         if let path { try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true) }
         writer = try Connection(path: path?.path ?? ":memory:", readOnly: false)
         if path != nil {
-            try writer.script("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
+            try writer.script("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA secure_delete = ON;")
         }
         try Self.migrate(writer, migrations)
         reader = try path.map { try Connection(path: $0.path, readOnly: true) }
@@ -131,6 +131,13 @@ final class Database {
 
     /// The version the schema is at.
     var schemaVersion: Int { (try? read { Self.version($0) }) ?? 0 }
+
+    /// Folds the write-ahead log into the database file and empties it, so text deleted earlier is no longer in the log. Best effort: it
+    /// does nothing while a reader holds the log, and an in-memory database has none.
+    func checkpoint() {
+        guard path != nil else { return }
+        writeQueue.sync { try? writer.script("PRAGMA wal_checkpoint(TRUNCATE);") }
+    }
 
     /// Runs `body` on the write queue inside one transaction. A throw rolls the transaction back and rethrows.
     @discardableResult

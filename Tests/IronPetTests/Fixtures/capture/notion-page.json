@@ -1,0 +1,149 @@
+{
+  "app": {
+    "bundle_id": "notion.id",
+    "name": "Notion",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1400.0,
+      "height": 900.0
+    },
+    "children": [
+      {
+        "role": "WebArea",
+        "frame": {
+          "x": 0.0,
+          "y": 0.0,
+          "width": 1400.0,
+          "height": 900.0
+        },
+        "children": [
+          {
+            "role": "Group",
+            "attrs": {
+              "dom_classes": "notion-topbar"
+            },
+            "frame": {
+              "x": 0.0,
+              "y": 0.0,
+              "width": 1400.0,
+              "height": 44.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Project outline",
+                "frame": {
+                  "x": 20.0,
+                  "y": 12.0,
+                  "width": 400.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Group",
+            "attrs": {
+              "dom_classes": "notion-frame"
+            },
+            "frame": {
+              "x": 0.0,
+              "y": 44.0,
+              "width": 1400.0,
+              "height": 856.0
+            },
+            "children": [
+              {
+                "role": "Group",
+                "attrs": {
+                  "dom_classes": "notion-page-properties"
+                },
+                "frame": {
+                  "x": 300.0,
+                  "y": 60.0,
+                  "width": 400.0,
+                  "height": 30.0
+                },
+                "children": [
+                  {
+                    "role": "StaticText",
+                    "value": "Phase: Draft",
+                    "frame": {
+                      "x": 300.0,
+                      "y": 60.0,
+                      "width": 400.0,
+                      "height": 20.0
+                    }
+                  }
+                ]
+              },
+              {
+                "role": "Heading",
+                "value": "Implementation",
+                "attrs": {
+                  "heading_level": "2"
+                },
+                "frame": {
+                  "x": 300.0,
+                  "y": 100.0,
+                  "width": 400.0,
+                  "height": 30.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "Build the parser around the page frame.",
+                "frame": {
+                  "x": 300.0,
+                  "y": 150.0,
+                  "width": 400.0,
+                  "height": 20.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "Keep fallback capture available.",
+                "frame": {
+                  "x": 300.0,
+                  "y": 180.0,
+                  "width": 400.0,
+                  "height": 20.0
+                }
+              },
+              {
+                "role": "Group",
+                "attrs": {
+                  "dom_classes": "layout-margin-right"
+                },
+                "frame": {
+                  "x": 1100.0,
+                  "y": 100.0,
+                  "width": 280.0,
+                  "height": 700.0
+                },
+                "children": [
+                  {
+                    "role": "StaticText",
+                    "value": "Discussion",
+                    "frame": {
+                      "x": 1100.0,
+                      "y": 100.0,
+                      "width": 240.0,
+                      "height": 20.0
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

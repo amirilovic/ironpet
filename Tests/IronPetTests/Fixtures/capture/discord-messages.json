@@ -1,0 +1,140 @@
+{
+  "app": {
+    "bundle_id": "com.hnc.Discord",
+    "name": "Discord",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "#general | Acme - Discord",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1200.0,
+      "height": 800.0
+    },
+    "children": [
+      {
+        "role": "List",
+        "attrs": {
+          "label": "Channels"
+        },
+        "frame": {
+          "x": 0.0,
+          "y": 72.0,
+          "width": 240.0,
+          "height": 680.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "random-channel",
+            "frame": {
+              "x": 24.0,
+              "y": 140.0,
+              "width": 180.0,
+              "height": 18.0
+            }
+          }
+        ]
+      },
+      {
+        "role": "List",
+        "attrs": {
+          "label": "Messages in general"
+        },
+        "frame": {
+          "x": 240.0,
+          "y": 72.0,
+          "width": 960.0,
+          "height": 680.0
+        },
+        "children": [
+          {
+            "role": "Group",
+            "frame": {
+              "x": 272.0,
+              "y": 128.0,
+              "width": 860.0,
+              "height": 42.0
+            },
+            "children": [
+              {
+                "role": "Heading",
+                "value": "Arin",
+                "frame": {
+                  "x": 272.0,
+                  "y": 128.0,
+                  "width": 120.0,
+                  "height": 18.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "index rebuilt",
+                "frame": {
+                  "x": 272.0,
+                  "y": 150.0,
+                  "width": 260.0,
+                  "height": 18.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Group",
+            "frame": {
+              "x": 272.0,
+              "y": 196.0,
+              "width": 860.0,
+              "height": 66.0
+            },
+            "children": [
+              {
+                "role": "Heading",
+                "value": "Bela",
+                "frame": {
+                  "x": 272.0,
+                  "y": 196.0,
+                  "width": 120.0,
+                  "height": 18.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "deploy looks green",
+                "frame": {
+                  "x": 272.0,
+                  "y": 218.0,
+                  "width": 260.0,
+                  "height": 18.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "Add Reaction",
+                "frame": {
+                  "x": 540.0,
+                  "y": 218.0,
+                  "width": 120.0,
+                  "height": 18.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "shipping now",
+                "frame": {
+                  "x": 272.0,
+                  "y": 240.0,
+                  "width": 260.0,
+                  "height": 18.0
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

@@ -1,0 +1,219 @@
+{
+  "app": {
+    "bundle_id": "com.apple.finder",
+    "name": "Finder",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "project",
+    "attrs": {
+      "url": "file:///sample-root/project"
+    },
+    "frame": {
+      "x": 1440.0,
+      "y": 220.0,
+      "width": 1200.0,
+      "height": 800.0
+    },
+    "children": [
+      {
+        "role": "Toolbar",
+        "frame": {
+          "x": 1440.0,
+          "y": 220.0,
+          "width": 1200.0,
+          "height": 40.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Uploading 34 items",
+            "frame": {
+              "x": 1840.0,
+              "y": 228.0,
+              "width": 260.0,
+              "height": 20.0
+            }
+          }
+        ]
+      },
+      {
+        "role": "SplitGroup",
+        "frame": {
+          "x": 1440.0,
+          "y": 260.0,
+          "width": 1200.0,
+          "height": 760.0
+        },
+        "children": [
+          {
+            "role": "Group",
+            "attrs": {
+              "identifier": "Finder.sidebar"
+            },
+            "frame": {
+              "x": 1440.0,
+              "y": 260.0,
+              "width": 240.0,
+              "height": 760.0
+            },
+            "children": [
+              {
+                "role": "Outline",
+                "frame": {
+                  "x": 1440.0,
+                  "y": 260.0,
+                  "width": 240.0,
+                  "height": 760.0
+                },
+                "children": [
+                  {
+                    "role": "Row",
+                    "frame": {
+                      "x": 1450.0,
+                      "y": 300.0,
+                      "width": 220.0,
+                      "height": 20.0
+                    },
+                    "children": [
+                      {
+                        "role": "StaticText",
+                        "value": "Downloads",
+                        "frame": {
+                          "x": 1450.0,
+                          "y": 300.0,
+                          "width": 200.0,
+                          "height": 16.0
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "Table",
+            "frame": {
+              "x": 1680.0,
+              "y": 260.0,
+              "width": 960.0,
+              "height": 760.0
+            },
+            "children": [
+              {
+                "role": "Row",
+                "frame": {
+                  "x": 1680.0,
+                  "y": 320.0,
+                  "width": 960.0,
+                  "height": 20.0
+                },
+                "children": [
+                  {
+                    "role": "Cell",
+                    "frame": {
+                      "x": 1680.0,
+                      "y": 320.0,
+                      "width": 160.0,
+                      "height": 20.0
+                    },
+                    "children": [
+                      {
+                        "role": "StaticText",
+                        "value": "Archive.zip",
+                        "frame": {
+                          "x": 1680.0,
+                          "y": 320.0,
+                          "width": 160.0,
+                          "height": 16.0
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "Cell",
+                    "frame": {
+                      "x": 2040.0,
+                      "y": 320.0,
+                      "width": 160.0,
+                      "height": 20.0
+                    },
+                    "children": [
+                      {
+                        "role": "StaticText",
+                        "value": "3 KB",
+                        "frame": {
+                          "x": 2040.0,
+                          "y": 320.0,
+                          "width": 160.0,
+                          "height": 16.0
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "Row",
+                "frame": {
+                  "x": 1680.0,
+                  "y": 350.0,
+                  "width": 960.0,
+                  "height": 20.0
+                },
+                "selected": true,
+                "children": [
+                  {
+                    "role": "Cell",
+                    "frame": {
+                      "x": 1680.0,
+                      "y": 350.0,
+                      "width": 160.0,
+                      "height": 20.0
+                    },
+                    "children": [
+                      {
+                        "role": "StaticText",
+                        "value": "Guide.md",
+                        "frame": {
+                          "x": 1680.0,
+                          "y": 350.0,
+                          "width": 160.0,
+                          "height": 16.0
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "Cell",
+                    "frame": {
+                      "x": 2040.0,
+                      "y": 350.0,
+                      "width": 160.0,
+                      "height": 20.0
+                    },
+                    "children": [
+                      {
+                        "role": "StaticText",
+                        "value": "12 KB",
+                        "frame": {
+                          "x": 2040.0,
+                          "y": 350.0,
+                          "width": 160.0,
+                          "height": 16.0
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

@@ -1,0 +1,33 @@
+{
+  "phase": 4,
+  "content": {
+    "kind": "conversation",
+    "title": "Rin Kestrel",
+    "messages": [
+      {
+        "author": "Rin Kestrel",
+        "text": "I sent the notes.",
+        "sent_at": "04:02 PM",
+        "is_me": false
+      },
+      {
+        "author": "Rin Kestrel",
+        "text": "The queue is clear.",
+        "sent_at": "04:02 PM",
+        "is_me": false
+      },
+      {
+        "author": "Dara Moss",
+        "text": "I will confirm after review.",
+        "sent_at": "04:04 PM",
+        "is_me": true
+      },
+      {
+        "author": "You",
+        "text": "I will share the final check.",
+        "is_me": true,
+        "draft": true
+      }
+    ]
+  }
+}

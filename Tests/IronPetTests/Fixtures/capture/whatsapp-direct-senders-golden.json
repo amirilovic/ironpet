@@ -1,0 +1,21 @@
+{
+  "phase": 4,
+  "content": {
+    "kind": "conversation",
+    "title": "Priya Vantar",
+    "messages": [
+      {
+        "author": "Priya Vantar",
+        "text": "are we still on for 4",
+        "sent_at": "16:02",
+        "is_me": false
+      },
+      {
+        "author": "You",
+        "text": "yes, see you then",
+        "sent_at": "16:04",
+        "is_me": true
+      }
+    ]
+  }
+}

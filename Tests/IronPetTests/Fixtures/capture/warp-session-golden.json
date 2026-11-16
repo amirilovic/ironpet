@@ -1,0 +1,8 @@
+{
+  "phase": 1,
+  "content": {
+    "kind": "document",
+    "title": "~/code/sample",
+    "text": "$ swift build\nCompiling sample\nBuild complete\n$ swift test\nExecuted sample checks"
+  }
+}

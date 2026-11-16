@@ -1,0 +1,15 @@
+{
+  "app": {
+    "bundle_id": "com.apple.finder",
+    "name": "Finder",
+    "pid": 0
+  },
+  "content": {
+    "kind": "page",
+    "text": "Name Size\nReport.pdf 12 KB\nNotes.txt 4 KB\nRenamed.pdf 12 KB\nFavorites\nProjects\nUploading 34 items",
+    "title": ""
+  },
+  "parser": "finder/v1",
+  "thread_key": "finder:projects",
+  "thread_title": "Projects"
+}

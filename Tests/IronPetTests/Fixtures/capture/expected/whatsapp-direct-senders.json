@@ -1,0 +1,28 @@
+{
+  "app": {
+    "bundle_id": "net.whatsapp.WhatsApp",
+    "name": "WhatsApp",
+    "pid": 0
+  },
+  "content": {
+    "kind": "conversation",
+    "messages": [
+      {
+        "author": "Priya Vantar",
+        "is_me": false,
+        "sent_at": "16:02",
+        "text": "are we still on for 4"
+      },
+      {
+        "author": "You",
+        "is_me": true,
+        "sent_at": "16:04",
+        "text": "yes, see you then"
+      }
+    ],
+    "title": "Priya Vantar"
+  },
+  "parser": "whatsapp/v1",
+  "thread_key": "whatsapp:priya-vantar",
+  "thread_title": "Priya Vantar"
+}

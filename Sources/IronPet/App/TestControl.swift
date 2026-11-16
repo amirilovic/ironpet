@@ -52,6 +52,17 @@ final class TestControl {
     /// What the app does with a finished meeting summary (mine action items, suggest them, show the bubble), so
     /// `/test/tasks/suggest` runs that path. Without it the endpoint only mines and suggests.
     var onMeetingSummaryText: ((String, URL) -> Void)?
+    /// Screen capture, for the `/test/screen/*` endpoints. They feed synthetic captures in, so no test reads the real screen.
+    var screen: CaptureService?
+    private(set) var proposals: [CaptureProposal] = []
+    /// Shows a proposal as the analyzer's result would, with its Add, Edit and Ignore buttons.
+    var showProposal: ((CaptureProposal) -> Void)?
+    /// Opens the capture viewer and returns its window number.
+    var showInspector: (() -> Int)?
+
+    func recordProposal(_ proposal: CaptureProposal) {
+        proposals.append(proposal)
+    }
 
     init(chat: ChatSession, actions: Actions) {
         self.chat = chat
@@ -278,10 +289,81 @@ final class TestControl {
             var result = (try? JSONSerialization.jsonObject(with: tasksSnapshot())) as? [String: Any] ?? [:]
             result["pressedBubble"] = pressed
             return Self.encode(result)
+        case ("GET", "/test/screen"):
+            return screenSnapshot()
+        case ("POST", "/test/screen/ingest"), ("POST", "/test/screen/filter"), ("POST", "/test/screen/send"), ("POST", "/test/screen/propose"), ("POST", "/test/screen/inspector"), ("POST", "/test/screen/stub"), ("POST", "/test/screen/reset"):
+            return screenEndpoint(request.method, request.path, body)
         default:
             return Self.encode(["ok": false, "error": "unknown test endpoint \(request.method) \(request.path)"])
         }
         return snapshot()
+    }
+
+    private func screenSnapshot() -> Data {
+        guard let screen else { return Self.encode(["ok": false, "error": "screen capture is not built"]) }
+        let store = screen.store
+        let counts = Dictionary(uniqueKeysWithValues: ["new", "ready", "local", "sent"].map { ($0, store.count(inState: $0)) })
+        var status = "unknown"
+        var reason = ""
+        switch screen.filter.status {
+        case .unknown: break
+        case .ready(let model): status = "ready"; reason = model
+        case .unavailable(let why): status = "unavailable"; reason = why
+        }
+        return Self.encode([
+            "ok": true,
+            "enabled": ConfigStore.shared.config.screenCapture.enabled,
+            "running": screen.isRunning,
+            "items": store.itemCount,
+            "states": counts,
+            "decision": ["status": status, "reason": reason],
+            "tasks": (TaskStore.shared?.tasks ?? []).map { ["id": $0.id, "title": $0.title, "status": $0.status.rawValue, "source": $0.source.rawValue] },
+            "sendLog": store.sendLog().map { ["harness": $0.harness, "model": $0.model, "items": $0.items.map(Int.init), "bytes": $0.bytes, "outcome": $0.outcome] },
+            "proposals": proposals.map { ["id": $0.id, "kind": $0.kind.rawValue, "title": $0.title] },
+            "sending": screen.model.sending,
+        ])
+    }
+
+    private func screenEndpoint(_ method: String, _ path: String, _ body: [String: Any]) -> Data {
+        guard let screen else { return Self.encode(["ok": false, "error": "screen capture is not built"]) }
+        switch path {
+        case "/test/screen/ingest":
+            // A synthetic capture, as the pipeline would store it. `messages` is a list of "Author: text" lines.
+            let lines = (body["messages"] as? [String]) ?? []
+            let messages = lines.map { line -> CaptureMessage in
+                let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                return parts.count == 2 ? CaptureMessage(author: parts[0], text: parts[1]) : CaptureMessage(text: line)
+            }
+            let thread = body["thread"] as? String ?? "test:thread"
+            let item = CaptureItem(app: CaptureApp(bundleId: body["app"] as? String ?? "com.example.chat", name: body["appName"] as? String ?? "Chat"),
+                                   threadKey: thread, threadTitle: body["title"] as? String ?? thread,
+                                   content: .conversation(title: thread, isGroup: false, messages: messages), parser: "test")
+            let at = Date().addingTimeInterval(-((body["ageSeconds"] as? NSNumber)?.doubleValue ?? 0))
+            _ = try? screen.store.ingest(item, now: at)
+            screen.scheduleFilter()
+        case "/test/screen/stub":
+            screen.useStubs(answer: body["answer"] as? String ?? "{}", secretWords: body["secretWords"] as? [String] ?? [])
+        case "/test/screen/reset":
+            screen.store.clearCaptures()
+            screen.store.clearIgnored()
+            screen.refreshModel()
+        case "/test/screen/inspector":
+            return Self.encode(["ok": true, "windowId": showInspector?() ?? 0])
+        case "/test/screen/propose":
+            let title = body["title"] as? String ?? "Send the invoice"
+            let kind = CaptureProposal.Kind(rawValue: body["kind"] as? String ?? "new_task") ?? .newTask
+            let proposal = CaptureProposal(id: CaptureStore.fingerprint(kind: kind.rawValue, title: title), kind: kind, title: title, notes: "", due: body["due"] as? String,
+                                           taskId: body["taskId"] as? String, status: nil, sources: [1], quote: body["quote"] as? String ?? "", diff: [])
+            showProposal?(proposal)
+        case "/test/screen/filter":
+            Task { _ = await screen.filter.run(on: screen.store, tasks: screen.tasks); screen.analyzer.noteReady(); screen.refreshModel() }
+        case "/test/screen/send":
+            // Sends the pending batch now instead of waiting for the delay.
+            Task { _ = await screen.analyzer.run(); screen.refreshModel() }
+        default:
+            break
+        }
+        return screenSnapshot()
     }
 
     /// Files named by `mic` and `them` stand in for the microphone and the app's audio.

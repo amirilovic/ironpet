@@ -319,6 +319,33 @@ Any sprite sheet in the Codex pet v2 layout (1536 px wide, 8 columns of 192×208
 
 It removes only ironpet's entries from the agents' configs (your other hooks stay) and deletes the two files ironpet owns (Copilot's `ironpet.json` and Pi's `ironpet.ts`), the login item, the app, the Sentry token in the Keychain and the app's preferences. The `*.ironpet-backup` files are kept, since they're your configs from before ironpet.
 
+## Screen capture
+
+Screen capture is off by default. When on, ironpet reads the text of the window you are using through Accessibility, keeps it in `~/.ironpet/ironpet.db`, filters it with a model on your Mac, and after a quiet period asks your chosen agent to look up your tasks and suggest what needs your action. Suggestions appear as bubbles with Add, Edit and Ignore. Nothing becomes a task until you click. With the switch off nothing is read, no model runs, and macOS shows no permission prompt.
+
+**Redaction.** Every item goes through the rules first: AWS, GitHub, GitLab, Anthropic and other `sk-` keys, Stripe, Slack, Google, npm and SendGrid keys, JWTs, private key blocks, `user:password@` in URLs and secret query parameters, `password=`, `token:` and `.env`-style assignments, card and bank numbers, and long random strings. Each span becomes `[redacted:<kind>]`. The local model scores the redacted text, and an item still flagged stays on your Mac. The unredacted text of an item that had a secret is kept for 24 hours, never sent, and can be seen with **Show captures → Reveal original**. After that only the redacted text remains. The send log and Show captures say what happened, for example "redacted 2 spans (aws-key 1, secret-assignment 1), sent".
+
+Turn it on under **Settings → Screen**. macOS asks for Accessibility then. Screen Recording is optional and only used to read the chat name in Viber's header on the device.
+
+| Setting | Key | Notes |
+| --- | --- | --- |
+| Screen capture | `screenCapture.enabled` | Default off |
+| Decision model | `screenCapture.decision.baseUrl`, `.model`, `.api` | `systemone` (H2O-Lightning-4B) or `openai`. The address must be localhost, or nothing is sent |
+| Secret threshold | `screenCapture.decision.secretThreshold` | Default 0.2. The model scores the text after redaction. An item still at or above it stays on the Mac and its text is dropped |
+| Calendar threshold | `screenCapture.decision.calendarThreshold` | Default 0.2. Only matters with a skip threshold: an item at or above it is never skipped as a possible calendar event |
+| Skip threshold | `screenCapture.decision.skipThreshold` | Default 0, which skips nothing. The follow-up and new-task answers of 4B models were unreliable in the evaluation |
+| Agent and model | `screenCapture.agent`, `.model` | An ACP agent id. Its only tools are `tasks_list` and `tasks_get` (read-only), it looks existing tasks up itself, every other permission request is refused, and it runs in `~/.ironpet/capture/agent`, not in your chat folder |
+| Delay | `screenCapture.delayMinutes` | Default 3. Quiet time before a batch is sent |
+| Apps allowed to send | `screenCapture.sendApps` | Bundle ids. Empty by default: captures stay on this Mac |
+| Apps never captured | `screenCapture.excludedApps` | Bundle ids or app names, also under **Never capture** in Settings |
+| Retention | `screenCapture.retentionDays` | Default 30 |
+
+Never captured, whatever a rule says: secure text fields, password managers and authenticator apps, the lock screen, private browser windows, and `file:`, `data:`, `javascript:`, `blob:`, `about:` and browser-internal URLs. Secrets in the text are redacted before anything is stored, scored or sent (see below), and secrets in an item's URL (`code`, `token`, `key`, `sig` and others) are stripped. Every send to the agent is listed in Settings with the time, the agent and model, the capture ids and the size. If no local model is set or it does not answer, nothing is sent.
+
+The rules that turn a window into a conversation or a document are lookback's JavaScript rules (`capture-rules/`). A file in `~/.ironpet/capture/rules` replaces the bundled rule of the same name. After editing a bundled rule, run `python3 scripts/gen_capture_rules.py`.
+
+Pause capture from the pet menu or Settings. **Settings → Screen → Show captures…** lists everything stored with the filter's scores, so you can see what was kept. Suggestions you accept become tasks in the Tasks section of the ironpet window (source `capture`, with the capture item ids in the notes). The agent looks up your tasks (open and done) with read-only tools and can suggest updating one, for example a new due date or done.
+
 ## Meeting transcripts
 
 Meeting transcripts are off by default. They reuse the server from **Settings → Voice** (`voice.baseUrl`, `voice.model`, the Keychain key), so ironpet still ships no speech model. With the feature off there is no menu item, no shortcut, no panel, and macOS is never asked for microphone or screen access.

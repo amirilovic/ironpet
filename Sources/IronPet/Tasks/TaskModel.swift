@@ -19,7 +19,7 @@ enum TaskStatus: String, CaseIterable, Codable {
 
 /// What created a task. Shown as a symbol in the list.
 enum TaskSource: String, CaseIterable, Codable {
-    case chat, telegram, meeting, cli, agent, user
+    case chat, telegram, meeting, cli, agent, user, capture
 
     var symbol: String {
         switch self {
@@ -29,6 +29,7 @@ enum TaskSource: String, CaseIterable, Codable {
         case .cli: return "terminal"
         case .agent: return "sparkles"
         case .user: return "person"
+        case .capture: return "text.viewfinder"
         }
     }
 }

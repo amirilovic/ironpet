@@ -1,0 +1,15 @@
+{
+  "app": {
+    "bundle_id": "com.apple.reminders",
+    "name": "Reminders",
+    "pid": 0
+  },
+  "content": {
+    "kind": "page",
+    "text": "Archive sample packet\nFriday 14:30\nReview draft outline",
+    "title": ""
+  },
+  "parser": "reminders/v1",
+  "thread_key": "reminders:archive-sample-packet",
+  "thread_title": "Archive sample packet"
+}

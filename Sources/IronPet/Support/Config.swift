@@ -57,6 +57,40 @@ struct Config: Codable, Equatable {
         var recogniseSpeakers = false
     }
 
+    /// Screen capture: ironpet reads what is on screen through Accessibility, keeps it in its local database, filters it with a model on
+    /// this Mac, and after a delay asks an agent to compare it with the open tasks. Off by default. With it off nothing is read, no
+    /// model runs and no permission prompt appears.
+    struct ScreenCapture: Codable, Equatable {
+        /// The local model that filters captures before anything is sent to a larger one. It must run on this Mac.
+        struct Decision: Codable, Equatable {
+            /// `"systemone"` (H2O-Lightning-4B's `/v1/systemone`) or `"openai"` (an OpenAI-compatible `/v1/chat/completions`).
+            var api = "systemone"
+            /// Must point at this Mac (localhost, 127.0.0.1 or ::1). A remote address is refused, because captures would leave the Mac.
+            var baseUrl = "http://127.0.0.1:8741"
+            var model = "h2o-lightning-4b"
+            /// A probability at or above this marks an item as holding a secret. It then never leaves the Mac.
+            var secretThreshold = 0.2
+            /// A probability at or above this keeps an item in play as a calendar candidate.
+            var calendarThreshold = 0.2
+            /// Items whose follow-up and new-task probabilities are both below this are not sent. 0 sends everything that passes.
+            var skipThreshold = 0.0
+        }
+
+        var enabled = false
+        var decision = Decision()
+        /// An ACP agent id from `AgentCatalog`, such as `"claude"`. It reads the batch and the open tasks, and has no tools.
+        var agent = "claude"
+        /// nil uses the agent's default model.
+        var model: String?
+        /// How long captures wait, with nothing new arriving, before they are sent to the agent as one batch.
+        var delayMinutes = 3.0
+        var retentionDays = 30
+        /// Bundle ids of apps whose captures may be sent to the agent. Empty means none: captures stay on this Mac.
+        var sendApps: [String] = []
+        /// Bundle ids or names of apps never captured at all.
+        var excludedApps: [String] = []
+    }
+
     struct Reminders: Codable, Equatable {
         struct Item: Codable, Equatable {
             var enabled = true
@@ -166,6 +200,7 @@ struct Config: Codable, Equatable {
     var voice = Voice()
     var meetings = Meetings()
     var telegram = Telegram()
+    var screenCapture = ScreenCapture()
 
     static let file = Paths.root.appendingPathComponent("config.json")
 
@@ -219,6 +254,13 @@ struct Config: Codable, Equatable {
         c.voice.baseUrl = c.voice.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         c.voice.model = c.voice.model.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.meetings.summaryModel?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.meetings.summaryModel = nil }
+        if c.screenCapture.model?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.screenCapture.model = nil }
+        c.screenCapture.delayMinutes = min(240, max(0.5, c.screenCapture.delayMinutes))
+        c.screenCapture.retentionDays = min(365, max(1, c.screenCapture.retentionDays))
+        c.screenCapture.decision.baseUrl = c.screenCapture.decision.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        c.screenCapture.decision.secretThreshold = min(1, max(0, c.screenCapture.decision.secretThreshold))
+        c.screenCapture.decision.calendarThreshold = min(1, max(0, c.screenCapture.decision.calendarThreshold))
+        c.screenCapture.decision.skipThreshold = min(1, max(0, c.screenCapture.decision.skipThreshold))
         return c
     }
 

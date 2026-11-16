@@ -1,0 +1,32 @@
+{
+  "app": {
+    "bundle_id": "net.whatsapp.WhatsApp",
+    "name": "WhatsApp",
+    "pid": 0
+  },
+  "content": {
+    "is_group": true,
+    "kind": "conversation",
+    "messages": [
+      {
+        "author": "Mira",
+        "is_me": false,
+        "text": "bringing snacks"
+      },
+      {
+        "author": "Niko",
+        "is_me": false,
+        "text": "arranging rides"
+      },
+      {
+        "author": "You",
+        "is_me": true,
+        "text": "I will bring drinks"
+      }
+    ],
+    "title": "Weekend Plans"
+  },
+  "parser": "whatsapp/v1",
+  "thread_key": "whatsapp:weekend-plans",
+  "thread_title": "Weekend Plans"
+}

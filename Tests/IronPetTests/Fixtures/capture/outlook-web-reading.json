@@ -1,0 +1,207 @@
+{
+  "app": {
+    "bundle_id": "com.google.Chrome",
+    "name": "Google Chrome",
+    "pid": 0
+  },
+  "window_title": "Quarterly index rebuild - Outlook",
+  "url": "https://outlook.office.com/mail/inbox/id/AAQkAD00?itemid=AAQkAD00&exvsurl=1",
+  "root": {
+    "role": "Window",
+    "name": "Signal map check - Outlook",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1600.0,
+      "height": 900.0
+    },
+    "children": [
+      {
+        "role": "Heading",
+        "value": "Signal map check",
+        "attrs": {
+          "dom_classes": "outlook-subject"
+        },
+        "frame": {
+          "x": 500.0,
+          "y": 60.0,
+          "width": 500.0,
+          "height": 24.0
+        }
+      },
+      {
+        "role": "Group",
+        "attrs": {
+          "dom_classes": "outlook-message-card",
+          "label": "Message From: Nira Vale, Sent: Tue 08:17 AM"
+        },
+        "frame": {
+          "x": 500.0,
+          "y": 100.0,
+          "width": 800.0,
+          "height": 120.0
+        },
+        "children": [
+          {
+            "role": "Group",
+            "attrs": {
+              "dom_classes": "outlook-message-header",
+              "label": "Message From: Nira Vale, Sent: Tue 08:17 AM"
+            },
+            "frame": {
+              "x": 500.0,
+              "y": 100.0,
+              "width": 800.0,
+              "height": 20.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Nira Vale",
+                "frame": {
+                  "x": 500.0,
+                  "y": 100.0,
+                  "width": 160.0,
+                  "height": 16.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "Tue 08:17 AM",
+                "frame": {
+                  "x": 670.0,
+                  "y": 100.0,
+                  "width": 140.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Group",
+            "attrs": {
+              "dom_classes": "outlook-message-body"
+            },
+            "frame": {
+              "x": 500.0,
+              "y": 130.0,
+              "width": 800.0,
+              "height": 80.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "The map review is complete.",
+                "frame": {
+                  "x": 500.0,
+                  "y": 130.0,
+                  "width": 400.0,
+                  "height": 16.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "No delayed signals remain.",
+                "frame": {
+                  "x": 500.0,
+                  "y": 150.0,
+                  "width": 400.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "Group",
+        "attrs": {
+          "dom_classes": "outlook-message-card",
+          "label": "Message"
+        },
+        "frame": {
+          "x": 500.0,
+          "y": 260.0,
+          "width": 800.0,
+          "height": 120.0
+        },
+        "children": [
+          {
+            "role": "Group",
+            "attrs": {
+              "dom_classes": "outlook-message-header",
+              "label": "Message"
+            },
+            "frame": {
+              "x": 500.0,
+              "y": 260.0,
+              "width": 800.0,
+              "height": 20.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Sol Renn",
+                "frame": {
+                  "x": 500.0,
+                  "y": 260.0,
+                  "width": 160.0,
+                  "height": 16.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "Tue 08:39 AM",
+                "frame": {
+                  "x": 670.0,
+                  "y": 260.0,
+                  "width": 140.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Group",
+            "attrs": {
+              "dom_classes": "outlook-message-body"
+            },
+            "frame": {
+              "x": 500.0,
+              "y": 290.0,
+              "width": 800.0,
+              "height": 80.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "The last probe is green.",
+                "frame": {
+                  "x": 500.0,
+                  "y": 290.0,
+                  "width": 400.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "TextArea",
+        "value": "I will send the map note.",
+        "attrs": {
+          "dom_id": "outlook-compose-body",
+          "label": "Message body"
+        },
+        "frame": {
+          "x": 500.0,
+          "y": 500.0,
+          "width": 600.0,
+          "height": 120.0
+        }
+      }
+    ]
+  },
+  "captured_at": 0
+}

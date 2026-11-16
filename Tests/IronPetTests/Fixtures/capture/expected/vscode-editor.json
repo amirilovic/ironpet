@@ -1,0 +1,15 @@
+{
+  "app": {
+    "bundle_id": "com.microsoft.VSCode",
+    "name": "Code",
+    "pid": 0
+  },
+  "content": {
+    "kind": "document",
+    "text": "struct Sample {\n    let enabled = true\n}",
+    "title": "sample.swift"
+  },
+  "parser": "editor/v1",
+  "thread_key": "editor:sample/sample.swift",
+  "thread_title": "sample.swift"
+}

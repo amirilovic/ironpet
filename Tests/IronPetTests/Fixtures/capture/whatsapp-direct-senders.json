@@ -1,0 +1,101 @@
+{
+  "app": {
+    "bundle_id": "net.whatsapp.WhatsApp",
+    "name": "WhatsApp",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "WhatsApp",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1000.0,
+      "height": 700.0
+    },
+    "children": [
+      {
+        "role": "Heading",
+        "value": "Priya Vantar",
+        "attrs": {
+          "label": "conversation title"
+        },
+        "frame": {
+          "x": 340.0,
+          "y": 20.0,
+          "width": 220.0,
+          "height": 22.0
+        }
+      },
+      {
+        "role": "Cell",
+        "attrs": {
+          "identifier": "WAMessageBubbleTableViewCell"
+        },
+        "frame": {
+          "x": 340.0,
+          "y": 100.0,
+          "width": 300.0,
+          "height": 44.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "are we still on for 4",
+            "frame": {
+              "x": 360.0,
+              "y": 108.0,
+              "width": 220.0,
+              "height": 18.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "16:02",
+            "frame": {
+              "x": 560.0,
+              "y": 128.0,
+              "width": 40.0,
+              "height": 12.0
+            }
+          }
+        ]
+      },
+      {
+        "role": "Cell",
+        "attrs": {
+          "identifier": "WAMessageBubbleTableViewCell"
+        },
+        "frame": {
+          "x": 660.0,
+          "y": 164.0,
+          "width": 300.0,
+          "height": 44.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "yes, see you then",
+            "frame": {
+              "x": 680.0,
+              "y": 172.0,
+              "width": 220.0,
+              "height": 18.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "16:04",
+            "frame": {
+              "x": 880.0,
+              "y": 192.0,
+              "width": 40.0,
+              "height": 12.0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

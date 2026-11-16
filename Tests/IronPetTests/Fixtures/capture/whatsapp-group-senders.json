@@ -1,0 +1,72 @@
+{
+  "app": {
+    "bundle_id": "net.whatsapp.WhatsApp",
+    "name": "WhatsApp",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "WhatsApp",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1000.0,
+      "height": 700.0
+    },
+    "children": [
+      {
+        "role": "Heading",
+        "value": "Weekend Plans",
+        "attrs": {
+          "label": "conversation title"
+        },
+        "frame": {
+          "x": 340.0,
+          "y": 20.0,
+          "width": 220.0,
+          "height": 22.0
+        }
+      },
+      {
+        "role": "Cell",
+        "attrs": {
+          "identifier": "WAMessageBubbleTableViewCell",
+          "label": "Mira: bringing snacks"
+        },
+        "frame": {
+          "x": 340.0,
+          "y": 100.0,
+          "width": 300.0,
+          "height": 44.0
+        }
+      },
+      {
+        "role": "Cell",
+        "attrs": {
+          "identifier": "WAMessageBubbleTableViewCell",
+          "label": "Niko: arranging rides"
+        },
+        "frame": {
+          "x": 340.0,
+          "y": 160.0,
+          "width": 300.0,
+          "height": 44.0
+        }
+      },
+      {
+        "role": "Cell",
+        "attrs": {
+          "identifier": "WAMessageBubbleTableViewCell",
+          "label": "You: I will bring drinks"
+        },
+        "frame": {
+          "x": 660.0,
+          "y": 220.0,
+          "width": 300.0,
+          "height": 44.0
+        }
+      }
+    ]
+  },
+  "captured_at": 0
+}

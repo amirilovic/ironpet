@@ -1,0 +1,125 @@
+{
+  "app": {
+    "bundle_id": "net.whatsapp.WhatsApp",
+    "name": "WhatsApp",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "WhatsApp",
+    "frame": {
+      "x": 1440.0,
+      "y": 220.0,
+      "width": 1000.0,
+      "height": 700.0
+    },
+    "children": [
+      {
+        "role": "Group",
+        "attrs": {
+          "label": "Chats"
+        },
+        "frame": {
+          "x": 1440.0,
+          "y": 220.0,
+          "width": 300.0,
+          "height": 700.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Archived",
+            "frame": {
+              "x": 1460.0,
+              "y": 256.0,
+              "width": 120.0,
+              "height": 18.0
+            }
+          }
+        ]
+      },
+      {
+        "role": "Heading",
+        "value": "Contact Quill",
+        "attrs": {
+          "label": "conversation title"
+        },
+        "frame": {
+          "x": 1780.0,
+          "y": 240.0,
+          "width": 220.0,
+          "height": 22.0
+        }
+      },
+      {
+        "role": "Cell",
+        "attrs": {
+          "identifier": "WAMessageBubbleTableViewCell"
+        },
+        "frame": {
+          "x": 1780.0,
+          "y": 320.0,
+          "width": 300.0,
+          "height": 44.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "synthetic inbound note",
+            "frame": {
+              "x": 1800.0,
+              "y": 328.0,
+              "width": 220.0,
+              "height": 18.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "16:02",
+            "frame": {
+              "x": 2000.0,
+              "y": 348.0,
+              "width": 40.0,
+              "height": 12.0
+            }
+          }
+        ]
+      },
+      {
+        "role": "Cell",
+        "attrs": {
+          "identifier": "WAMessageBubbleTableViewCell"
+        },
+        "frame": {
+          "x": 2100.0,
+          "y": 384.0,
+          "width": 300.0,
+          "height": 44.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "synthetic outbound note",
+            "frame": {
+              "x": 2120.0,
+              "y": 392.0,
+              "width": 220.0,
+              "height": 18.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "16:04",
+            "frame": {
+              "x": 2320.0,
+              "y": 412.0,
+              "width": 40.0,
+              "height": 12.0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

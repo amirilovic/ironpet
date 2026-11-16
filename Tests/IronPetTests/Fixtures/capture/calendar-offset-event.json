@@ -1,0 +1,136 @@
+{
+  "app": {
+    "bundle_id": "com.apple.iCal",
+    "name": "Calendar",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "Calendar",
+    "frame": {
+      "x": 1440.0,
+      "y": 220.0,
+      "width": 1200.0,
+      "height": 800.0
+    },
+    "children": [
+      {
+        "role": "Group",
+        "attrs": {
+          "identifier": "calendar-sidebar"
+        },
+        "frame": {
+          "x": 1440.0,
+          "y": 220.0,
+          "width": 220.0,
+          "height": 800.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Today",
+            "frame": {
+              "x": 1460.0,
+              "y": 300.0,
+              "width": 100.0,
+              "height": 20.0
+            }
+          }
+        ]
+      },
+      {
+        "role": "Popover",
+        "attrs": {
+          "identifier": "event-detail"
+        },
+        "frame": {
+          "x": 1840.0,
+          "y": 340.0,
+          "width": 480.0,
+          "height": 420.0
+        },
+        "children": [
+          {
+            "role": "Heading",
+            "value": "Planning check-in",
+            "attrs": {
+              "identifier": "event-title"
+            },
+            "frame": {
+              "x": 1860.0,
+              "y": 365.0,
+              "width": 300.0,
+              "height": 30.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Friday 13 September, 09:30 to 10:00",
+            "attrs": {
+              "identifier": "event-date-time"
+            },
+            "frame": {
+              "x": 1860.0,
+              "y": 420.0,
+              "width": 300.0,
+              "height": 20.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Studio 2",
+            "attrs": {
+              "identifier": "event-location"
+            },
+            "frame": {
+              "x": 1860.0,
+              "y": 455.0,
+              "width": 250.0,
+              "height": 20.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Product calendar",
+            "attrs": {
+              "identifier": "event-organizer"
+            },
+            "frame": {
+              "x": 1860.0,
+              "y": 490.0,
+              "width": 250.0,
+              "height": 20.0
+            }
+          },
+          {
+            "role": "Link",
+            "value": "Join video call",
+            "attrs": {
+              "identifier": "event-conference"
+            },
+            "frame": {
+              "x": 1860.0,
+              "y": 525.0,
+              "width": 250.0,
+              "height": 20.0
+            }
+          },
+          {
+            "role": "TextArea",
+            "value": "Agenda is ready.",
+            "attrs": {
+              "identifier": "event-notes"
+            },
+            "frame": {
+              "x": 1860.0,
+              "y": 560.0,
+              "width": 350.0,
+              "height": 80.0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

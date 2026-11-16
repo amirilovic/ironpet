@@ -65,7 +65,7 @@ final class EventServer {
         if request.method == "GET", request.path == "/status" {
             return respond(connection, status: "200 OK", body: status())
         }
-        if ["/mcp", "/automations", "/tasks"].contains(request.path) {
+        if ["/mcp", MCPEndpoint.readOnlyTasksPath, "/automations", "/tasks"].contains(request.path) {
             guard request.method == "POST", let onAgentAPI else { return respond(connection, status: "405 Method Not Allowed") }
             onAgentAPI(request) { [queue] status, body in
                 queue.async { self.respond(connection, status: status, body: body) }

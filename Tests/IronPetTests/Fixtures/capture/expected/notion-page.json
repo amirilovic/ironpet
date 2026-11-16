@@ -1,0 +1,15 @@
+{
+  "app": {
+    "bundle_id": "notion.id",
+    "name": "Notion",
+    "pid": 0
+  },
+  "content": {
+    "kind": "document",
+    "text": "Implementation\nBuild the parser around the page frame.\nKeep fallback capture available.",
+    "title": "Project outline"
+  },
+  "parser": "notion/v1",
+  "thread_key": "notion:project-outline",
+  "thread_title": "Project outline"
+}

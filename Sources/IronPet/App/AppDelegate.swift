@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let notifier = Notifier()
     private let installer = HookInstaller()
     private var automations: AutomationService!
+    private var capture: CaptureService?
+    private lazy var captureInspector = CaptureInspectorWindow(service: { [weak self] in self?.capture })
     private lazy var logWindow = AutomationLogWindow(service: { [weak self] in self?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
@@ -199,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.tasks = tasks
         pet.settings = settingsModel
         pet.onSettings = { [weak self] in self?.showSettings(tab: nil) }
+        setUpScreenCapture(database)
         let service = AutomationService(store: store, engine: engine, database: database)
         service.notice = { [weak self] notice in self?.announcer.automation(notice) }
         service.dismissNotice = { [weak self] id in self?.announcer.bubbles.dismiss(id) }
@@ -239,6 +242,133 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !TestControl.isEnabled {
             DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.checkSkills() }
         }
+    }
+
+    /// Builds screen capture on the shared database and applies the switch. With the switch off nothing starts.
+    private func setUpScreenCapture(_ database: Database) {
+        let captureStore = CaptureStore(database: database)
+        CaptureStore.restrictPermissions(of: database)
+        var dependencies = CaptureService.Dependencies()
+        // An automated run must not raise the macOS Accessibility prompt or read the real screen.
+        if TestControl.isEnabled {
+            dependencies.requestAccessibility = { false }
+            dependencies.makeSource = { IdleCaptureSource() }
+        }
+        let service = CaptureService(store: captureStore, config: { ConfigStore.shared.config.screenCapture },
+                                     rules: CaptureRules(folder: CaptureService.rulesFolder), dependencies: dependencies)
+        service.onProposals = { [weak self, weak service] proposals in
+            guard let self, let service else { return }
+            for proposal in proposals { self.showProposal(proposal, service: service) }
+        }
+        service.model.$sending
+            .removeDuplicates()
+            .sink { [weak self] sending in self?.captureSendingChanged(sending) }
+            .store(in: &cancellables)
+        capture = service
+        settingsModel.capture = service
+        settingsModel.showCaptures = { [weak self] in self?.captureInspector.show() }
+        service.refreshModel()
+        service.apply()
+    }
+
+    /// Shows what the agent suggested as a bubble. Add makes the task, Edit lets the user change it first, Ignore remembers not to ask again.
+    private func showProposal(_ proposal: CaptureProposal, service: CaptureService) {
+        let id = "capture-proposal:\(proposal.id)"
+        let dismiss = { [weak self] in self?.announcer.bubbles.dismiss(id) }
+        var body = proposal.title
+        if !proposal.diff.isEmpty { body += "\n" + proposal.diff.joined(separator: "\n") }
+        else if let due = proposal.due { body += "\nDue \(due)" }
+        if !proposal.quote.isEmpty { body += "\n\u{201C}\(proposal.quote)\u{201D}" }
+        announcer.bubbles.show(Bubble(
+            id: id, symbol: "checklist", tint: .blue, title: proposal.bubbleTitle, subtitle: "From your screen", body: body,
+            actions: [
+                .init(title: proposal.kind == .update ? "Update" : "Add", style: .primary) { Task { await service.accept(proposal) }; dismiss() },
+                .init(title: "Edit") { [weak self] in
+                    guard let edited = self?.editProposal(proposal) else { return }
+                    Task { await service.accept(proposal, title: edited.title, due: edited.due) }
+                    dismiss()
+                },
+                .init(title: "Ignore", style: .destructive) { service.ignore(proposal); dismiss() },
+            ]))
+        testControl?.recordProposal(proposal)
+    }
+
+    /// Asks for a new title and due date. Nil when the user cancels.
+    private func editProposal(_ proposal: CaptureProposal) -> (title: String, due: String?)? {
+        let alert = NSAlert()
+        alert.messageText = proposal.kind == .update ? "Update task" : "Add task"
+        alert.addButton(withTitle: proposal.kind == .update ? "Update" : "Add")
+        alert.addButton(withTitle: "Cancel")
+        let title = NSTextField(string: proposal.title)
+        let due = NSTextField(string: proposal.due ?? "")
+        due.placeholderString = "Due, such as 2026-11-20 (optional)"
+        let stack = NSStackView(views: [title, due])
+        stack.orientation = .vertical
+        stack.spacing = 8
+        stack.frame = NSRect(x: 0, y: 0, width: 320, height: 56)
+        title.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        due.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        alert.accessoryView = stack
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let text = title.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        let date = due.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (text, date.isEmpty ? nil : date)
+    }
+
+    /// A bubble stays up while captures are being sent to the agent, so the user always sees when anything leaves the Mac.
+    private func captureSendingChanged(_ sending: Bool) {
+        let id = "capture-sending"
+        guard sending else { return announcer.bubbles.dismiss(id) }
+        let agent = AgentCatalog.agent(id: config.config.screenCapture.agent)?.name ?? config.config.screenCapture.agent
+        announcer.bubbles.show(Bubble(id: id, symbol: "arrow.up.circle.fill", tint: .orange, title: "Sending captures to \(agent)",
+                                      body: "Text from the apps you allowed is being read by the agent now."))
+    }
+
+    @objc private func showCaptureInspector() { captureInspector.show() }
+
+    @objc private func captureMenuAction(_ sender: NSMenuItem) {
+        guard let capture else { return }
+        switch sender.representedObject as? String {
+        case "pause15": capture.privacy.pause(for: 15 * 60)
+        case "pause60": capture.privacy.pause(for: 3600)
+        case "pauseTomorrow": capture.privacy.pauseUntilTomorrow()
+        case "resume": capture.privacy.resume()
+        default: break
+        }
+        capture.refreshModel()
+    }
+
+    /// The pause controls, shown only while screen capture is on.
+    private func captureMenuItem() -> NSMenuItem? {
+        guard let capture, config.config.screenCapture.enabled else { return nil }
+        let submenu = NSMenu()
+        func add(_ title: String, _ key: String, on: Bool = false) {
+            let item = NSMenuItem(title: title, action: #selector(captureMenuAction(_:)), keyEquivalent: "")
+            item.representedObject = key
+            item.target = self
+            item.state = on ? .on : .off
+            submenu.addItem(item)
+        }
+        if capture.privacy.isPaused() {
+            add("Resume capture", "resume")
+        } else {
+            add("Pause for 15 minutes", "pause15")
+            add("Pause for 1 hour", "pause60")
+            add("Pause until tomorrow", "pauseTomorrow")
+        }
+        submenu.addItem(.separator())
+        let captures = NSMenuItem(title: "Show captures…", action: #selector(showCaptureInspector), keyEquivalent: "")
+        captures.target = self
+        submenu.addItem(captures)
+        let settings = NSMenuItem(title: "Screen settings…", action: #selector(showScreenSettings), keyEquivalent: "")
+        settings.target = self
+        submenu.addItem(settings)
+        let state = capture.model.sending ? "sending to the agent" : capture.privacy.isPaused() ? "paused" : "on"
+        let item = NSMenuItem(title: "Screen capture (\(state))", action: nil, keyEquivalent: "")
+        item.submenu = submenu
+        return item
     }
 
     /// With the switch on, installs and updates the skills for the agents found on this Mac and says so in one bubble. With it off, offers instead.
@@ -289,6 +419,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if Paths.isIsolated { env.append(["name": "IRONPET_ROOT", "value": Paths.root.path]) }
         let entry: JSON = ["name": "ironpet", "command": executable, "args": ["mcp"], "env": env]
         ACPBackend.defaultMCPServers = { [entry] }
+        let readOnly: JSON = ["name": "ironpet", "command": executable, "args": ["mcp", "--tasks-readonly"], "env": env]
+        ACPBackend.readOnlyTasksMCPServer = { readOnly }
     }
 
     /// Applies settings that need more than being read at the point of use.
@@ -303,6 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !new.meetings.enabled { meeting.dismiss() }
         startCallMonitor()
         if new.pet.sprite != old.pet.sprite { pet.reloadAtlas() }
+        if new.screenCapture != old.screenCapture { capture?.apply(new.screenCapture) }
     }
 
     private func registerHotKeys() {
@@ -426,6 +559,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.show()
     }
 
+    @objc private func showScreenSettings() { showSettings(tab: "screen") }
+
     @objc private func showAutomationSettings(_ sender: Any?) {
         pet.showWindow(.automations)
     }
@@ -539,6 +674,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             ))
             control.onMeetingSummaryText = { [weak self] text, meeting in self?.suggestTasks(fromSummary: text, meeting: meeting) }
+            control.screen = capture
+            control.showInspector = { [weak self] in
+                self?.captureInspector.show()
+                return self?.captureInspector.windowNumber ?? 0
+            }
+            control.showProposal = { [weak self] proposal in
+                guard let self, let capture = self.capture else { return }
+                self.showProposal(proposal, service: capture)
+            }
             testControl = control
             server.onTest = { request, respond in
                 DispatchQueue.main.async { respond(control.handle(request)) }
@@ -896,7 +1040,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         login.state = LoginItem.isEnabled ? .on : .off
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",")
         for item in [system, login, settings] { item.target = self }
-        return [meetingMenuItem(), settings, automationsMenuItem(), integrationsMenuItem(), system, login].compactMap { $0 }
+        return [meetingMenuItem(), captureMenuItem(), settings, automationsMenuItem(), integrationsMenuItem(), system, login].compactMap { $0 }
     }
 
     private func integrationsMenuItem() -> NSMenuItem {

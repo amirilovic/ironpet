@@ -1,0 +1,17 @@
+{
+  "app": {
+    "bundle_id": "com.apple.Safari",
+    "name": "Safari",
+    "pid": 0
+  },
+  "content": {
+    "kind": "page",
+    "text": "A Small Article\nThe first paragraph uses invented content.\nThe second paragraph confirms the offset.\nRelated notes\nArticles",
+    "title": ""
+  },
+  "parser": "generic/v1",
+  "thread_key": "web:https://example.com/posts/one",
+  "thread_title": "One",
+  "url": "https://example.com/posts/one",
+  "window_title": "One"
+}
