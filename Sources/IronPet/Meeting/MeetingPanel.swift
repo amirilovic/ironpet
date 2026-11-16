@@ -191,7 +191,7 @@ struct MeetingView: View {
         } else {
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(Array(recent.enumerated()), id: \.offset) { _, line in
-                    (Text(line.track.rawValue + ": ").fontWeight(.medium).foregroundColor(line.track == .me ? .accentColor : .secondary)
+                    (Text(line.label + ": ").fontWeight(.medium).foregroundColor(line.track == .me ? .accentColor : .secondary)
                         + Text(line.text))
                         .font(.system(size: 11))
                         .lineLimit(2)
@@ -245,6 +245,17 @@ struct MeetingView: View {
                 EmptyView()
             }
             lines
+            if controller.hasSpeakersToName {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "person.wave.2.fill").foregroundStyle(.secondary)
+                    Text("New voices have been found in the meeting transcript.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Label speaker voices") { controller.onLabelSpeakers?() }.controlSize(.small)
+                }
+                .padding(8)
+                .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+            }
             HStack(spacing: 8) {
                 Button("Open transcript") { controller.openTranscript() }
                 if case .ready = controller.summary { Button("Open summary") { controller.openSummary() } }

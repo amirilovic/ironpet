@@ -15,6 +15,8 @@ final class SettingsModel: ObservableObject {
     let actions: Actions
     /// Set once the app has built it, before the window can open.
     var automations: AutomationService?
+    /// The meeting controller, for labelling the voices of the last meeting.
+    var meeting: MeetingController?
     /// Opens the execution log window, for one automation or all of them.
     var showLogs: (String?) -> Void = { _ in }
     /// Sends what the user wants to the chat, for the agent to create the automation.
@@ -430,6 +432,7 @@ private struct MeetingSettings: View {
 
     var body: some View {
         Form {
+            if let meeting = model.meeting { SpeakerLabelSection(controller: meeting) }
             Section {
                 Toggle("Meeting transcripts", isOn: Binding(get: { meetings.enabled }, set: setEnabled))
                     .disabled(testing)
@@ -451,6 +454,7 @@ private struct MeetingSettings: View {
                 Text("When another app, such as WhatsApp, Zoom or a browser, uses your microphone for about 10 seconds, Ghost asks whether to record the call. Nothing is recorded until you click Record.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            SpeakerSettings()
             Section("Summary") {
                 Toggle("Summarize automatically when a meeting ends", isOn: Binding(
                     get: { meetings.autoSummary }, set: { on in store.update { $0.meetings.autoSummary = on } }))
@@ -528,6 +532,66 @@ private struct MeetingSettings: View {
             testing = false
         }
     }
+}
+
+/// The "Recognise speakers in meetings" section: the toggle, the one-time model download and the stored voices.
+private struct SpeakerSettings: View {
+    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var models = SpeakerModels.shared
+    @State private var voices: [StoredVoice] = []
+    @State private var confirmForgetAll = false
+
+    var body: some View {
+        Section {
+            Toggle("Recognise speakers in meetings", isOn: Binding(
+                get: { store.config.meetings.recogniseSpeakers }, set: setEnabled))
+            if store.config.meetings.recogniseSpeakers {
+                status
+            }
+            if !voices.isEmpty {
+                ForEach(voices) { voice in
+                    HStack {
+                        Text(voice.name)
+                        Text("\(Int(voice.seconds / 60)) min of speech").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Forget this voice") { VoiceStore.shared.forget(id: voice.id); reload() }.controlSize(.small)
+                    }
+                }
+            }
+            Button("Forget all voices", role: .destructive) { confirmForgetAll = true }
+                .disabled(voices.isEmpty && !VoiceStore.shared.hasFile)
+                .confirmationDialog("Forget all voices?", isPresented: $confirmForgetAll) {
+                    Button("Forget all voices", role: .destructive) { VoiceStore.shared.forgetAll(); reload() }
+                }
+        } footer: {
+            Text("Splits the other side of a call into speakers. After a meeting ironpet asks who each unnamed voice is, and recognises named voices in later meetings. Voiceprints are biometric data. They are stored only on this Mac, encrypted with a key in your Keychain, and nothing is sent anywhere. The people recognised have not consented, so tell them. Turning this on downloads about 21 MB of models once.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear(perform: reload)
+    }
+
+    @ViewBuilder private var status: some View {
+        switch models.state {
+        case .notDownloaded:
+            Text("Models not downloaded").font(.caption).foregroundStyle(.secondary)
+        case .downloading(let fraction):
+            HStack { ProgressView(value: fraction).frame(maxWidth: 160); Text("Downloading models, \(Int(fraction * 100))%").font(.caption) }
+        case .ready:
+            Text("Ready").font(.caption).foregroundStyle(.green)
+        case .failed(let message):
+            HStack {
+                Text("Download failed: \(message)").font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                Button("Try again") { models.prepare() }.controlSize(.small)
+            }
+        }
+    }
+
+    private func setEnabled(_ on: Bool) {
+        store.update { $0.meetings.recogniseSpeakers = on }
+        if on { models.prepare() }
+    }
+
+    private func reload() { voices = VoiceStore.shared.voices() }
 }
 
 // MARK: - Integrations

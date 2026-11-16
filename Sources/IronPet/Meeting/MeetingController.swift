@@ -44,12 +44,24 @@ final class MeetingController: ObservableObject {
     @Published private(set) var jobs: [MeetingJob] = []
     @Published private(set) var summary: SummaryState = .none
     @Published private(set) var appName = ""
+    /// The voices found in this meeting, for the "Who is this?" list.
+    @Published private(set) var speakerTable = MeetingSpeakerTable()
+    /// Names were given after the summary was written, so it still says "Speaker 1".
+    @Published private(set) var namesChangedSinceSummary = false
     private(set) var startedAt: Date?
     private(set) var folder: URL?
     let myLevels = LevelBuffer()
     let theirLevels = LevelBuffer()
 
     var isEnabled: () -> Bool = { ConfigStore.shared.config.meetings.enabled }
+    /// Speaker recognition is off unless the user turned it on in Settings.
+    var recogniseSpeakers: () -> Bool = { ConfigStore.shared.config.meetings.recogniseSpeakers }
+    /// True once the diarization models are on disk. A meeting never downloads them.
+    var speakerModelsReady: () -> Bool = { MainActor.assumeIsolated { SpeakerModels.shared.isReady } }
+    var diarizer: SpeakerDiarizing = FluidDiarizer()
+    var voiceStore: VoiceStore = .shared
+    /// Where meeting folders go. Tests point it at a temporary directory.
+    var meetingsRoot: URL = Paths.meetings
     var makeTranscriber: () -> Transcriber = {
         let voice = ConfigStore.shared.config.voice
         return Transcriber(baseURL: voice.baseUrl, model: voice.model, apiKey: KeyCache.key(), usageFeature: .meetingTranscription)
@@ -89,6 +101,8 @@ final class MeetingController: ObservableObject {
     /// Opens a meeting file. Tests replace it.
     var openFile: (URL) -> Void = { MeetingFileOpener.open($0) }
     var onChange: (() -> Void)?
+    /// Opens Settings → Meetings, where unnamed voices are labelled.
+    var onLabelSpeakers: (() -> Void)?
     /// Agent and model of the last summary run, for `GET /test/meeting`.
     private(set) var lastSummaryRequest: (agent: String, model: String?)?
     private(set) var summaryNotified: [String] = []
@@ -152,6 +166,12 @@ final class MeetingController: ObservableObject {
     /// Closes the picker without recording.
     func dismiss() {
         guard phase == .choosing || phase == .done else { return }
+        // Closing the "meeting saved" bubble must not lose the voices that still need a name: Settings → Meetings
+        // lists them until the next meeting starts.
+        if phase == .done, !speakersToName.isEmpty {
+            setPhase(.idle)
+            return
+        }
         reset()
         setPhase(.idle)
     }
@@ -218,7 +238,7 @@ final class MeetingController: ObservableObject {
         // Cancelled while permissions were being checked.
         guard expected == generation else { return }
         let start = Date()
-        let folder = Self.newFolder(for: start)
+        let folder = Self.newFolder(for: start, in: meetingsRoot)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         } catch {
@@ -428,27 +448,43 @@ final class MeetingController: ObservableObject {
         let chunk = jobs[index].chunk
         let make = makeTranscriber
         let generation = self.generation
+        // Only the other side of the call is split into speakers, and only when the feature is on and its models are
+        // already downloaded. Otherwise nothing is called.
+        let diarizer: SpeakerDiarizing? = chunk.track == .them && recogniseSpeakers() && speakerModelsReady() ? self.diarizer : nil
         inFlight = Task.detached { [weak self] in
             let result: Result<[TimedSegment], Error>
+            var speakers: ChunkDiarization?
             do {
                 let transcriber = make()
                 let wav = try Data(contentsOf: chunk.url)
                 result = .success(try await transcriber.transcribeSegments(wav: wav))
+                // A diarization failure is not a transcription failure: the lines stay "Them".
+                if let diarizer { speakers = try? await diarizer.diarize(wav: chunk.url) }
             } catch {
                 result = .failure(error)
             }
-            await self?.completed(chunk, attempts: attempts, generation: generation, result)
+            await self?.completed(chunk, attempts: attempts, generation: generation, result, speakers: speakers)
         }
     }
 
-    private func completed(_ chunk: ChunkInfo, attempts: Int, generation: Int, _ result: Result<[TimedSegment], Error>) {
+    private func completed(_ chunk: ChunkInfo, attempts: Int, generation: Int, _ result: Result<[TimedSegment], Error>,
+                           speakers: ChunkDiarization? = nil) {
         guard generation == self.generation else { return }
         pumping = false
         guard let index = jobs.firstIndex(where: { $0.chunk.url == chunk.url }), phase != .idle else { return }
         switch result {
         case .success(let segments):
             jobs[index].state = .done
-            lines += MeetingTranscript.lines(from: segments, track: chunk.track, offset: chunk.offset)
+            var turns: [SpeakerTurn] = []
+            if let speakers, chunk.track == .them {
+                let ids = speakerTable.link(speakers, chunkURL: chunk.url, store: voiceStore.candidates)
+                for speaker in speakers.speakers {
+                    guard let id = ids[speaker.localId] else { continue }
+                    turns += speaker.turns.map { SpeakerTurn(speakerId: id, start: $0.lowerBound, end: $0.upperBound) }
+                }
+            }
+            lines += MeetingTranscript.lines(from: segments, track: chunk.track, offset: chunk.offset, turns: turns)
+            refreshSpeakerNames()
             writeTranscript()
         case .failure(let error) where error is CancellationError:
             jobs[index].state = .waiting(attempts: attempts, lastError: nil, notBefore: .distantPast)
@@ -510,9 +546,79 @@ final class MeetingController: ObservableObject {
         }
     }
 
+    // MARK: Speakers
+
+    /// Writes each line's display name from the speaker table, so a name given once shows on every line of that voice.
+    private func refreshSpeakerNames() {
+        for index in lines.indices {
+            guard let id = lines[index].speakerId, let speaker = speakerTable.speaker(id) else { continue }
+            lines[index].speaker = speaker.displayName
+        }
+    }
+
+    /// Voices to ask about, longest talker first.
+    var speakersToName: [MeetingSpeaker] {
+        speakerTable.speakers.filter(\.needsName).sorted { $0.seconds > $1.seconds }
+    }
+
+    var hasSpeakersToName: Bool { !speakersToName.isEmpty }
+
+    /// One transcript line from this voice, for the name field's autocomplete.
+    /// Names in the voice store. Reads and decrypts the file, so views call it once, not on every render.
+    var storedNames: [String] { voiceStore.voices().map(\.name) }
+
+    func knownNames(stored: [String]) -> [String] {
+        var names = stored
+        for speaker in speakerTable.speakers { if let name = speaker.name, !names.contains(name) { names.append(name) } }
+        return names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    /// One transcript line from this voice, to show beside the clip.
+    func sampleLine(for id: Int) -> String? {
+        lines.filter { $0.speakerId == id }.max { $0.text.count < $1.text.count }?.text
+    }
+
+    /// Names already enrolled in this meeting, so a person split into two voices counts the meeting once.
+    private var enrolledNames = Set<String>()
+
+    /// The user named a voice. Every line of it shows the name, transcript.md is written again, and the voice goes into the
+    /// store when it has enough speech and the feature is on.
+    func nameSpeaker(_ id: Int, as name: String) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let speaker = speakerTable.speaker(id) else { return }
+        speakerTable.setName(id, name)
+        if recogniseSpeakers(), !speaker.mixed {
+            // A person split into two voices still counts the meeting once.
+            let first = !enrolledNames.contains(name.lowercased())
+            if voiceStore.enroll(name: name, embedding: speaker.centroid, seconds: speaker.seconds, meetingConfirmed: first) != nil {
+                enrolledNames.insert(name.lowercased())
+            }
+        }
+        refreshSpeakerNames()
+        writeTranscript()
+        namesChangedSinceSummary = true
+        objectWillChange.send()
+        onChange?()
+    }
+
+    /// "Ignore" and "Two people mixed": the voice stays "Speaker N" and is never stored.
+    func dismissSpeaker(_ id: Int, mixed: Bool) {
+        speakerTable.dismiss(id, mixed: mixed)
+        objectWillChange.send()
+        onChange?()
+    }
+
     // MARK: Summary
 
     private func conclude() {
+        // A last pass over the whole meeting, so a voice recognised late is named in the early chunks too.
+        if !speakerTable.speakers.isEmpty {
+            let remap = speakerTable.relink(store: voiceStore.candidates)
+            for index in lines.indices {
+                if let id = lines[index].speakerId, let to = remap[id] { lines[index].speakerId = to }
+            }
+            refreshSpeakerNames()
+        }
         writeTranscript()
         let config = meetingConfig()
         guard config.autoSummary, !lines.isEmpty else {
@@ -527,6 +633,7 @@ final class MeetingController: ObservableObject {
         guard let folder, let transcriptURL, let text = try? String(contentsOf: transcriptURL, encoding: .utf8) else { return }
         let config = config ?? meetingConfig()
         lastSummaryRequest = (config.summaryAgent, config.summaryModel)
+        namesChangedSinceSummary = false
         summary = .running
         setPhase(.summarizing)
         guard let agent = AgentCatalog.agent(id: config.summaryAgent) else {
@@ -604,7 +711,8 @@ final class MeetingController: ObservableObject {
         }
         return """
             Below is the transcript of a meeting. "Me" is the person who recorded it. "Them" is everyone else on the \
-            call, recorded from one app, so several people can appear as "Them".
+            call, recorded from one app, so several people can appear as "Them". When ironpet could tell the voices apart, \
+            their lines start with a name, or with "Speaker 1", "Speaker 2" when the name is not known.
 
             Do not use any tools and do not change any files. Answer in Markdown, in exactly these three sections:
 
@@ -673,6 +781,9 @@ final class MeetingController: ObservableObject {
         recorders = [:]
         sources = [:]
         lines = []
+        speakerTable = MeetingSpeakerTable()
+        enrolledNames = []
+        namesChangedSinceSummary = false
         jobs = []
         summary = .none
         folder = nil
@@ -688,12 +799,12 @@ final class MeetingController: ObservableObject {
         notice = nil
     }
 
-    private static func newFolder(for date: Date) -> URL {
+    private static func newFolder(for date: Date, in root: URL) -> URL {
         let base = MeetingTranscript.folderName(date)
-        var url = Paths.meetings.appendingPathComponent(base)
+        var url = root.appendingPathComponent(base)
         var suffix = 2
         while FileManager.default.fileExists(atPath: url.path) {
-            url = Paths.meetings.appendingPathComponent("\(base)-\(suffix)")
+            url = root.appendingPathComponent("\(base)-\(suffix)")
             suffix += 1
         }
         return url

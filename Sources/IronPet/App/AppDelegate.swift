@@ -101,6 +101,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         meetingPanel = MeetingPanel(controller: meeting)
         meeting.onChange = { [weak self] in self?.syncMeetingPanel() }
+        settingsModel.meeting = meeting
+        meeting.onLabelSpeakers = { [weak self] in
+            self?.settingsModel.tab = "meetings"
+            self?.settingsWindow.show()
+        }
         announcer.bubbles.onDismissed = { [weak self] id in self?.meetingBubbleClosed(id) }
         pet.onRecordingClick = { [weak self] in self?.showMeetingBubble() }
         meeting.onSummaryReady = { [weak self] url in

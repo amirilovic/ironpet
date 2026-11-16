@@ -20,6 +20,9 @@ check() {
 }
 check claude CLAUDE_CODE_EXECUTABLE=/usr/bin/true
 check pi PI_ACP_PI_COMMAND=/usr/bin/true
-# Size guard: the bundle holds three adapters and no agent or runtime.
-if [ -n "$(find "$APP" -size +20M)" ]; then echo "FAIL: a file over 20 MB is in the app bundle"; status=1; else echo "ok: no file over 20 MB in the bundle"; fi
+# Size guard: the bundle holds three adapters and no agent, runtime or model. The main executable is exempt from the
+# 20 MB limit because it links FluidAudio (speaker recognition), whose text-processing library alone is about 57 MB
+# before dead-stripping. It has its own, higher limit. The diarization models are downloaded on first use, never bundled.
+if [ -n "$(find "$APP" -size +20M ! -path "$APP/Contents/MacOS/IronPet")" ]; then echo "FAIL: a resource over 20 MB is in the app bundle"; status=1; else echo "ok: no resource over 20 MB in the bundle"; fi
+if [ -n "$(find "$APP/Contents/MacOS" -size +60M)" ]; then echo "FAIL: the executable is over 60 MB"; status=1; else echo "ok: the executable is under 60 MB"; fi
 exit $status
