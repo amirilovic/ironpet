@@ -13,16 +13,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  test:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - name: Toolchain
+        id: toolchain
         run: |
           sw_vers
           swift --version
+          echo "swift=$(swift --version 2>&1 | head -1 | shasum | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -31,6 +33,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+
+      # Dependencies only change with Package.resolved, so the key leaves out the sources: ironpet's own files are
+      # rebuilt every run because checkout gives them new mtimes.
+      - name: Cache the debug build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-debug-${{ runner.os }}-${{ steps.toolchain.outputs.swift }}-${{ hashFiles('Package.resolved', 'Package.swift') }}
 
       - name: Build
         run: swift build
@@ -48,6 +58,33 @@ jobs:
             echo
           done
 
+  bundle:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        id: toolchain
+        run: |
+          sw_vers
+          swift --version
+          echo "swift=$(swift --version 2>&1 | head -1 | shasum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Cache the release build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-release-${{ runner.os }}-${{ steps.toolchain.outputs.swift }}-${{ hashFiles('Package.resolved', 'Package.swift') }}
+
       - name: Bundle the app (ad-hoc signed, includes the generated sprite sheet)
         run: |
           ./scripts/bundle.sh
@@ -59,3 +96,15 @@ jobs:
         run: |
           for script in scripts/*.sh; do bash -n "$script"; done
           python3 -m py_compile scripts/e2e.py scripts/gen_agent_catalog.py
+
+  # Branch protection requires a check named "build"; it passes only when both jobs above do.
+  build:
+    needs: [test, bundle]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Tests and bundle passed
+        run: |
+          echo "test: ${{ needs.test.result }}, bundle: ${{ needs.bundle.result }}"
+          test "${{ needs.test.result }}" = success && test "${{ needs.bundle.result }}" = success
