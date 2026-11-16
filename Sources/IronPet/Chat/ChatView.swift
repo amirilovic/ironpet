@@ -77,7 +77,12 @@ struct ChatView: View {
 
     private var header: some View {
         GlassGroup {
-            HStack(spacing: 10) {
+            ZStack {
+                HStack(spacing: 10) {
+                    closeButtonPill
+                    Spacer()
+                    headerControls
+                }
                 HStack(spacing: 8) {
                     PetAvatar(size: 30)
                     Text(ConfigStore.shared.config.pet.name)
@@ -88,8 +93,8 @@ struct ChatView: View {
                 .padding(.trailing, 16)
                 .padding(.vertical, 4)
                 .chromeGlass(in: Capsule())
-                Spacer()
-                headerControls
+                // Equal insets keep the pill centered and a long name clear of the side pills.
+                .padding(.horizontal, 96)
             }
         }
         .padding(.horizontal, 12)
@@ -108,10 +113,15 @@ struct ChatView: View {
                     .padding(.horizontal, 6)
             }
             settingsButton
-            iconButton("xmark", help: "Close (Esc)", action: close)
         }
         .padding(4)
         .chromeGlass(in: Capsule())
+    }
+
+    private var closeButtonPill: some View {
+        iconButton("xmark", help: "Close (Esc)", action: close)
+            .padding(4)
+            .chromeGlass(in: Capsule())
     }
 
     /// Project, agent, model and dictation live behind one button, so the header and composer stay clear.
