@@ -45,6 +45,7 @@ enum Memory {
         Add a task when the user asks for something to be done later or hands you work that will not finish in this turn. \
         When they tell you they did something, find the matching task and close it with a note of what happened. \
         Move a task to needs_you when only the user can take the next step, and say what that step is. \
+        When the user is waiting on someone else, set waiting_on to that person instead. \
         Link tasks to the thread, URL or file they belong to. Never start work on a task unless the user asks. \
         The ironpet-tasks skill has the rules for reviewing the list and for when you may close a task.
 

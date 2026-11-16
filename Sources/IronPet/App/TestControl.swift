@@ -459,7 +459,7 @@ final class TestControl {
         if let onMeetingSummaryText {
             onMeetingSummaryText(summary, meeting)
         } else {
-            store.suggest(ActionItems.mine(summary), meeting: meeting)
+            store.suggest(ActionItems.suggestions(summary), meeting: meeting)
         }
         return Self.encode([
             "ok": true,
@@ -472,7 +472,8 @@ final class TestControl {
 
     private static func json(_ suggestion: TaskSuggestion) -> [String: Any] {
         var object: [String: Any] = ["id": suggestion.id, "title": suggestion.title, "due": suggestion.due ?? NSNull(),
-                                     "meeting": suggestion.meeting?.path ?? NSNull(), "url": suggestion.url?.absoluteString ?? NSNull()]
+                                     "meeting": suggestion.meeting?.path ?? NSNull(), "url": suggestion.url?.absoluteString ?? NSNull(),
+                                     "waiting_on": suggestion.waitingOn ?? NSNull()]
         if case .automation(let id, let name) = suggestion.origin { object["automation"] = ["id": id, "name": name] }
         return object
     }

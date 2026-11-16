@@ -1387,14 +1387,16 @@ def scenario_tasks():
         record("Tasks: `IronPet tasks list` shows it", listed.returncode == 0 and "Review PR 42" in listed.stdout,
                f"exit={listed.returncode} err={listed.stderr.strip()[:120]!r}")
 
-        # Meeting action items: only the user's, and none that is already a task.
+        # Meeting action items: the user's and the ones they wait on, and none that is already a task.
         os.makedirs(TASKS_MEETING, exist_ok=True)
         open(f"{TASKS_MEETING}/summary.md", "w").write(TASKS_SUMMARY)
         suggested = call("POST", "/test/tasks/suggest", {"summary": TASKS_SUMMARY, "meeting": TASKS_MEETING})
         created = {s["title"]: s for s in suggested.get("created", [])}
-        record("Tasks: a summary suggests only Me items that are not tasks yet",
-               set(created) == {"Send the invoice to finance", "Update the changelog"}
+        record("Tasks: a summary suggests owned items that are not tasks yet, others' as waiting on",
+               set(created) == {"Send the invoice to finance", "Update the changelog", "Prepare two more screenshots"}
                and created["Send the invoice to finance"]["due"] == "2026-11-20"
+               and created["Send the invoice to finance"]["waiting_on"] is None
+               and created["Prepare two more screenshots"]["waiting_on"] == "Them"
                and all(s["meeting"] == TASKS_MEETING for s in created.values()),
                f"created={list(created)} suggestions={[s['title'] for s in suggested.get('suggestions', [])]}")
         bubble = next((b for b in suggested.get("bubbles", []) if {"Add all", "Review"} <= set(b["buttons"])), None)
@@ -1404,7 +1406,8 @@ def scenario_tasks():
         accepted = call("POST", "/test/tasks/accept-all")
         from_meeting = [t for t in accepted["tasks"] if t["title"] in created]
         record("Tasks: Add all makes backlog tasks from the meeting, linked to its folder",
-               len(from_meeting) == 2 and not accepted["suggestions"]
+               len(from_meeting) == 3 and not accepted["suggestions"]
+               and next((t for t in from_meeting if t["title"] == "Prepare two more screenshots"), {}).get("waiting_on") == "Them"
                and all(t["status"] == "backlog" and t["source"] == "meeting"
                        and any(l["kind"] == "file" and l["ref"] == TASKS_MEETING for l in t.get("links", [])) for t in from_meeting),
                f"pressedBubble={accepted.get('pressedBubble')} tasks={[(t['title'], t['status'], t['source']) for t in from_meeting]}")

@@ -1,7 +1,8 @@
 import Foundation
 
 /// Reads the `## Action items` checklist that `MeetingController.summaryPrompt` asks for:
-/// `- [ ] <task> (owner: <Me, Them, or a name>, due: <date>)`. Only items owned by "Me" become task suggestions.
+/// `- [ ] <task> (owner: <Me, Them, or a name>, due: <date>)`. Items owned by "Me" become task suggestions, items owned by
+/// anyone else become suggestions the user waits on, and items without an owner are left out.
 enum ActionItems {
     struct Item: Equatable {
         var title: String
@@ -57,16 +58,20 @@ enum ActionItems {
         return lines.joined(separator: "\n")
     }
 
-    /// The user's own items in a regenerated summary that the summary it replaces did not have. The ones it had were
-    /// already offered, and the user may have skipped them.
-    static func newMine(old: String?, new: String) -> [(title: String, due: String?)] {
-        let known = Set((old.map(parse) ?? []).map { normalized($0.title) })
-        return mine(new).filter { !known.contains(normalized($0.title)) }
+    /// The items with an owner, as suggestions for `TaskStore.suggest`: the user's own, and everyone else's with the owner as
+    /// the person they are waiting on.
+    static func suggestions(_ markdown: String) -> [(title: String, due: String?, waitingOn: String?)] {
+        parse(markdown).compactMap { item in
+            guard let owner = item.owner else { return nil }
+            return (item.title, item.due, owner.caseInsensitiveCompare("me") == .orderedSame ? nil : owner)
+        }
     }
 
-    /// The items that are the user's own, as suggestions for `TaskStore.suggest`.
-    static func mine(_ markdown: String) -> [(title: String, due: String?)] {
-        parse(markdown).filter { $0.owner.map { $0.caseInsensitiveCompare("me") == .orderedSame } ?? false }.map { ($0.title, $0.due) }
+    /// The suggestions of a regenerated summary that the summary it replaces did not have. The ones it had were already
+    /// offered, and the user may have skipped them.
+    static func newSuggestions(old: String?, new: String) -> [(title: String, due: String?, waitingOn: String?)] {
+        let known = Set((old.map(parse) ?? []).map { normalized($0.title) })
+        return suggestions(new).filter { !known.contains(normalized($0.title)) }
     }
 
     /// `- [ ] text` or `* [ ] text`, also already ticked ones, which are still open work from the meeting's view.

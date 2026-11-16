@@ -34,6 +34,8 @@ final class TaskCLIParsingTests: XCTestCase {
                                 "--url", "https://example.com/pr/2"])
         XCTAssertEqual(full.args, ["title": "Ship it", "notes": "After review", "due": "2026-11-20", "status": "in_progress",
                                    "links": [["kind": "url", "ref": "https://example.com/pr/2"]]])
+        XCTAssertEqual(try request(["add", "Send", "the", "deck", "--waiting-on", "Ana"]).args,
+                       ["title": "Send the deck", "waiting_on": "Ana"])
         XCTAssertEqual(error(["add"]), "add needs a title")
         XCTAssertEqual(error(["add", "x", "--notes"]), "--notes needs a value")
         XCTAssertEqual(error(["add", "x", "--colour", "red"]), "unknown option --colour")

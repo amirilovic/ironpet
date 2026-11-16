@@ -59,7 +59,7 @@ enum IronPetSection: String, CaseIterable, Identifiable {
         if store.ordered.contains(where: { $0.status == .needsInput || $0.status == .failed }) { return .agents }
         let idle = store.ordered.allSatisfy { $0.status != .running }
         if !signals.signals.isEmpty, idle { return .alerts }
-        if idle, !tasks.suggestions.isEmpty || tasks.tasks.contains(where: { $0.status == .needsYou }) { return .tasks }
+        if idle, !tasks.suggestions.isEmpty || tasks.tasks.contains(where: \.needsUser) { return .tasks }
         return .agents
     }
 }

@@ -239,17 +239,19 @@ final class MeetingRegenerationTests: XCTestCase {
         XCTAssertEqual(ActionItems.carryChecked(from: "## Action items\nNone.\n", into: new), new)
     }
 
-    func testOnlyNewItemsOfMineAreOfferedAsTasksAgain() {
+    func testOnlyNewItemsAreOfferedAsTasksAgain() {
         let new = "## Action items\n- [ ] Send the deck (owner: Me)\n- [ ] Book the room (owner: Me)\n- [ ] Ask Sam (owner: Sam)\n"
-        XCTAssertEqual(ActionItems.newMine(old: oldSummary, new: new).map(\.title), ["Book the room"])
-        XCTAssertEqual(ActionItems.newMine(old: nil, new: new).map(\.title), ["Send the deck", "Book the room"])
+        let offered = ActionItems.newSuggestions(old: oldSummary, new: new)
+        XCTAssertEqual(offered.map(\.title), ["Book the room", "Ask Sam"])
+        XCTAssertEqual(offered.map(\.waitingOn), [nil, "Sam"])
+        XCTAssertEqual(ActionItems.newSuggestions(old: nil, new: new).map(\.title), ["Send the deck", "Book the room", "Ask Sam"])
     }
 
     func testASuggestionThatComesBackIsNotAddedTwice() {
         let store = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
         let meeting = folder!
-        XCTAssertEqual(store.suggest([("Send the deck", nil)], meeting: meeting).count, 1)
-        XCTAssertEqual(store.suggest([("send the DECK.", nil), ("Book the room", nil)], meeting: meeting).map(\.title), ["Book the room"])
+        XCTAssertEqual(store.suggest([("Send the deck", nil, nil)], meeting: meeting).count, 1)
+        XCTAssertEqual(store.suggest([("send the DECK.", nil, nil), ("Book the room", nil, nil)], meeting: meeting).map(\.title), ["Book the room"])
         XCTAssertEqual(store.suggestions.count, 2)
     }
 

@@ -9,8 +9,11 @@ final class TaskStoreTests: XCTestCase {
     private var keepDays = 30
     private var changes: [String?] = []
     private let meeting = URL(fileURLWithPath: "/tmp/ironpet-meetings/2026-11-16 1000")
+    private var dir: URL!
 
     override func setUp() async throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-tasks-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         database = Database.open(path: nil, migrations: AppMigrations.all).database
         clock = Date(timeIntervalSince1970: 1_800_000_000)
         keepDays = 30
@@ -21,6 +24,7 @@ final class TaskStoreTests: XCTestCase {
     override func tearDown() async throws {
         store = nil
         database = nil
+        try? FileManager.default.removeItem(at: dir)
     }
 
     private func makeStore() -> TaskStore {
@@ -317,22 +321,22 @@ final class TaskStoreTests: XCTestCase {
     func testSuggestSkipsTasksAndDuplicates() throws {
         try store.create(title: "Send the deck", source: .chat, by: "user")
         changes = []
-        let added = store.suggest([("Send the deck", nil), ("send the DECK", nil), ("Book the room", "2026-11-20"),
-                                   ("book the room", nil), ("Email Sam", "next Tuesday"), ("   ", nil)], meeting: meeting)
+        let added = store.suggest([("Send the deck", nil, nil), ("send the DECK", nil, nil), ("Book the room", "2026-11-20", nil),
+                                   ("book the room", nil, nil), ("Email Sam", "next Tuesday", nil), ("   ", nil, nil)], meeting: meeting)
         XCTAssertEqual(added.map(\.title), ["Book the room", "Email Sam"])
         XCTAssertEqual(added.map(\.id), ["book-the-room", "email-sam"])
         XCTAssertEqual(store.suggestions, added)
         XCTAssertEqual(store.suggestions.first?.meeting, meeting)
         XCTAssertEqual(changes, [nil])
 
-        XCTAssertEqual(store.suggest([("BOOK THE ROOM", nil), ("Order lunch", nil)], meeting: meeting).map(\.title), ["Order lunch"])
-        XCTAssertEqual(store.suggest([("Order lunch", nil)], meeting: meeting), [])
+        XCTAssertEqual(store.suggest([("BOOK THE ROOM", nil, nil), ("Order lunch", nil, nil)], meeting: meeting).map(\.title), ["Order lunch"])
+        XCTAssertEqual(store.suggest([("Order lunch", nil, nil)], meeting: meeting), [])
         XCTAssertEqual(store.suggestions.count, 3)
         XCTAssertEqual(makeStore().suggestions, store.suggestions, "suggestions survive a restart")
     }
 
     func testAcceptMakesAMeetingTask() throws {
-        store.suggest([("Book the room", "2026-11-20"), ("Email Sam", "next Tuesday")], meeting: meeting)
+        store.suggest([("Book the room", "2026-11-20", nil), ("Email Sam", "next Tuesday", nil)], meeting: meeting)
 
         let booked = try store.accept("book-the-room")
         XCTAssertEqual(booked.title, "Book the room")
@@ -352,7 +356,7 @@ final class TaskStoreTests: XCTestCase {
     }
 
     func testSkipAndAcceptAll() throws {
-        store.suggest([("One", nil), ("Two", nil), ("Three", nil)], meeting: meeting)
+        store.suggest([("One", nil, nil), ("Two", nil, nil), ("Three", nil, nil)], meeting: meeting)
         store.skip("two")
         XCTAssertEqual(store.suggestions.map(\.id), ["one", "three"])
         XCTAssertEqual(store.tasks, [])
@@ -497,7 +501,13 @@ final class TaskStoreTests: XCTestCase {
                     ALTER TABLE task_suggestions_201 RENAME TO task_suggestions;
                     CREATE TABLE task_suggestion_keys(automation TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL,
                                                       PRIMARY KEY(automation, key)) WITHOUT ROWID;
+                    ALTER TABLE task_items ADD COLUMN waiting_on TEXT;
+                    ALTER TABLE task_suggestions ADD COLUMN waiting_on TEXT;
                     """)
+                try db.execute("""
+                    INSERT INTO task_items(id, title, notes, status, source, created, updated, waiting_on)
+                    VALUES('send-the-deck', 'Send the deck', '', 'backlog', 'meeting', ?, ?, 'Ana')
+                    """, [clock.timeIntervalSince1970, clock.timeIntervalSince1970])
                 try db.execute("""
                     INSERT INTO task_suggestions(id, title, notes, url, automation, automation_name, created)
                     VALUES('review-pr-12', 'Review PR 12', 'From the watcher', 'https://example.com/pr/12', 'prs', 'PRs', ?)
@@ -514,6 +524,7 @@ final class TaskStoreTests: XCTestCase {
                                                              origin: .automation(id: "prs", name: "PRs"), created: clock)])
         XCTAssertEqual(reopened.suggest([TaskSuggestion.Draft(key: "12", title: "Something else", due: nil)], automation: "prs", name: "PRs"), [],
                        "the stored key survives")
+        XCTAssertEqual(reopened.task("send-the-deck")?.waitingOn, "Ana")
     }
 
     func testTaskMigrationsComeAfterCaptureMigrations() {
@@ -523,6 +534,128 @@ final class TaskStoreTests: XCTestCase {
         let added = TaskStore.migrations.filter { $0.version > 200 }
         XCTAssertFalse(added.isEmpty)
         XCTAssertTrue(added.allSatisfy { $0.version > latestCapture }, "a database at capture's version would skip them")
+    }
+
+    // MARK: Waiting on
+
+    func testWaitingOnSuggestionBecomesAWaitingTask() throws {
+        store.suggest([("Send the deck", "Friday", "Ana"), ("Book the room", nil, nil), ("Long", nil, String(repeating: "a", count: 150))],
+                      meeting: meeting)
+        XCTAssertEqual(store.suggestions.map(\.id), ["book-the-room", "long", "send-the-deck"])
+        XCTAssertEqual(store.suggestions.map(\.waitingOn), [nil, String(repeating: "a", count: 100), "Ana"], "a long owner is cut, not dropped")
+        XCTAssertEqual(makeStore().suggestions, store.suggestions, "the owner survives a restart")
+
+        let deck = try store.accept("send-the-deck")
+        XCTAssertEqual(deck.waitingOn, "Ana")
+        XCTAssertEqual(deck.waitingLabel, "Waiting on Ana")
+        XCTAssertEqual(deck.status, .backlog)
+        XCTAssertEqual(deck.notes, "Due (from the meeting): Friday")
+        XCTAssertEqual(store.history(deck.id).first?.detail, "backlog: Send the deck (waiting on Ana)")
+        XCTAssertEqual(makeStore().task(deck.id)?.waitingOn, "Ana")
+        XCTAssertNil(try store.accept("book-the-room").waitingOn)
+    }
+
+    func testAutomationSuggestionsAreNeverWaitingOn() throws {
+        let url = URL(string: "https://github.com/acme/app/pull/3")!
+        store.suggest([draft("3", "Review PR 3", url: url)], automation: "gh", name: "GitHub")
+        XCTAssertNil(store.suggestions.first?.waitingOn)
+        XCTAssertNil(store.suggestions.first?.waitingLabel)
+        let item = try store.accept("review-pr-3")
+        XCTAssertNil(item.waitingOn)
+        XCTAssertEqual(item.links, [TaskLink(kind: .url, ref: url.absoluteString, label: nil)])
+        XCTAssertEqual(item.source, .automation)
+    }
+
+    func testWaitingOnNeverNeedsTheUser() throws {
+        let id = try store.create(title: "Approve the budget", status: .needsYou, source: .meeting, waitingOn: "Them", by: "user").id
+        try store.create(title: "Mine", status: .inProgress, source: .chat, by: "user")
+        XCTAssertFalse(try XCTUnwrap(store.task(id)).needsUser)
+        XCTAssertEqual(store.task(id)?.waitingLabel, "Waiting on them")
+        XCTAssertEqual(store.activeCount, 1)
+
+        try store.update(id, waitingOn: .some(nil), by: "agent:mcp")
+        XCTAssertTrue(try XCTUnwrap(store.task(id)).needsUser)
+        XCTAssertEqual(store.activeCount, 2)
+        XCTAssertEqual(store.history(id).last?.detail, "waiting on: none")
+    }
+
+    func testWaitingOnThroughCall() throws {
+        let created = try call("create", ["title": "Send the deck", "waiting_on": "  Ana  "])
+        XCTAssertEqual(created["waiting_on"] as? String, "Ana")
+        let id = try XCTUnwrap(created["id"] as? String)
+        XCTAssertEqual(try call("update", ["id": id, "changes": ["waiting_on": "Priya"]])["waiting_on"] as? String, "Priya")
+        XCTAssertEqual(store.history(id).last?.detail, "waiting on: Priya")
+        XCTAssertEqual(try call("update", ["id": id, "changes": ["title": "Send the new deck"]])["waiting_on"] as? String, "Priya",
+                       "absent, it stays")
+        XCTAssertNil(try call("update", ["id": id, "changes": ["waiting_on": NSNull()]])["waiting_on"])
+        XCTAssertNil(try call("create", ["title": "Blank owner", "waiting_on": "   "])["waiting_on"])
+
+        XCTAssertEqual(callError("create", ["title": "x", "waiting_on": 7]), "waiting_on must be a string")
+        XCTAssertNotNil(callError("update", ["id": id, "changes": ["waiting_on": String(repeating: "a", count: 101)]]))
+    }
+
+    func testMigration304KeepsExistingTasksAndSuggestions() throws {
+        let file = dir.appendingPathComponent("ironpet.db")
+        let before = AppMigrations.all.filter { $0.version < 304 }
+        let id = "ship-it"
+        var old: Database? = try Database(path: file, migrations: before)
+        let time = clock.timeIntervalSince1970
+        try old?.write { db in
+            try db.execute("""
+                INSERT INTO task_items(id, title, notes, status, source, due, created, updated, closed)
+                VALUES(?, 'Ship it', '', 'needs_you', 'chat', NULL, ?, ?, NULL)
+                """, [id, time, time])
+            try db.execute("""
+                INSERT INTO task_suggestions(id, title, due, meeting, created) VALUES('book-the-room', 'Book the room', 'Friday', ?, ?)
+                """, [meeting.path, time])
+            try db.execute("""
+                INSERT INTO task_suggestions(id, title, url, automation, automation_name, created)
+                VALUES('reply-to-sam', 'Reply to Sam', 'https://mail.example.com/m/1', 'gmail', 'Gmail', ?)
+                """, [time + 1])
+        }
+        old = nil
+
+        let database = try Database(path: file, migrations: AppMigrations.all)
+        XCTAssertGreaterThanOrEqual(database.schemaVersion, 304)
+        let upgraded = TaskStore(database: database, now: { [unowned self] in clock }, keepDoneDays: { 30 })
+        XCTAssertEqual(upgraded.task(id)?.title, "Ship it")
+        XCTAssertNil(upgraded.task(id)?.waitingOn)
+        XCTAssertEqual(upgraded.task(id)?.needsUser, true)
+        XCTAssertEqual(upgraded.suggestions.map(\.title), ["Book the room", "Reply to Sam"])
+        XCTAssertEqual(upgraded.suggestions.map(\.origin), [.meeting(meeting), .automation(id: "gmail", name: "Gmail")])
+        XCTAssertEqual(upgraded.suggestions.last?.url?.absoluteString, "https://mail.example.com/m/1")
+        XCTAssertTrue(upgraded.suggestions.allSatisfy { $0.waitingOn == nil })
+        try upgraded.update(id, waitingOn: "Ana", by: "user")
+        XCTAssertEqual(upgraded.task(id)?.waitingOn, "Ana")
+    }
+
+    func testSuggestionsBubbleTellsMineFromWaitingOn() {
+        func suggestion(_ title: String, _ waitingOn: String? = nil) -> TaskSuggestion {
+            TaskSuggestion(id: title, title: title, origin: .meeting(meeting), created: clock, waitingOn: waitingOn)
+        }
+        let mine = Announcer.taskSuggestionsText([suggestion("Send the invoice"), suggestion("Update the changelog")])
+        XCTAssertEqual(mine.title, "2 action items from the meeting")
+        XCTAssertEqual(mine.body, "• Send the invoice\n• Update the changelog")
+
+        let waiting = Announcer.taskSuggestionsText([suggestion("Send the deck", "Ana")])
+        XCTAssertEqual(waiting.title, "1 item you're waiting on from the meeting")
+        XCTAssertEqual(waiting.body, "• Waiting on Ana: Send the deck")
+
+        let mixed = Announcer.taskSuggestionsText([suggestion("Send the invoice"), suggestion("Send the deck", "Ana"),
+                                                   suggestion("Review the budget", "Them"), suggestion("Book the room")])
+        XCTAssertEqual(mixed.title, "4 action items from the meeting")
+        XCTAssertEqual(mixed.body, """
+            2 for you, 2 waiting on others
+            • Send the invoice
+            • Waiting on Ana: Send the deck
+            • Waiting on them: Review the budget
+            and 1 more
+            """)
+
+        let watcher = Announcer.taskSuggestionsText([TaskSuggestion(id: "a", title: "Reply to Sam", origin: .automation(id: "gmail", name: "Gmail"),
+                                                                    created: clock)])
+        XCTAssertEqual(watcher.title, "1 suggested task from Gmail")
+        XCTAssertEqual(watcher.body, "• Reply to Sam")
     }
 
     // MARK: Ordering

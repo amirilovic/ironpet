@@ -54,6 +54,11 @@ struct TaskItem: Identifiable, Equatable {
     var created: Date
     var updated: Date
     var closed: Date?
+    /// Who the user is waiting on (`Ana`, `Them`). Nil for the user's own work.
+    var waitingOn: String? = nil
+
+    /// Only the user can take the next step. A task waiting on someone else never counts, whatever its status.
+    var needsUser: Bool { status == .needsYou && waitingOn == nil }
 }
 
 /// One line of a task's history: created, a status change, a note, closed. Nothing is overwritten, so a task the agent
@@ -84,6 +89,8 @@ struct TaskSuggestion: Identifiable, Equatable {
         var due: String?
         var notes = ""
         var url: URL?
+        /// The owner of a meeting action item that is not the user. Watchers never set it.
+        var waitingOn: String?
     }
 
     let id: String
@@ -94,6 +101,8 @@ struct TaskSuggestion: Identifiable, Equatable {
     var url: URL?
     var origin: Origin
     var created: Date
+    /// The owner when it is not the user, so the task becomes one they wait on.
+    var waitingOn: String? = nil
 
     var meeting: URL? {
         if case .meeting(let url) = origin { return url }
@@ -163,6 +172,19 @@ extension TaskSuggestion.Draft {
     }
 }
 
+extension TaskItem {
+    /// "Waiting on Ana", "Waiting on them". Nil for the user's own work.
+    var waitingLabel: String? { waitingOn.map(describeWaiting) }
+}
+
+extension TaskSuggestion {
+    var waitingLabel: String? { waitingOn.map(describeWaiting) }
+}
+
+private func describeWaiting(_ owner: String) -> String {
+    "Waiting on \(owner.caseInsensitiveCompare("them") == .orderedSame ? "them" : owner)"
+}
+
 struct TaskError: Error, LocalizedError, Equatable {
     let message: String
     var errorDescription: String? { message }
@@ -173,6 +195,7 @@ enum TaskValidator {
     static let maxTitle = 200
     static let maxNotes = 4096
     static let maxLinks = 10
+    static let maxWaitingOn = 100
 
     static func title(_ value: Any?) throws -> String {
         guard let raw = value as? String else { throw TaskError(message: "title must be a string") }
@@ -202,6 +225,15 @@ enum TaskValidator {
             throw TaskError(message: "source must be one of \(TaskSource.allCases.map(\.rawValue).joined(separator: ", "))")
         }
         return source
+    }
+
+    /// A person's name on one line. Null or blank clears it.
+    static func waitingOn(_ value: Any?) throws -> String? {
+        guard let value, !(value is NSNull) else { return nil }
+        guard let raw = value as? String else { throw TaskError(message: "waiting_on must be a string") }
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: " ")
+        guard name.count <= maxWaitingOn else { throw TaskError(message: "waiting_on is longer than \(maxWaitingOn) characters") }
+        return name.isEmpty ? nil : name
     }
 
     /// ISO 8601 with a time (`2026-11-20T15:30:00+01:00`) or a plain date (`2026-11-20`, local midnight). Null clears it.
