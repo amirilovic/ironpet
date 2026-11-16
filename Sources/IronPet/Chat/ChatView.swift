@@ -1166,8 +1166,7 @@ private struct UserBubble: View {
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 50)
-        .background(highlighted ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 10))
-        .animation(.easeOut(duration: 0.25), value: highlighted)
+        .background { if highlighted { RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.18)) } }
         .contentShape(Rectangle())
         .onHover { hovering = $0; onHoverChange($0) }
         .contextMenu { RowMenu(onReply: onReply, onAsk: onAsk, onCopy: onCopy) }
@@ -1213,8 +1212,7 @@ private struct AssistantBubble: View {
             }
             Spacer(minLength: 30)
         }
-        .background(highlighted ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 10))
-        .animation(.easeOut(duration: 0.25), value: highlighted)
+        .background { if highlighted { RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.18)) } }
         .contentShape(Rectangle())
         .onHover { hovering = $0; onHoverChange($0) }
         .contextMenu { RowMenu(onReply: onReply, onAsk: onAsk, onCopy: onCopy) }
