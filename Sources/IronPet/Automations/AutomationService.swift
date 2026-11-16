@@ -403,12 +403,13 @@ final class AutomationService {
             ?? [title, text(action, "subtitle"), text(action, "label"), level, text(action, "url")].map { $0 ?? "" }.joined(separator: "\u{1}"))
         let known = engine.state.alertHash(a.id, id)
         guard known != fingerprint else { return nil }
-        engine.state.setAlertHash(a.id, id, fingerprint)
         let signal = Signal(id: signalID, title: title, subtitle: text(action, "subtitle") ?? text(action, "body") ?? "",
                             url: text(action, "url").flatMap(URL.init(string:)), label: text(action, "label") ?? a.name,
                             symbol: text(action, "symbol") ?? (level == "good" ? "checkmark.seal.fill" : level == "bad" ? "xmark.octagon.fill" : "bell.badge.fill"),
                             mood: level == "info" ? .done : mood(for: level), ask: text(action, "ask"))
-        alert(signal, !firstRun)
+        engine.state.setAlertHash(a.id, id, fingerprint, signal: signal)
+        // An empty stored hash is an alert from before payloads were stored, so it comes back without a bubble.
+        alert(signal, !firstRun && known != "")
         return nil
     }
 

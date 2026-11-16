@@ -183,6 +183,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         service.dismissNotice = { [weak self] id in self?.announcer.bubbles.dismiss(id) }
         service.alert = { [weak self] signal, notify in self?.signals.add(signal, notify: notify) }
         service.resolveAlert = { [weak self] id in self?.signals.dismiss(id) }
+        // Alerts the user has not dismissed come back after a restart, quietly. Dismissing one clears its stored payload.
+        signals.restore(service.engine.state.openAlerts())
+        signals.onDismiss = { [state = service.engine.state] id in state.closeAlert(signalID: id) }
         service.nudge = { [weak self] moods in self?.pet.nudge(moods, each: moods == [.done] ? 3 : 4) }
         let workspace = store.paths.workspace
         service.runPrompt = { automation, prompt in await AutomationPrompt.run(automation, prompt: prompt, workspace: workspace) }

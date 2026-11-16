@@ -1114,6 +1114,16 @@ final class AutomationScriptEngineTests: AutomationTestCase {
         XCTAssertEqual(log.shown[1].1, true, "new information notifies")
     }
 
+    func testAnAlertFromBeforePayloadsWereStoredComesBackQuietly() async {
+        let (rig, log) = rig(scripted())
+        rig.engine.state.setAlertHash("ci", "7", "")
+        rig.engine.runScript = { _, state in self.output([self.alert()], state: state ?? "{}") }
+        await rig.engine.pollNow("ci")
+        await rig.engine.pollNow("ci")
+        XCTAssertEqual(log.shown.map(\.1), [false])
+        XCTAssertEqual(rig.engine.state.openAlerts().map(\.id), ["automation:ci:7"])
+    }
+
     func testAnExplicitVersionControlsWhatCountsAsChanged() async {
         let (rig, log) = rig(scripted())
         var body = "a"
@@ -1538,7 +1548,7 @@ final class AutomationLogTests: AutomationTestCase {
         XCTAssertEqual(db?.schemaVersion, 3)
         db = nil
         let upgraded = try Database(path: file, migrations: AutomationState.migrations)
-        XCTAssertEqual(upgraded.schemaVersion, 4)
+        XCTAssertEqual(upgraded.schemaVersion, 5)
         let state = AutomationState(database: upgraded)
         state.addLog("a", date: Date(), duration: 0, outcome: "ok", summary: "x", detail: "")
         XCTAssertEqual(state.logs().count, 1)
@@ -1697,5 +1707,78 @@ final class AutomationScriptStackTests: XCTestCase {
         } catch {
             XCTAssertFalse(error.localizedDescription.isEmpty)
         }
+    }
+}
+
+@MainActor
+final class AlertRestoreTests: XCTestCase {
+    private func signal(_ n: String) -> Signal {
+        let ask: String? = "look at \(n)"
+        return Signal(id: "automation:ci:\(n)", title: "Down \(n)", subtitle: "sub \(n)", url: URL(string: "https://x/\(n)"),
+               date: Date(timeIntervalSince1970: 1000 + Double(n)!), label: "Better Stack", symbol: "bell.badge.fill", mood: .failed, ask: ask)
+    }
+
+    private func open(_ database: Database) -> (AutomationState, SignalStore) {
+        let state = AutomationState(database: database)
+        let store = SignalStore()
+        store.onDismiss = { state.closeAlert(signalID: $0) }
+        return (state, store)
+    }
+
+    func testOpenAlertsComeBackQuietlyWithTheirFullPayload() throws {
+        let db = try Database(path: nil, migrations: AutomationState.migrations)
+        let (first, _) = open(db)
+        first.setAlertHash("ci", "1", "h1", signal: signal("1"))
+        first.setAlertHash("ci", "2", "h2", signal: signal("2"))
+        let (_, fresh) = open(db)
+        var notified = 0
+        fresh.onNew = { _ in notified += 1 }
+        fresh.restore(AutomationState(database: db).openAlerts())
+        XCTAssertEqual(fresh.signals, [signal("2"), signal("1")])
+        XCTAssertEqual(notified, 0)
+    }
+
+    func testADismissedAlertStaysDismissedButItsHashIsKept() throws {
+        let db = try Database(path: nil, migrations: AutomationState.migrations)
+        let (state, store) = open(db)
+        state.setAlertHash("ci", "1", "h1", signal: signal("1"))
+        store.restore(state.openAlerts())
+        store.dismiss("automation:ci:1")
+        XCTAssertTrue(AutomationState(database: db).openAlerts().isEmpty)
+        XCTAssertEqual(state.alertHash("ci", "1"), "h1", "listed again unchanged, it is skipped")
+    }
+
+    func testResolvingARestoredAlertRemovesItEverywhere() async throws {
+        let db = try Database(path: nil, migrations: AutomationState.migrations)
+        let state = AutomationState(database: db)
+        state.setAlertHash("ci", "1", "h1", signal: signal("1"))
+        let store = SignalStore()
+        store.restore(state.openAlerts())
+        store.dismiss("automation:ci:1")
+        state.clearAlert("ci", "1")
+        XCTAssertTrue(store.signals.isEmpty)
+        XCTAssertEqual(state.count("automation_alerts"), 0)
+    }
+
+    func testAChangedVersionOverwritesTheStoredPayload() throws {
+        let db = try Database(path: nil, migrations: AutomationState.migrations)
+        let state = AutomationState(database: db)
+        state.setAlertHash("ci", "1", "h1", signal: signal("1"))
+        var changed = signal("1"); changed = Signal(id: changed.id, title: "Down again", subtitle: "s", url: nil, label: "L", symbol: "x", mood: .needsInput, ask: nil)
+        state.setAlertHash("ci", "1", "h2", signal: changed)
+        XCTAssertEqual(state.openAlerts().map(\.title), ["Down again"])
+    }
+
+    func testMigrationFromTheOldSchemaBlanksHashesWithoutPayload() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-alerts-\(UUID().uuidString).db")
+        defer { try? FileManager.default.removeItem(at: file) }
+        var old: Database? = try Database(path: file, migrations: Array(AutomationState.migrations.filter { $0.version <= 4 }))
+        try old?.write { try $0.execute("INSERT INTO automation_alerts(automation, alert, hash) VALUES('ci', '1', 'h')") }
+        old = nil
+        let upgraded = try Database(path: file, migrations: AutomationState.migrations)
+        let state = AutomationState(database: upgraded)
+        XCTAssertEqual(upgraded.schemaVersion, 5)
+        XCTAssertTrue(state.openAlerts().isEmpty)
+        XCTAssertEqual(state.alertHash("ci", "1"), "", "the next run re-adds it, without a bubble")
     }
 }
