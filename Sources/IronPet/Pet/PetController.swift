@@ -13,7 +13,15 @@ final class PetController: NSObject {
     private(set) var view: PetView
     private let store: SessionStore
     private let signals: SignalStore
-    private let agentsPanel = AgentsPanel()
+    private let windowModel = IronPetWindowModel()
+    private var builtWindow: IronPetPanel?
+    /// Built on first use, so it gets the stores the app hands over after `init`.
+    var window: IronPetPanel {
+        if let builtWindow { return builtWindow }
+        let window = makeWindow()
+        builtWindow = window
+        return window
+    }
     private var lastActivity = Date()
     private var lastTick = Date()
     private var nudge: (mood: PetMood, until: Date)?
@@ -27,9 +35,24 @@ final class PetController: NSObject {
     /// "Ask Ghost" on an alert: open the chat with this prompt ready to send.
     var onAsk: ((String) -> Void)?
     var onCapture: ((_ region: Bool) -> Void)?
-    /// The Tasks tab's list. Falls back to `TaskStore.shared`, then to an empty list.
+    /// The Tasks section's list. Falls back to `TaskStore.shared`, then to an empty list.
     var tasks: TaskStore?
-    /// "Tell Ghost…" in the Tasks tab: send this text to the chat.
+    /// The Automations section. Set before the window first opens.
+    var settings: SettingsModel?
+    /// The Settings row at the bottom of the sidebar: opens the Settings window.
+    var onSettings: (() -> Void)?
+    /// The Chat section's session and the Transcripts section's meetings. Set before the window first opens.
+    var chat: ChatSession?
+    var meetings: MeetingLibrary?
+    /// "Ask Ghost" on a meeting: attach these files in the chat.
+    var onAskMeeting: (([URL]) -> Void)?
+    var meetingInProgress: () -> URL? = { nil }
+    /// The Chat section came on screen or left it (another section, or the window closed).
+    var onChatShown: ((Bool) -> Void)?
+    /// The window closed, by Esc, a close button or ⌘W, or because ironpet lost focus off Chat.
+    var onWindowClosed: (() -> Void)?
+    private var chatShown = false
+    /// "Tell Ghost…" in the Tasks section: send this text to the chat.
     var onTellGhost: ((String) -> Void)?
     /// A task's thread link: open that chat thread.
     var onOpenThread: ((String) -> Void)?
@@ -91,10 +114,17 @@ final class PetController: NSObject {
         if view.mood == .idle, now.timeIntervalSince(lastActivity) > Self.sleepAfter { refreshMood() }
     }
 
-    var isAgentsVisible: Bool { agentsPanel.isVisible }
+    var isWindowVisible: Bool { builtWindow?.isVisible ?? false }
+    var suppressesBubbles: Bool { isWindowVisible && windowModel.section.hidesBubbles }
+    var isChatVisible: Bool { isWindowVisible && windowModel.section == .chat }
+    var windowNumber: Int { builtWindow?.windowNumber ?? 0 }
+
+    func snapshotWindow(to url: URL) -> Bool { builtWindow?.snapshot(to: url) ?? false }
+
+    func closeWindow() { builtWindow?.close() }
 
     func jump(to session: AgentSession) {
-        agentsPanel.close()
+        builtWindow?.close()
         SourceJumper.jump(to: session)
         store.acknowledge(session.id)
     }
@@ -146,54 +176,81 @@ final class PetController: NSObject {
     private func handleClick() {
         lastActivity = Date()
         if [.needsInput, .failed, .done].contains(store.summary.status) || !signals.signals.isEmpty || onChatToggle == nil {
-            togglePopover()
+            toggleWindow()
         } else {
             onChatToggle?()
         }
     }
 
-    private func togglePopover() {
-        if agentsPanel.isVisible {
-            agentsPanel.close()
+    private func toggleWindow() {
+        if let builtWindow, builtWindow.isVisible {
+            builtWindow.close()
             refreshMood()
         } else {
-            showAgents(tab: nil)
+            showWindow(nil)
         }
     }
 
-    /// Opens the agents window on `tab`, or on whatever needs attention when nil. Reopens it if it is already showing.
-    func showAgents(tab: SessionListView.Tab?) {
+    /// Opens the ironpet window on `section`, or on whatever needs attention when nil. Switches the section when it is
+    /// already open.
+    func showWindow(_ section: IronPetSection?) {
         lastActivity = Date()
+        windowModel.section = section ?? IronPetSection.needingAttention(store: store, signals: signals, tasks: taskList)
+        settings?.refresh()
         NSApp.activate()
-        agentsPanel.show(SessionListView(
-            store: store, signals: signals, tasks: tasks ?? TaskStore.shared ?? Self.noTasks,
+        window.show(near: panel.frame)
+        refreshMood()
+    }
+
+    private func syncChat() {
+        guard isChatVisible != chatShown else { return }
+        chatShown = isChatVisible
+        onChatShown?(chatShown)
+    }
+
+    private var taskList: TaskStore { tasks ?? TaskStore.shared ?? Self.noTasks }
+
+    private func makeWindow() -> IronPetPanel {
+        let actions = SessionActions(
             onJump: { [weak self] session in self?.jump(to: session) },
-            onAsk: { [weak self] prompt in
-                self?.agentsPanel.close()
-                self?.onAsk?(prompt)
-            },
+            onAsk: { [weak self] prompt in self?.onAsk?(prompt) },
             onTrick: { [weak self] trick in
                 // Bubbles are hidden while this window is open.
-                if trick == .speak { self?.agentsPanel.close() }
+                if trick == .speak { self?.window.close() }
                 self?.perform(trick)
             },
-            onTellGhost: { [weak self] text in
-                self?.agentsPanel.close()
-                self?.onTellGhost?(text)
-            },
-            onOpenThread: { [weak self] id in
-                self?.agentsPanel.close()
-                self?.onOpenThread?(id)
-            },
+            onTellGhost: { [weak self] text in self?.onTellGhost?(text) },
+            onOpenThread: { [weak self] id in self?.onOpenThread?(id) },
             onOpenSession: { [weak self] id in
                 guard let self else { return }
                 if let session = store.sessions[id] { return jump(to: session) }
-                agentsPanel.close()
                 onOpenSession?(id)
             },
-            initialTab: tab
-        ), near: panel.frame)
-        refreshMood()
+            onAskMeeting: { [weak self] files in self?.onAskMeeting?(files) },
+            meetingInProgress: { [weak self] in self?.meetingInProgress() },
+            onClose: { [weak self] in self?.builtWindow?.close() },
+            onSettings: { [weak self] in
+                guard let self else { return }
+                // The Settings window is a normal window, so it would open behind this floating one.
+                if !isChatVisible { builtWindow?.close() }
+                onSettings?()
+            })
+        let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(
+            model: windowModel, store: store, signals: signals, tasks: taskList, chat: chat, meetings: meetings,
+            settings: settings, actions: actions))
+        window.onVisibilityChange = { [weak self] visible in
+            self?.syncChat()
+            if !visible { self?.refreshMood() }
+        }
+        window.onClose = { [weak self] in self?.onWindowClosed?() }
+        windowModel.$section
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.syncChat()
+                self?.refreshMood()
+            }
+            .store(in: &cancellables)
+        return window
     }
 
     /// Stands in until the app hands over its store, so the tab shows its empty state instead of failing.
@@ -204,7 +261,7 @@ final class PetController: NSObject {
         view.setAtlas(Atlas.loadDefault())
     }
 
-    @objc private func showAgents(_ sender: Any?) { togglePopover() }
+    @objc private func showAgents(_ sender: Any?) { showWindow(.agents) }
     @objc private func showChat(_ sender: Any?) { onChatToggle?() }
     @objc private func captureWindow(_ sender: Any?) { onCapture?(false) }
     @objc private func captureRegion(_ sender: Any?) { onCapture?(true) }

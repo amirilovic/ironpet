@@ -1,101 +1,50 @@
 import AppKit
 import SwiftUI
 
-struct SessionListView: View {
-    @ObservedObject var store: SessionStore
-    @ObservedObject var signals: SignalStore
-    @ObservedObject var tasks: TaskStore
-    @ObservedObject private var config = ConfigStore.shared
-    let onJump: (AgentSession) -> Void
-    let onAsk: (String) -> Void
+/// The Actions section: tricks Ghost does on request.
+struct ActionsSection: View {
     let onTrick: (PetController.Trick) -> Void
-    let onTellGhost: (String) -> Void
-    let onOpenThread: (String) -> Void
-    let onOpenSession: (String) -> Void
-    /// Opens on this tab instead of picking one from what needs attention.
-    var initialTab: Tab?
-
-    enum Tab { case agents, alerts, tasks, actions }
-    @State private var tab: Tab = .agents
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 4) {
-                TabButton(title: "Agents", count: store.ordered.count, selected: tab == .agents) { tab = .agents }
-                TabButton(title: "Alerts", count: signals.signals.count, selected: tab == .alerts) { tab = .alerts }
-                TabButton(title: "Tasks", count: tasks.activeCount + tasks.suggestions.count, selected: tab == .tasks) { tab = .tasks }
-                TabButton(title: "Actions", count: 0, selected: tab == .actions) { tab = .actions }
-                Spacer()
-                trailingAction
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            Divider()
-            Group {
-                switch tab {
-                case .agents: agents
-                case .alerts: alerts
-                case .tasks:
-                    TaskListView(tasks: tasks, onTellGhost: onTellGhost, onOpenThread: onOpenThread, onOpenSession: onOpenSession)
-                case .actions: actions
+        VStack(spacing: 0) {
+            PageHeader(title: IronPetSection.actions.title) { EmptyView() }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Make \(ConfigStore.shared.config.pet.name) do something")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+                        ForEach(PetController.Trick.allCases, id: \.self) { trick in
+                            TrickTile(trick: trick) { onTrick(trick) }
+                        }
+                    }
                 }
+                .padding(12)
             }
-            .frame(height: 480, alignment: .top)
-        }
-        .frame(width: 460)
-        .onAppear { tab = initialTab ?? Self.defaultTab(store: store, signals: signals, tasks: tasks) }
-    }
-
-    /// Agents that need the user win; otherwise show alerts when there are some and no agent is active, then tasks
-    /// that wait on the user or on Add / Skip.
-    private static func defaultTab(store: SessionStore, signals: SignalStore, tasks: TaskStore) -> Tab {
-        if store.ordered.contains(where: { $0.status == .needsInput || $0.status == .failed }) { return .agents }
-        let idle = store.ordered.allSatisfy { $0.status != .running }
-        if !signals.signals.isEmpty, idle { return .alerts }
-        if idle, !tasks.suggestions.isEmpty || tasks.tasks.contains(where: { $0.status == .needsYou }) { return .tasks }
-        return .agents
-    }
-
-    @ViewBuilder private var trailingAction: some View {
-        switch tab {
-        case .agents:
-            HStack(spacing: 4) {
-                ForEach([AgentStatus.needsInput, .running, .failed, .done], id: \.self) { status in
-                    let count = store.ordered.filter { $0.status == status }.count
-                    if count > 0 { CountChip(count: count, color: status.tint) }
-                }
-            }
-        case .alerts:
-            if !signals.signals.isEmpty {
-                Button("Clear all") { signals.dismissAll() }
-                    .buttonStyle(.borderless)
-                    .font(.caption)
-            }
-        case .tasks, .actions:
-            EmptyView()
+            .frame(maxHeight: .infinity)
         }
     }
+}
 
-    // MARK: Actions
+/// The Agents section: watched sessions, grouped by what they need.
+struct AgentsSection: View {
+    @ObservedObject var store: SessionStore
+    let onJump: (AgentSession) -> Void
 
-    private var actions: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Make \(ConfigStore.shared.config.pet.name) do something")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 4)
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
-                    ForEach(PetController.Trick.allCases, id: \.self) { trick in
-                        TrickTile(trick: trick) { onTrick(trick) }
+    var body: some View {
+        VStack(spacing: 0) {
+            PageHeader(title: IronPetSection.agents.title) {
+                HStack(spacing: 4) {
+                    ForEach([AgentStatus.needsInput, .running, .failed, .done], id: \.self) { status in
+                        let count = store.ordered.filter { $0.status == status }.count
+                        if count > 0 { CountChip(count: count, color: status.tint) }
                     }
                 }
             }
-            .padding(12)
+            agents
         }
     }
-
-    // MARK: Agents
 
     private var sections: [(title: String, sessions: [AgentSession])] {
         let all = store.ordered
@@ -132,9 +81,27 @@ struct SessionListView: View {
                 .frame(maxHeight: .infinity)
             }
         }
+        .frame(maxHeight: .infinity)
     }
+}
 
-    // MARK: Alerts
+/// The Alerts section: what automations reported, newest first.
+struct AlertsSection: View {
+    @ObservedObject var signals: SignalStore
+    let onAsk: (String) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PageHeader(title: IronPetSection.alerts.title) {
+                if !signals.signals.isEmpty {
+                    Button("Clear all") { signals.dismissAll() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+            }
+            alerts
+        }
+    }
 
     @ViewBuilder private var alerts: some View {
         if signals.signals.isEmpty {
@@ -185,37 +152,6 @@ private struct TrickTile: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
-    }
-}
-
-private struct TabButton: View {
-    let title: String
-    let count: Int
-    let selected: Bool
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Text(title).font(.system(size: 13, weight: selected ? .semibold : .medium))
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.primary.opacity(selected ? 0.14 : 0.08)))
-                }
-            }
-            .foregroundStyle(selected ? .primary : .secondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 7)
-                .fill(Color.primary.opacity(selected ? 0.1 : hovering ? 0.05 : 0)))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
     }
 }
 

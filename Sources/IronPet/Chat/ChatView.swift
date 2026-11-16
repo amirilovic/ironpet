@@ -43,6 +43,7 @@ struct ChatView: View {
     @State private var selectionMonitor: Any?
     /// `--render-previews` only: draw the settings popover's content on its own, since a popover can't render offscreen.
     var settingsOnly = false
+    static let minimumSize = CGSize(width: 360, height: 320)
     /// The row SwiftUI reports at the top of the transcript. Tests compare it before and after content arrives, because
     /// the scroll offset in points moves when SwiftUI re-estimates the heights of rows that are not on screen.
     nonisolated(unsafe) static var topRowForTesting: UUID?
@@ -71,10 +72,10 @@ struct ChatView: View {
             }
         }
         .glassBar(.bottom) { composer }
-        .frame(minWidth: ChatPanel.minimumSize.width, maxWidth: .infinity,
-               minHeight: ChatPanel.minimumSize.height, maxHeight: .infinity)
+        .frame(minWidth: Self.minimumSize.width, maxWidth: .infinity,
+               minHeight: Self.minimumSize.height, maxHeight: .infinity)
         .background { ChatBackdrop() }
-        // The panel has a hidden, transparent title bar; without this its 28pt safe area sits empty above the header.
+        // The window has a hidden, transparent title bar; without this its 28pt safe area sits empty above the header.
         .ignoresSafeArea(.container, edges: .top)
         .onAppear { inputFocused = true }
         .onChange(of: findQuery) { scheduleFind() }
@@ -533,7 +534,7 @@ struct ChatView: View {
     }
 
     private func closeFind() {
-        if let panel = NSApp.keyWindow as? ChatPanel {
+        if let panel = NSApp.keyWindow as? IronPetPanel {
             panel.dismissFind()
             return
         }

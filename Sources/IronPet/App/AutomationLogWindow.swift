@@ -89,7 +89,7 @@ private struct AutomationLogView: View {
                 detail.frame(minWidth: 240)
             }
             Divider()
-            Text("Logs older than \(model.retentionDays) day\(model.retentionDays == 1 ? "" : "s") are deleted. Change this under Settings → Automations.")
+            Text("Logs older than \(model.retentionDays) day\(model.retentionDays == 1 ? "" : "s") are deleted. Change this under Automations in the ironpet window.")
                 .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(8)
         }
     }
