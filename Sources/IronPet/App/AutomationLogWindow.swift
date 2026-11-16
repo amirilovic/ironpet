@@ -49,6 +49,7 @@ final class AutomationLogModel: ObservableObject {
     }
 
     var automations: [Automation] { service?.store.automations ?? [] }
+    var unavailable: String? { service?.engine.state.unavailable }
     var retentionDays: Int { service?.logRetentionDays() ?? 14 }
 
     func name(_ id: String) -> String { automations.first { $0.id == id }?.name ?? id }
@@ -71,6 +72,7 @@ private struct AutomationLogView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let reason = model.unavailable { DatabaseBanner(reason: reason) }
             HStack {
                 Picker("Automation", selection: $model.filter) {
                     Text("All automations").tag(String?.none)
@@ -96,7 +98,9 @@ private struct AutomationLogView: View {
 
     private var list: some View {
         Group {
-            if model.logs.isEmpty {
+            if model.logs.isEmpty && model.unavailable != nil {
+                Text("History is not being saved.").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.logs.isEmpty {
                 Text("No runs logged yet.").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(model.logs, selection: $model.selection) { entry in

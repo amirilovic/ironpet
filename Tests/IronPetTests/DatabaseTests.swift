@@ -119,3 +119,84 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(try db.read { try $0.rows("SELECT tag FROM note_items").first?.first as? String }, "t")
     }
 }
+
+@MainActor
+final class DatabaseUnavailableTests: XCTestCase {
+    private var dir: URL!
+    private var file: URL { dir.appendingPathComponent("ironpet.db") }
+
+    override func setUpWithError() throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-dbu-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: dir) }
+
+    /// A file in the default (rollback journal) mode at a version no migration reaches.
+    private func makeNewerFile() throws -> Data {
+        let tasks = Database.Migration(1, "t", sql: "CREATE TABLE t(x);")
+        var db: Database? = try Database(path: file, migrations: [tasks])
+        try db?.write { try $0.script("INSERT INTO t VALUES(1); PRAGMA user_version = 301") }
+        db = nil
+        // Back to a plain file with no -wal or -shm next to it.
+        let out = Process()
+        out.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        out.arguments = [file.path, "PRAGMA journal_mode=DELETE;"]
+        out.standardOutput = FileHandle.nullDevice
+        try out.run(); out.waitUntilExit()
+        return try Data(contentsOf: file)
+    }
+
+    func testNewerFileRaisesAnAlertWithReasonAndPathAndStaysUntouched() throws {
+        let before = try makeNewerFile()
+        let (database, error) = Database.open(path: file, migrations: AppMigrations.all)
+        XCTAssertNotNil(error)
+        let signals = SignalStore()
+        var notified: Signal?
+        signals.onNew = { notified = $0 }
+        signals.reportIfUnavailable(database)
+        let alert = try XCTUnwrap(signals.signals.first)
+        XCTAssertEqual(alert.label, "ironpet can't open its database")
+        XCTAssertEqual(alert.mood, .failed)
+        XCTAssertTrue(alert.title.contains("newer than this ironpet knows"))
+        XCTAssertTrue(alert.title.contains("Install that build or a newer one"))
+        XCTAssertTrue(alert.title.contains(file.path))
+        XCTAssertEqual(notified?.id, alert.id)
+        XCTAssertEqual(try Data(contentsOf: file), before)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path + "-wal"))
+    }
+
+    func testTasksShowTheUnavailableStateNotTheEmptyOne() throws {
+        _ = try makeNewerFile()
+        let store = TaskStore(database: Database.open(path: file, migrations: AppMigrations.all).database)
+        XCTAssertNotNil(store.unavailable)
+        XCTAssertEqual(TaskListView.content(unavailable: store.unavailable != nil, isEmpty: true), .unavailable)
+        XCTAssertEqual(TaskListView.content(unavailable: false, isEmpty: true), .empty)
+        XCTAssertNotNil(UsageStore(database: Database.open(path: file, migrations: AppMigrations.all).database).unavailable)
+    }
+
+    func testTasksToolsReturnAnErrorNamingTheReason() throws {
+        _ = try makeNewerFile()
+        let store = TaskStore(database: Database.open(path: file, migrations: AppMigrations.all).database)
+        for op in ["list", "create"] {
+            guard case .failure(let error) = store.call(op, ["title": "x"], by: "agent:mcp") else { return XCTFail("\(op) succeeded") }
+            XCTAssertTrue(error.message.contains("newer than this ironpet knows"), error.message)
+            XCTAssertTrue(error.message.contains("Not saved"), error.message)
+        }
+        let cli = TaskMCP.handleCLI(Data(#"{"op":"list"}"#.utf8), store: store)
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: cli.body) as? [String: Any])
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertTrue((object["error"] as? String)?.contains("newer than this ironpet knows") == true)
+    }
+
+    func testNormalDatabaseShowsNoAlertOrBanner() throws {
+        let database = Database.open(path: file, migrations: AppMigrations.all).database
+        let signals = SignalStore()
+        signals.reportIfUnavailable(database)
+        XCTAssertTrue(signals.signals.isEmpty)
+        let store = TaskStore(database: database)
+        XCTAssertNil(store.unavailable)
+        XCTAssertNil(UsageStore(database: database).unavailable)
+        guard case .success = store.call("list", [:], by: "agent:mcp") else { return XCTFail("list failed") }
+    }
+}

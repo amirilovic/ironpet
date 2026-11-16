@@ -47,6 +47,9 @@ struct UsageSettings: View {
 
     var body: some View {
         Form {
+            if let reason = UsageStore.shared?.unavailable {
+                Section { DatabaseBanner(reason: reason) }
+            }
             Section {
                 Picker("Range", selection: $range) {
                     Text("7 days").tag(7)
@@ -65,7 +68,7 @@ struct UsageSettings: View {
             }
             Section("By feature and model") {
                 if summary.rows.isEmpty {
-                    Text("Nothing recorded in this range yet.").foregroundStyle(.secondary)
+                    Text(UsageStore.shared?.unavailable != nil ? "Usage is not being saved." : "Nothing recorded in this range yet.").foregroundStyle(.secondary)
                 } else {
                     table
                 }

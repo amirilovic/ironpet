@@ -207,6 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Alerts the user has not dismissed come back after a restart, quietly. Dismissing one clears its stored payload.
         signals.restore(service.engine.state.openAlerts())
         signals.onDismiss = { [state = service.engine.state] id in state.closeAlert(signalID: id) }
+        signals.reportIfUnavailable(database)
         service.nudge = { [weak self] moods in self?.pet.nudge(moods, each: moods == [.done] ? 3 : 4) }
         let workspace = store.paths.workspace
         service.runPrompt = { automation, prompt in await AutomationPrompt.run(automation, prompt: prompt, workspace: workspace) }
