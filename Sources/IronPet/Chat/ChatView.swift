@@ -73,7 +73,7 @@ struct ChatView: View {
         .glassBar(.bottom) { composer }
         .frame(minWidth: ChatPanel.minimumSize.width, maxWidth: .infinity,
                minHeight: ChatPanel.minimumSize.height, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background { ChatBackdrop() }
         // The panel has a hidden, transparent title bar; without this its 28pt safe area sits empty above the header.
         .ignoresSafeArea(.container, edges: .top)
         .onAppear { inputFocused = true }

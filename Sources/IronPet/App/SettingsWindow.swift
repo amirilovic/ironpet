@@ -163,6 +163,7 @@ private struct GeneralSettings: View {
                     .onChange(of: store.config.pet.name) { if store.config.pet.name != name { name = store.config.pet.name } }
                 PetGallery(gallery: model.pets, buildPet: model.actions.buildPet)
             }
+            ChatBackgroundSection()
             Section("Shortcuts") {
                 ShortcutRow(title: "Open chat", path: \.chat, model: model)
                 ShortcutRow(title: "Ask about front window", path: \.captureWindow, model: model)
@@ -563,5 +564,70 @@ struct IntegrationsSettings: View {
         alert.addButton(withTitle: "Cancel")
         NSApp.activate()
         return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+// MARK: - Chat background
+
+private struct ChatBackgroundSection: View {
+    @ObservedObject private var store = ConfigStore.shared
+    @State private var message: String?
+
+    private var current: String { store.config.chat.background }
+
+    var body: some View {
+        Section {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 12)], alignment: .leading, spacing: 12) {
+                choice(ChatBackground.defaultID, "Default")
+                ForEach(ChatBackground.builtIns) { choice($0.id, $0.name) }
+                choice(ChatBackground.customID, "Custom image…")
+            }
+            if let message { Text(message).font(.caption).foregroundStyle(.orange) }
+        } header: {
+            Text("Chat background")
+        } footer: {
+            Text("Shown behind the messages. A custom image is copied into ~/.ironpet/backgrounds and scaled to fill the panel.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func choice(_ id: String, _ title: String) -> some View {
+        let selected = current == id
+        return Button { pick(id) } label: {
+            VStack(spacing: 4) {
+                ZStack {
+                    if id == ChatBackground.customID, !(selected && store.config.chat.customImage != nil) {
+                        Color.primary.opacity(0.06)
+                        Image(systemName: "photo.badge.plus").font(.system(size: 18)).foregroundStyle(.secondary)
+                    } else {
+                        ChatBackgroundView(id: id, customFile: store.config.chat.customImage, scale: 0.45)
+                    }
+                }
+                .frame(width: 76, height: 52)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.15),
+                                                                         lineWidth: selected ? 2.5 : 1))
+                Text(title).font(.caption).lineLimit(1).foregroundStyle(selected ? Color.primary : Color.secondary)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title) background")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func pick(_ id: String) {
+        message = nil
+        guard id == ChatBackground.customID else { store.update { $0.chat.background = id }; return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg]
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose an image for the chat background"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let name = try ChatBackground.importImage(from: url, replacing: store.config.chat.customImage)
+            store.update { $0.chat.background = ChatBackground.customID; $0.chat.customImage = name }
+        } catch {
+            message = error.localizedDescription
+        }
     }
 }

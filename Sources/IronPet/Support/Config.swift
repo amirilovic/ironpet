@@ -135,7 +135,15 @@ struct Config: Codable, Equatable {
         var urlTemplate: String?
     }
 
+    struct Chat: Codable, Equatable {
+        /// `"default"` (plain), a built-in id such as `"paws"`, or `"custom"` for the image in `customImage`.
+        var background = "default"
+        /// File name of the imported image in `~/.ironpet/backgrounds`.
+        var customImage: String?
+    }
+
     var pet = Pet()
+    var chat = Chat()
     /// `"auto"` (the app that started the agent) or the bundle id of a fixed app.
     var openIn = "auto"
     var editors: [Editor] = []
@@ -180,6 +188,11 @@ struct Config: Codable, Equatable {
         for path in [\Reminders.water, \Reminders.stretch, \Reminders.eyes] {
             c.reminders[keyPath: path].minutes = max(1, c.reminders[keyPath: path].minutes)
         }
+        if c.chat.background != ChatBackground.defaultID, c.chat.background != ChatBackground.customID,
+           ChatBackground.builtIn(c.chat.background) == nil {
+            c.chat.background = ChatBackground.defaultID
+        }
+        if c.chat.background == ChatBackground.customID, c.chat.customImage == nil { c.chat.background = ChatBackground.defaultID }
         c.openIn = c.openIn.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.openIn.isEmpty { c.openIn = Config().openIn }
         c.editors = c.editors.filter { !$0.name.isEmpty && !$0.bundleId.isEmpty }
