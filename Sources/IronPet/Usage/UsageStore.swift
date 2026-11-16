@@ -112,6 +112,9 @@ final class UsageStore: @unchecked Sendable {
     /// Only touched on `queue`.
     private var lastPrune = Date.distantPast
 
+    /// Why the database is unavailable, when usage is only in memory.
+    var unavailable: String? { database.unavailableReason }
+
     init(database: Database) {
         self.database = database
         queue.async { [self] in prune() }
