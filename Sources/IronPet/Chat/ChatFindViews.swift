@@ -36,6 +36,7 @@ struct FindBar: View {
     let step: (Int) -> Void
     let close: () -> Void
     @FocusState private var focused: Bool
+    static let fieldID = "findField"
 
     var body: some View {
         HStack(spacing: 6) {
@@ -44,6 +45,7 @@ struct FindBar: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12.5))
                 .focused($focused)
+                .accessibilityIdentifier(Self.fieldID)
                 .focusEffectDisabled()
                 .onSubmit { step(1) }
                 .onKeyPress(.return, phases: .down) { press in

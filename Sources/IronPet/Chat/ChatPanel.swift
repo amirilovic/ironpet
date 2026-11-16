@@ -63,6 +63,7 @@ final class ChatPanel: NSPanel {
         if flags == .command, event.charactersIgnoringModifiers == "f", isKeyWindow {
             session.findOpen = true
             session.findFocusTick += 1
+            focusFind()
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -102,6 +103,25 @@ final class ChatPanel: NSPanel {
     func focusInput() {
         guard let field = contentView.flatMap(Self.firstTextInput) else { return }
         makeFirstResponder(field)
+    }
+
+    /// Moves focus to the find field and selects its text. The bar enters the view tree on the next SwiftUI update,
+    /// so retry briefly until the field exists. `FocusState` alone loses to the composer, which keeps first responder.
+    private func focusFind(attempt: Int = 0) {
+        // Esc during the retries closes the bar; do not pull focus back to a field that is going away.
+        guard session.findOpen else { return }
+        if let field = contentView.flatMap({ Self.findField(in: $0) }) {
+            makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+        } else if attempt < 30 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in self?.focusFind(attempt: attempt + 1) }
+        }
+    }
+
+    private static func findField(in view: NSView) -> NSTextField? {
+        if let field = view as? NSTextField, !field.isHidden, field.accessibilityIdentifier() == FindBar.fieldID { return field }
+        for sub in view.subviews { if let found = findField(in: sub) { return found } }
+        return nil
     }
 
     private static func firstTextInput(in view: NSView) -> NSView? {
