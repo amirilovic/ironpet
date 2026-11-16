@@ -48,6 +48,10 @@ enum PreviewRenderer {
         }
         render(list(sessions, tasks: tasks, on: .chat), to: dir, "window-chat")
         render(list(sessions, tasks: tasks, on: .transcripts), to: dir, "transcripts")
+        // The same section mid-run: the row and the header show the stage, and Regenerate is disabled for the other meeting.
+        meetings.regenerator.loadPreview(active: "2026-11-16-0930", .transcribing(chunk: 2, of: 5))
+        render(list(sessions, tasks: tasks, on: .transcripts), to: dir, "transcripts-regenerating")
+        meetings.regenerator.clearPreview()
         render(list(sessions, tasks: tasks), to: dir, "agents")
         // The window opens on Alerts when no agent needs you or is working.
         render(list(SessionStore(), tasks: tasks), to: dir, "alerts")
@@ -178,6 +182,11 @@ enum PreviewRenderer {
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             try? summary.write(to: url.appendingPathComponent("summary.md"), atomically: true, encoding: .utf8)
             try? transcript.write(to: url.appendingPathComponent("transcript.md"), atomically: true, encoding: .utf8)
+        }
+        // One second of a made-up tone, so the newest meeting has audio and Regenerate is enabled; the other has none.
+        if let first = meetings.first {
+            let tone = (0..<WAV.sampleRate).map { Int16($0 / 20 % 2 == 0 ? 6000 : -6000) }
+            try? WAV.encode(tone).write(to: root.appendingPathComponent(first.0).appendingPathComponent("mic-001.wav"))
         }
         return root
     }

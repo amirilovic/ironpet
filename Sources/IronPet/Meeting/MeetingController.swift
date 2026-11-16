@@ -48,6 +48,8 @@ final class MeetingController: ObservableObject {
     @Published private(set) var speakerTable = MeetingSpeakerTable()
     /// Names were given after the summary was written, so it still says "Speaker 1".
     @Published private(set) var namesChangedSinceSummary = false
+    /// A summary-only regeneration started from the naming flow is running.
+    @Published private(set) var regeneratingSummary = false
     private(set) var startedAt: Date?
     private(set) var folder: URL?
     let myLevels = LevelBuffer()
@@ -103,6 +105,8 @@ final class MeetingController: ObservableObject {
     var onChange: (() -> Void)?
     /// Opens Settings → Meetings, where unnamed voices are labelled.
     var onLabelSpeakers: (() -> Void)?
+    /// Rebuilds the summary of a meeting folder from its transcript. True when summary.md was replaced.
+    var regenerateSummaryOf: ((URL) async -> Bool)?
     /// Agent and model of the last summary run, for `GET /test/meeting`.
     private(set) var lastSummaryRequest: (agent: String, model: String?)?
     private(set) var summaryNotified: [String] = []
@@ -599,6 +603,24 @@ final class MeetingController: ObservableObject {
         namesChangedSinceSummary = true
         objectWillChange.send()
         onChange?()
+    }
+
+    /// The naming flow offers "Regenerate summary" once a name was given after the summary was written (or without one).
+    var canRegenerateSummary: Bool {
+        // Idle covers a closed bubble: Settings still lists the voices of the last meeting then.
+        namesChangedSinceSummary && (phase == .done || phase == .idle) && folder != nil && regenerateSummaryOf != nil
+    }
+
+    /// Summarises the transcript, which already has the new names, again. The old summary stays as `summary.prev.md`.
+    func regenerateSummary() {
+        guard canRegenerateSummary, !regeneratingSummary, let folder, let run = regenerateSummaryOf else { return }
+        regeneratingSummary = true
+        Task { [weak self] in
+            let replaced = await run(folder)
+            guard let self else { return }
+            regeneratingSummary = false
+            if replaced { namesChangedSinceSummary = false }
+        }
     }
 
     /// "Ignore" and "Two people mixed": the voice stays "Speaker N" and is never stored.

@@ -152,6 +152,41 @@ final class SpeakerPipelineTests: XCTestCase {
         XCTAssertTrue(controller.namesChangedSinceSummary)
     }
 
+    func testNamingAVoiceOffersRegeneratingTheSummaryAndNeverRunsIt() async throws {
+        let controller = try await meeting(recognise: true, ready: true, diarizer: FakeDiarizer())
+        var regenerated: [URL] = []
+        controller.regenerateSummaryOf = { folder in regenerated.append(folder); return true }
+        XCTAssertFalse(controller.canRegenerateSummary, "nothing was named yet")
+
+        controller.nameSpeaker(1, as: "Marko")
+        XCTAssertTrue(controller.canRegenerateSummary)
+        XCTAssertTrue(regenerated.isEmpty, "the offer is a button, not an automatic run")
+
+        controller.regenerateSummary()
+        try await waitFor { !controller.canRegenerateSummary }
+        XCTAssertEqual(regenerated, [controller.folder])
+        XCTAssertFalse(controller.namesChangedSinceSummary)
+        XCTAssertFalse(controller.regeneratingSummary)
+    }
+
+    func testTheOfferSurvivesClosingTheBubble() async throws {
+        let controller = try await meeting(recognise: true, ready: true, diarizer: FakeDiarizer())
+        controller.regenerateSummaryOf = { _ in true }
+        controller.dismiss()
+        controller.nameSpeaker(1, as: "Marko")
+        XCTAssertEqual(controller.phase, .idle)
+        XCTAssertTrue(controller.canRegenerateSummary, "Settings is where the voices are named after the bubble is closed")
+    }
+
+    func testAFailedSummaryRegenerationKeepsTheOffer() async throws {
+        let controller = try await meeting(recognise: true, ready: true, diarizer: FakeDiarizer())
+        controller.regenerateSummaryOf = { _ in false }
+        controller.nameSpeaker(1, as: "Marko")
+        controller.regenerateSummary()
+        try await waitFor { !controller.regeneratingSummary }
+        XCTAssertTrue(controller.canRegenerateSummary)
+    }
+
     func testClosingTheBubbleKeepsUnnamedVoicesForSettingsUntilTheNextMeeting() async throws {
         let controller = try await meeting(recognise: true, ready: true, diarizer: FakeDiarizer())
         XCTAssertTrue(controller.hasSpeakersToName)
