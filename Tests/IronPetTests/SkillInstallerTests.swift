@@ -283,4 +283,37 @@ final class SkillInstallerTests: XCTestCase {
         XCTAssertNotNil(linkDestination(".claude/skills/ironpet-automations"))
         XCTAssertEqual(cli(["bogus"]).code, 2)
     }
+
+    // MARK: The ironpet-tasks skill
+
+    func testTasksSkillInstallsLinksAndReplacesAnOlderCopy() throws {
+        let skill = try XCTUnwrap(BundledSkills.named("ironpet-tasks"))
+        try mkdir(".claude")
+        try mkdir(".cursor")
+        try mkdir(".config/opencode")
+        try SkillManager(home: home).install(names: ["ironpet-tasks"])
+        XCTAssertEqual(skillFile(".agents/skills/ironpet-tasks"), skill.content)
+        XCTAssertEqual(linkDestination(".claude/skills/ironpet-tasks"), "../../.agents/skills/ironpet-tasks")
+        XCTAssertEqual(linkDestination(".cursor/skills/ironpet-tasks"), "../../.agents/skills/ironpet-tasks")
+        XCTAssertEqual(linkDestination(".config/opencode/skills/ironpet-tasks"), "../../../.agents/skills/ironpet-tasks")
+        try "---\nname: ironpet-tasks\ndescription: old\n---\nold\n"
+            .write(to: home.appendingPathComponent(".agents/skills/ironpet-tasks/SKILL.md"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(SkillManager(home: home).updateInstalled(), ["ironpet-tasks"])
+        XCTAssertEqual(skillFile(".claude/skills/ironpet-tasks"), skill.content)
+    }
+
+    @MainActor
+    func testTasksSkillHasTheClosingRulesAndNamesOnlyRealTools() throws {
+        let text = try XCTUnwrap(BundledSkills.named("ironpet-tasks")).content
+        for phrase in ["A query can verify it", "A query cannot verify it", "Never close on it"] {
+            XCTAssertTrue(text.contains(phrase), phrase)
+        }
+        let real = Set(MCPEndpoint.tools.compactMap { $0["name"] as? String }.filter { $0.hasPrefix("tasks_") })
+        let regex = try NSRegularExpression(pattern: "tasks_[a-z_]+")
+        let found = Set(regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
+            Range($0.range, in: text).map { String(text[$0]) }
+        })
+        XCTAssertFalse(found.isEmpty)
+        XCTAssertTrue(found.isSubset(of: real), "the skill names a task tool the endpoint does not have: \(found.subtracting(real))")
+    }
 }
