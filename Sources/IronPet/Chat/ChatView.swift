@@ -862,12 +862,15 @@ private struct UserBubble: View {
     /// Where the message came from when it was not typed in this chat, such as "telegram".
     var source: String?
     var find: ChatFind.RowHighlight?
+    @ObservedObject private var paths = PathCache.shared
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
-            ChatFind.text(AttributedString(text), segment: 0, find: find)
+            ChatFind.text(FilePathLinks.link(AttributedString(text), underline: true), segment: 0, find: find)
                 .font(.system(size: 13.5))
                 .foregroundStyle(.white)
+                .tint(.white)
+                .environment(\.openURL, OpenURLAction { FilePathLinks.handle($0) })
                 .textSelection(.enabled)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
