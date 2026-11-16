@@ -18,7 +18,7 @@ enum ChatBackground {
         /// Top and bottom colours of the gradient, as hex, for light and dark mode.
         let light: (UInt32, UInt32)
         let dark: (UInt32, UInt32)
-        /// Line colour of the doodles, as hex, for light and dark mode. Drawn at `inkOpacity`.
+        /// Line colour of the doodles, as hex, for light and dark mode. Drawn at `inkOpacity` (120% of it in dark mode). Both are low enough that a link stays at 4.5:1 or better on a stroke.
         let lightInk: UInt32
         let darkInk: UInt32
         let inkOpacity: Double
@@ -27,16 +27,16 @@ enum ChatBackground {
     }
 
     static let builtIns: [BuiltIn] = [
-        BuiltIn(id: "dusk", name: "Dusk", light: (0xEEF0FB, 0xDDE6F7), dark: (0x1F2233, 0x181D2B),
+        BuiltIn(id: "dusk", name: "Dusk", light: (0xF6F8FD, 0xEEF2FB), dark: (0x1F2233, 0x181D2B),
                 lightInk: 0x000000, darkInk: 0xFFFFFF, inkOpacity: 0, doodles: []),
-        BuiltIn(id: "paws", name: "Paws", light: (0xE6F4EC, 0xD6EDE0), dark: (0x1A2A24, 0x15221D),
-                lightInk: 0x2F6B4F, darkInk: 0xA8E0C6, inkOpacity: 0.16, doodles: [.paw, .star]),
-        BuiltIn(id: "ghosts", name: "Ghosts", light: (0xF0EAFA, 0xE2D9F4), dark: (0x25203A, 0x1C1830),
-                lightInk: 0x5B4A8C, darkInk: 0xC9BDF2, inkOpacity: 0.16, doodles: [.ghost, .star, .bubble]),
-        BuiltIn(id: "chatter", name: "Chatter", light: (0xFCF0E4, 0xF7E3D0), dark: (0x2E2420, 0x241C19),
-                lightInk: 0x9A5B2E, darkInk: 0xF0C7A0, inkOpacity: 0.16, doodles: [.bubble, .star, .paw]),
-        BuiltIn(id: "leaves", name: "Leaves", light: (0xE9F1E2, 0xD9E8CC), dark: (0x1E2818, 0x182012),
-                lightInk: 0x4B7A2E, darkInk: 0xBEE3A0, inkOpacity: 0.17, doodles: [.leaf, .star]),
+        BuiltIn(id: "paws", name: "Paws", light: (0xF2FAF5, 0xE9F6EF), dark: (0x1A2A24, 0x15221D),
+                lightInk: 0x2F6B4F, darkInk: 0xA8E0C6, inkOpacity: 0.04, doodles: [.paw, .star]),
+        BuiltIn(id: "ghosts", name: "Ghosts", light: (0xF8F4FD, 0xF1ECFB), dark: (0x25203A, 0x1C1830),
+                lightInk: 0x5B4A8C, darkInk: 0xC9BDF2, inkOpacity: 0.035, doodles: [.ghost, .star, .bubble]),
+        BuiltIn(id: "chatter", name: "Chatter", light: (0xFEF7EF, 0xFBEFE2), dark: (0x2E2420, 0x241C19),
+                lightInk: 0x9A5B2E, darkInk: 0xF0C7A0, inkOpacity: 0.04, doodles: [.bubble, .star, .paw]),
+        BuiltIn(id: "leaves", name: "Leaves", light: (0xF4F9EF, 0xEBF4E1), dark: (0x1E2818, 0x182012),
+                lightInk: 0x4B7A2E, darkInk: 0xBEE3A0, inkOpacity: 0.04, doodles: [.leaf, .star]),
     ]
 
     static func builtIn(_ id: String) -> BuiltIn? { builtIns.first { $0.id == id } }
@@ -122,7 +122,7 @@ private struct BuiltInBackground: View, Equatable {
 
     var body: some View {
         let colors = dark ? builtIn.dark : builtIn.light
-        let ink = Self.color(dark ? builtIn.darkInk : builtIn.lightInk).opacity(builtIn.inkOpacity)
+        let ink = Self.color(dark ? builtIn.darkInk : builtIn.lightInk).opacity(dark ? builtIn.inkOpacity * 1.2 : builtIn.inkOpacity)
         let doodles = builtIn.doodles
         // The canvas draws once per size or appearance change, not while the transcript scrolls over it.
         Canvas { context, size in

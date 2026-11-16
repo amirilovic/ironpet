@@ -43,6 +43,16 @@ final class ChatBackgroundTests: XCTestCase {
         XCTAssertEqual(Config.load(from: file).config.chat.background, "default", "custom without an image")
     }
 
+    func testCustomImageKeepsOnlyTheFileName() throws {
+        let file = dir.appendingPathComponent("config.json")
+        try #"{"chat": {"background": "custom", "customImage": "../../secret.png"}}"#.write(to: file, atomically: true, encoding: .utf8)
+        XCTAssertEqual(Config.load(from: file).config.chat.customImage, "secret.png")
+        try #"{"chat": {"background": "custom", "customImage": ".."}}"#.write(to: file, atomically: true, encoding: .utf8)
+        let loaded = Config.load(from: file).config.chat
+        XCTAssertNil(loaded.customImage)
+        XCTAssertEqual(loaded.background, "default")
+    }
+
     func testImportCopiesImageAndOriginalCanMove() throws {
         let original = try makePNG("photo.png")
         let store = dir.appendingPathComponent("backgrounds")

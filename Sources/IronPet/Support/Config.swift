@@ -192,6 +192,11 @@ struct Config: Codable, Equatable {
            ChatBackground.builtIn(c.chat.background) == nil {
             c.chat.background = ChatBackground.defaultID
         }
+        // A file name only: a hand-edited "../x" must not read or delete anything outside the backgrounds folder.
+        if let file = c.chat.customImage {
+            let name = (file as NSString).lastPathComponent
+            c.chat.customImage = name.isEmpty || name.hasPrefix(".") ? nil : name
+        }
         if c.chat.background == ChatBackground.customID, c.chat.customImage == nil { c.chat.background = ChatBackground.defaultID }
         c.openIn = c.openIn.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.openIn.isEmpty { c.openIn = Config().openIn }
