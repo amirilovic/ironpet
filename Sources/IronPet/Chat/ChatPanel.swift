@@ -61,21 +61,25 @@ final class ChatPanel: NSPanel {
             }
         }
         if flags == .command, event.charactersIgnoringModifiers == "f", isKeyWindow {
-            session.findOpen = true
-            session.findFocusTick += 1
-            focusFind()
+            revealFind()
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// Opens the find bar and moves focus into its field. Cmd-F calls this; tests call it directly because a
+    /// test process has no key window.
+    func revealFind() {
+        session.findOpen = true
+        session.findFocusTick += 1
+        focusFind()
     }
 
     /// Esc stops a running turn first, like the stop button; only an idle chat closes.
     override func cancelOperation(_ sender: Any?) {
         if session.dismissSlash() { return }
         if session.findOpen {
-            session.findOpen = false
-            // The find bar leaves the view tree on the next update; the composer is the first field after that.
-            DispatchQueue.main.async { [weak self] in self?.focusInput() }
+            dismissFind()
             return
         }
         if session.isRunning { session.stop() } else { close() }
@@ -99,6 +103,29 @@ final class ChatPanel: NSPanel {
         focusInput()
     }
 
+    /// Closes the find bar and returns focus to the composer. Esc and the bar's close button both come here.
+    /// The bar leaves the view tree on the next update, and that can hand focus to the window, so retry
+    /// until the composer holds it.
+    func dismissFind() {
+        session.findOpen = false
+        refocusInput()
+    }
+
+    private var composerHasFocus: Bool {
+        guard let field = contentView.flatMap(Self.firstTextInput), let responder = firstResponder else { return false }
+        return responder === field || (field as? NSTextField)?.currentEditor() === responder
+    }
+
+    private func refocusInput(attempt: Int = 0) {
+        guard isKeyWindow || attempt == 0 else { return }
+        if !composerHasFocus { focusInput() }
+        guard attempt < 10 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+            guard let self, !self.session.findOpen else { return }
+            self.refocusInput(attempt: attempt + 1)
+        }
+    }
+
     /// SwiftUI's FocusState only applies on first appearance; the panel is reused, so focus the text view directly.
     func focusInput() {
         guard let field = contentView.flatMap(Self.firstTextInput) else { return }
@@ -119,14 +146,14 @@ final class ChatPanel: NSPanel {
     }
 
     private static func findField(in view: NSView) -> NSTextField? {
-        if let field = view as? NSTextField, !field.isHidden, field.accessibilityIdentifier() == FindBar.fieldID { return field }
+        if let field = view as? NSTextField, !field.isHidden, field.placeholderString == FindBar.placeholder { return field }
         for sub in view.subviews { if let found = findField(in: sub) { return found } }
         return nil
     }
 
     private static func firstTextInput(in view: NSView) -> NSView? {
-        if let text = view as? NSTextView, text.isEditable { return text }
-        if let field = view as? NSTextField, field.isEditable { return field }
+        if let text = view as? NSTextView, text.isEditable, !text.isFieldEditor { return text }
+        if let field = view as? NSTextField, field.isEditable, field.placeholderString != FindBar.placeholder { return field }
         for sub in view.subviews { if let found = firstTextInput(in: sub) { return found } }
         return nil
     }

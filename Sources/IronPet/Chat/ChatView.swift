@@ -533,6 +533,10 @@ struct ChatView: View {
     }
 
     private func closeFind() {
+        if let panel = NSApp.keyWindow as? ChatPanel {
+            panel.dismissFind()
+            return
+        }
         session.findOpen = false
         DispatchQueue.main.async { inputFocused = true }
     }
