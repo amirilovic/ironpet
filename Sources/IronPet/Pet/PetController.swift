@@ -27,6 +27,14 @@ final class PetController: NSObject {
     /// "Ask Ghost" on an alert: open the chat with this prompt ready to send.
     var onAsk: ((String) -> Void)?
     var onCapture: ((_ region: Bool) -> Void)?
+    /// The Tasks tab's list. Falls back to `TaskStore.shared`, then to an empty list.
+    var tasks: TaskStore?
+    /// "Tell Ghost…" in the Tasks tab: send this text to the chat.
+    var onTellGhost: ((String) -> Void)?
+    /// A task's thread link: open that chat thread.
+    var onOpenThread: ((String) -> Void)?
+    /// A task's session link that is not a watched agent session (those jump to their terminal or editor here).
+    var onOpenSession: ((String) -> Void)?
     var onRecordingClick: (() -> Void)? {
         didSet { view.onRecordingClick = onRecordingClick }
     }
@@ -145,27 +153,51 @@ final class PetController: NSObject {
     }
 
     private func togglePopover() {
-        lastActivity = Date()
         if agentsPanel.isVisible {
             agentsPanel.close()
+            refreshMood()
         } else {
-            NSApp.activate()
-            agentsPanel.show(SessionListView(
-                store: store, signals: signals,
-                onJump: { [weak self] session in self?.jump(to: session) },
-                onAsk: { [weak self] prompt in
-                    self?.agentsPanel.close()
-                    self?.onAsk?(prompt)
-                },
-                onTrick: { [weak self] trick in
-                    // Bubbles are hidden while this window is open.
-                    if trick == .speak { self?.agentsPanel.close() }
-                    self?.perform(trick)
-                }
-            ), near: panel.frame)
+            showAgents(tab: nil)
         }
+    }
+
+    /// Opens the agents window on `tab`, or on whatever needs attention when nil. Reopens it if it is already showing.
+    func showAgents(tab: SessionListView.Tab?) {
+        lastActivity = Date()
+        NSApp.activate()
+        agentsPanel.show(SessionListView(
+            store: store, signals: signals, tasks: tasks ?? TaskStore.shared ?? Self.noTasks,
+            onJump: { [weak self] session in self?.jump(to: session) },
+            onAsk: { [weak self] prompt in
+                self?.agentsPanel.close()
+                self?.onAsk?(prompt)
+            },
+            onTrick: { [weak self] trick in
+                // Bubbles are hidden while this window is open.
+                if trick == .speak { self?.agentsPanel.close() }
+                self?.perform(trick)
+            },
+            onTellGhost: { [weak self] text in
+                self?.agentsPanel.close()
+                self?.onTellGhost?(text)
+            },
+            onOpenThread: { [weak self] id in
+                self?.agentsPanel.close()
+                self?.onOpenThread?(id)
+            },
+            onOpenSession: { [weak self] id in
+                guard let self else { return }
+                if let session = store.sessions[id] { return jump(to: session) }
+                agentsPanel.close()
+                onOpenSession?(id)
+            },
+            initialTab: tab
+        ), near: panel.frame)
         refreshMood()
     }
+
+    /// Stands in until the app hands over its store, so the tab shows its empty state instead of failing.
+    private static let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
 
     /// Reloads the sprite sheet after `pet.sprite` changes.
     func reloadAtlas() {
