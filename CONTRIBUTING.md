@@ -34,7 +34,7 @@ Run the scenarios related to your change, and mention which ones you ran in the 
 ## Guidelines
 
 - **Safety first.** ironpet edits other tools' config files and starts agents that can change files. Changes to hooks, approvals, Auto mode or anything that writes outside `~/.ironpet` need tests and a note in SECURITY.md. New integrations that touch the network or credentials are off by default.
-- **Settings** go in `Config` (`Support/Config.swift`) with a safe default, plus a control in the Settings window if most people would want to change them. Document new keys in the README's Configuration section.
+- **Settings** go in `Config` (`Support/Config.swift`) with a safe default, plus a control on a Settings page if most people would want to change them. Document new keys in the README's Configuration section.
 - **Style.** Follow the code around your change. Keep functions small, comment the *why* rather than the *what*, and don't add dependencies without discussing it first.
 - **Commits and PRs.** Keep each PR focused on one thing. Describe what changed, why, and how you tested it; include a screenshot for UI changes. CI runs `swift build`, `swift test` and builds the app bundle on every PR.
 

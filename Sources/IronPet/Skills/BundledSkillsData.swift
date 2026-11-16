@@ -118,7 +118,7 @@ Do not touch other automations, and do not turn the failing one off unless the u
 
 ## Debugging
 
-- `automations_history` shows the last runs (time, outcome, short output). The full execution log, with exit codes, output and `console.log` lines, is in the app: Settings → Automations → Show logs.
+- `automations_history` shows the last runs (time, outcome, short output). The full execution log, with exit codes, output and `console.log` lines, is in the app: ironpet window → Automations → Show logs.
 - `automations_run_now` runs it now, outside the schedule. A poll or script runs once.
 - A script that returns nothing before it has any state stays a "first run". If alerts did not appear, check that the first run was not the one that should have fired.
 - An automation waiting for approval shows `"approval": "pending"` in `automations_get`.

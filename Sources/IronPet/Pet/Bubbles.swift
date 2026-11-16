@@ -81,7 +81,7 @@ final class BubblePanel {
     private var cancellables: Set<AnyCancellable> = []
     private var timer: Timer?
 
-    /// Hidden while the chat or agents window is open; bubbles wait until it closes.
+    /// Hidden while the chat or a main section of the ironpet window is open; bubbles wait until it closes.
     var isSuppressed = false {
         didSet { if isSuppressed != oldValue { update() } }
     }

@@ -195,7 +195,7 @@ private struct BuiltInBackground: View, Equatable {
     }
 }
 
-/// The chat panel's backdrop. Observes the config itself so a change in Settings shows at once without redrawing the
+/// The chat's backdrop. Observes the config itself so a change in Settings shows at once without redrawing the
 /// transcript above it.
 struct ChatBackdrop: View {
     @ObservedObject private var store = ConfigStore.shared

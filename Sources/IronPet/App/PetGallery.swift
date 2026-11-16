@@ -9,7 +9,7 @@ final class PetClock: ObservableObject {
 }
 
 /// Backs the pet gallery in Settings. One timer drives every tile's animation and another polls the pets folder, and
-/// both run only while the gallery is on screen in a visible Settings window.
+/// both run only while the General page of the ironpet window is on screen.
 @MainActor
 final class PetGalleryModel: ObservableObject {
     @Published private(set) var entries: [PetEntry] = []

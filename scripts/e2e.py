@@ -647,18 +647,61 @@ def scenario_setup():
         record("Setup: not shown again on the next launch", not wait_for(lambda: window_open("Welcome to ironpet"), 4))
 
 
-def open_settings():
+WINDOW = "ironpet"
+# The Settings window is titled after the page it shows.
+SETTINGS_PAGES = ["General", "Integrations", "Voice", "Meetings", "Usage"]
+
+
+def window_shown(title=WINDOW):
+    """A window titled exactly `title`; `window_open` matches substrings, and "Welcome to ironpet" contains "ironpet"."""
+    activate_app()
+    return osa(f'tell application "System Events" to tell process "IronPet" to return exists window "{title}"') == "true"
+
+
+def open_settings(page="General"):
+    """Opens the Settings window from the app menu on `page`, and returns its title, or None when it did not open."""
     activate_app()
     osa('tell application "System Events" to tell process "IronPet" to click menu item "Settings…" of menu 1 of menu bar item 2 of menu bar 1')
-    return wait_for(lambda: window_open("ironpet Settings"), 5)
+    shown = wait_for(lambda: next((p for p in SETTINGS_PAGES if window_shown(p)), None), 5)
+    if not shown:
+        return None
+    if shown != page:
+        select_row(shown, page, {"tab": page.lower()})
+    return page if wait_for(lambda: window_shown(page), 3) else None
+
+
+def show_section(name):
+    """Opens the ironpet window on a sidebar section such as Automations."""
+    call("POST", "/test/show-settings", {"tab": name.lower()})
+    return wait_for(window_shown, 5)
+
+
+def select_row(window, name, fallback):
+    """Selects a sidebar row, as a click on its label does."""
+    script = f"""
+    tell application "System Events" to tell process "IronPet"
+      repeat with r in (rows of outline 1 of scroll area 1 of group 1 of window "{window}")
+        if (exists static text "{name}" of UI element 1 of r) then
+          set selected of r to true
+          return "ok"
+        end if
+      end repeat
+    end tell
+    return "missing"
+    """
+    if osa(script) != "ok":
+        # The sidebar's accessibility tree differs between macOS versions; the test endpoint selects the same row.
+        print(f"  note: the {name} sidebar row was not found through accessibility; selected it through /test/show-settings")
+        call("POST", "/test/show-settings", fallback)
+    time.sleep(0.5)
 
 
 def scenario_settings():
     with PreservedUserState():
-        if not open_settings():
+        win = open_settings("General")
+        if not win:
             return record("Settings: window opens from the app menu", False)
         record("Settings: window opens from the app menu", True)
-        win = "ironpet Settings"
 
         # Agent hooks toggle installs/removes only that agent's hooks.
         start = hooks_installed("claude")
@@ -676,20 +719,16 @@ def scenario_settings():
         keystroke("j", "control", "option", "command")
         saved = wait_for(lambda: read_config().get("hotkeys", {}).get("chat") == "ctrl+opt+cmd+j", 5)
         record("Settings: recording a shortcut saves it", bool(saved), f"chat={read_config().get('hotkeys', {}).get('chat')}")
-        osa('tell application "System Events" to tell process "IronPet" to click button 1 of window "ironpet Settings"')  # close
-        time.sleep(0.5)
         osa('tell application "Finder" to activate')
         time.sleep(0.5)
         keystroke("j", "control", "option", "command", to_app=False)
         opened = wait_for(lambda: chat()["visible"], 5)
         record("Settings: the new shortcut opens the chat", bool(opened))
 
-        # Reminders tab writes to config.json.
-        open_settings()
-        osa(f'tell application "System Events" to tell process "IronPet" to click radio button 2 of tab group 1 of group 1 of window "{win}"')
-        time.sleep(0.5)
+        # The Automations section of the ironpet window writes to config.json.
+        show_section("Automations")
         was = read_config().get("reminders", {}).get("paused", False)
-        ax(win, "click", "AXCheckBox", "Pause all reminders")
+        ax(WINDOW, "click", "AXCheckBox", "Pause all reminders")
         paused = wait_for(lambda: read_config().get("reminders", {}).get("paused") == (not was), 5)
         record("Settings: Pause all reminders saves to config.json", bool(paused))
 
@@ -697,7 +736,7 @@ def scenario_settings():
         cfg = read_config()
         cfg.setdefault("pet", {})["name"] = "Handy"
         json.dump(cfg, open(CONFIG, "w"))
-        osa(f'tell application "System Events" to tell process "IronPet" to click radio button 1 of tab group 1 of group 1 of window "{win}"')
+        win = open_settings("General")
         shown = wait_for(lambda: ax(win, "value", "AXTextField", "Name") == "Handy", 6)
         record("Settings: hand edits to config.json appear in the window", bool(shown))
 
@@ -911,11 +950,9 @@ def scenario_voice_key():
         return record("Voice key: Keychain item", False, "SKIPPED: an ironpet.voice key already exists; not overwriting it")
     with PreservedUserState():
         try:
-            if not open_settings():
+            win = open_settings("Voice")
+            if not win:
                 return record("Voice key: Settings opens", False)
-            win = "ironpet Settings"
-            osa(f'tell application "System Events" to tell process "IronPet" to click radio button 4 of tab group 1 of group 1 of window "{win}"')
-            time.sleep(1)
             ax(win, "focus", "AXTextField", "API key")
             keystroke(secret)
             keystroke("\r")

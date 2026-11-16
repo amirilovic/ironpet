@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The Tasks tab of the agents panel. The agent owns the list; here the user can only mark a task done, delete it,
+/// The Tasks section of the ironpet window. The agent owns the list; here the user can only mark a task done, delete it,
 /// and add or skip meeting suggestions. Anything else goes to the chat through "Tell Ghost…".
 struct TaskListView: View {
     @ObservedObject var tasks: TaskStore

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -27,8 +28,10 @@ final class SettingsModel: ObservableObject {
     let pets = PetGalleryModel()
     private let announcer: Announcer
     let telegram: TelegramBridge
-    /// The selected tab's tag. Tests set it to screenshot a tab.
-    @Published var tab = "general"
+    /// The selected page's tag, kept so the window reopens on it. Tests set it to screenshot a page.
+    @Published var tab = UserDefaults.standard.string(forKey: "settingsTab").flatMap { SettingsView.page($0)?.tag } ?? "general" {
+        didSet { UserDefaults.standard.set(tab, forKey: "settingsTab") }
+    }
 
     init(actions: Actions, announcer: Announcer, telegram: TelegramBridge) {
         self.actions = actions
@@ -82,12 +85,13 @@ final class SettingsWindow {
             let host = NSHostingController(rootView: SettingsView(model: model))
             host.sizingOptions = []
             let window = NSWindow(contentViewController: host)
-            window.title = "ironpet Settings"
+            window.title = SettingsView.page(model.tab)?.title ?? "Settings"
             window.styleMask = [.titled, .closable, .miniaturizable]
             window.isReleasedWhenClosed = false
-            window.setContentSize(NSSize(width: 520, height: 600))
+            window.setContentSize(NSSize(width: SettingsView.width, height: 600))
             window.center()
             self.window = window
+            _ = title
             let center = NotificationCenter.default
             observers = [
                 center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
@@ -104,6 +108,9 @@ final class SettingsWindow {
     }
 
     private var observers: [NSObjectProtocol] = []
+    private lazy var title: AnyCancellable = model.$tab
+        .receive(on: RunLoop.main)
+        .sink { [weak self] tab in self?.window?.title = SettingsView.page(tab)?.title ?? "Settings" }
 
     /// Pauses the pet previews while the window is minimized or covered.
     private func syncGalleryActivity() {
@@ -113,39 +120,76 @@ final class SettingsWindow {
 }
 
 struct SettingsView: View {
+    struct Page {
+        let tag: String
+        let title: String
+        let symbol: String
+    }
+
+    static let pages = [
+        Page(tag: "general", title: "General", symbol: "gearshape"),
+        Page(tag: "integrations", title: "Integrations", symbol: "puzzlepiece.extension"),
+        Page(tag: "voice", title: "Voice", symbol: "mic"),
+        Page(tag: "meetings", title: "Meetings", symbol: "person.2.wave.2"),
+        Page(tag: "usage", title: "Usage", symbol: "chart.bar"),
+    ]
+    static let sidebarWidth: CGFloat = 180
+    /// The pages keep the width they had as tabs, beside the sidebar.
+    static let width: CGFloat = sidebarWidth + 1 + 540
+
+    static func page(_ tag: String) -> Page? { pages.first { $0.tag == tag } }
+
     @ObservedObject var model: SettingsModel
     @ObservedObject private var store = ConfigStore.shared
 
     var body: some View {
-        VStack(spacing: 0) {
-            TabView(selection: $model.tab) {
-                GeneralSettings(model: model).tabItem { Label("General", systemImage: "gearshape") }.tag("general")
-                AutomationsSettings(model: model).tabItem { Label("Automations", systemImage: "clock.badge.checkmark") }.tag("automations")
-                IntegrationsSettings(telegram: model.telegram).tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }.tag("integrations")
-                VoiceSettings(model: model).tabItem { Label("Voice", systemImage: "mic") }.tag("voice")
-                MeetingSettings(model: model).tabItem { Label("Meetings", systemImage: "person.2.wave.2") }.tag("meetings")
-                UsageSettings().tabItem { Label("Usage", systemImage: "chart.bar") }.tag("usage")
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            Divider().padding(.top, 8)
-            HStack {
-                if let error = store.error {
-                    Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                        .lineLimit(2)
+        HStack(spacing: 0) {
+            List(selection: Binding(get: { model.tab }, set: { if let tag = $0 { model.tab = tag } })) {
+                ForEach(Self.pages, id: \.tag) { page in
+                    Label(page.title, systemImage: page.symbol).tag(page.tag)
                 }
-                Spacer()
-                Button("Open config.json") {
-                    if !FileManager.default.fileExists(atPath: Config.file.path) { try? store.config.save() }
-                    NSWorkspace.shared.open(Config.file)
-                }
-                .help("Every setting here lives in ~/.ironpet/config.json; edits apply within a few seconds.")
             }
-            .padding(12)
+            .listStyle(.sidebar)
+            .frame(width: Self.sidebarWidth)
+            Divider()
+            VStack(spacing: 0) {
+                content
+                    .padding(.horizontal, 10)
+                    .padding(.top, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                Divider()
+                footer
+            }
         }
-        .frame(width: 520)
+        .frame(width: Self.width)
+    }
+
+    @ViewBuilder private var content: some View {
+        switch model.tab {
+        case "integrations": IntegrationsSettings(telegram: model.telegram)
+        case "voice": VoiceSettings(model: model)
+        case "meetings": MeetingSettings(model: model)
+        case "usage": UsageSettings()
+        default: GeneralSettings(model: model)
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            if let error = store.error {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+                    .lineLimit(2)
+            }
+            Spacer()
+            Button("Open config.json") {
+                if !FileManager.default.fileExists(atPath: Config.file.path) { try? store.config.save() }
+                NSWorkspace.shared.open(Config.file)
+            }
+            .help("Every setting here lives in ~/.ironpet/config.json; edits apply within a few seconds.")
+        }
+        .padding(12)
     }
 }
 

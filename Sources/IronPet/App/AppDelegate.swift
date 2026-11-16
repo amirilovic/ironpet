@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var bubblePanel: BubblePanel!
     private var server: EventServer?
     private var pet: PetController!
-    private var chatPanel: ChatPanel!
+    private let meetings = MeetingLibrary()
     private let meeting = MeetingController()
     private var meetingPanel: MeetingPanel!
     private var meetingBubbleHidden = false
@@ -47,11 +47,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             offset: { UserDefaults.standard.integer(forKey: "telegramOffset") },
             setOffset: { UserDefaults.standard.set($0, forKey: "telegramOffset") }),
         petName: { ConfigStore.shared.config.pet.name })
+    private lazy var settingsWindow = SettingsWindow(model: settingsModel)
     private lazy var settingsModel = SettingsModel(actions: .init(
         suspendHotKeys: { [weak self] suspended in suspended ? self?.unregisterHotKeys() : self?.registerHotKeys() },
         buildPet: { [weak self] description in self?.requestPet(description) }
     ), announcer: announcer, telegram: telegram)
-    private lazy var settingsWindow = SettingsWindow(model: settingsModel)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
@@ -89,27 +89,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.chatMood = { [weak self] in self?.chat.mood }
         pet.onChatToggle = { [weak self] in self?.toggleChat() }
         pet.onCapture = { [weak self] region in self?.captureScreen(region: region) }
+        pet.chat = chat
+        pet.meetings = meetings
+        pet.onAskMeeting = { [weak self] files in self?.openMeetingInChat(files) }
+        pet.meetingInProgress = { [weak self] in
+            guard let meeting = self?.meeting, [.recording, .finishing, .summarizing].contains(meeting.phase) else { return nil }
+            return meeting.folder
+        }
         pet.show()
 
-        chatPanel = ChatPanel(session: chat)
         wispr.onDictation = { [weak self] text in self?.chat.receiveDictation(text) }
-        chatPanel.onClose = { [weak self] in
-            self?.wispr.stop()
-            self?.chat.isVisible = false
-            self?.pet.refreshMood()
-            self?.restorePreviousApp()
-        }
+        pet.onChatShown = { [weak self] shown in self?.chatShown(shown) }
+        pet.onWindowClosed = { [weak self] in self?.restorePreviousApp() }
         meetingPanel = MeetingPanel(controller: meeting)
         meeting.onChange = { [weak self] in self?.syncMeetingPanel() }
         settingsModel.meeting = meeting
-        meeting.onLabelSpeakers = { [weak self] in
-            self?.settingsModel.tab = "meetings"
-            self?.settingsWindow.show()
-        }
+        meeting.onLabelSpeakers = { [weak self] in self?.showSettings(tab: "meetings") }
         announcer.bubbles.onDismissed = { [weak self] id in self?.meetingBubbleClosed(id) }
         pet.onRecordingClick = { [weak self] in self?.showMeetingBubble() }
         meeting.onSummaryReady = { [weak self] url in
             self?.announcer.meetingSummary(url)
+            self?.meetings.reload()
             self?.testControl?.recordMeetingNotified(url)
             if let text = try? String(contentsOf: url, encoding: .utf8) {
                 self?.suggestTasks(fromSummary: text, meeting: url.deletingLastPathComponent())
@@ -163,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.pet.tick()
                 self.bubblePanel.follow(self.pet.panel.frame)
-                self.bubblePanel.isSuppressed = self.chatPanel.isVisible || self.pet.isAgentsVisible
+                self.bubblePanel.isSuppressed = self.pet.suppressesBubbles
             }
         })
         timers.append(Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
@@ -197,6 +197,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
         pet.tasks = tasks
+        pet.settings = settingsModel
+        pet.onSettings = { [weak self] in self?.showSettings(tab: nil) }
         let service = AutomationService(store: store, engine: engine, database: database)
         service.notice = { [weak self] notice in self?.announcer.automation(notice) }
         service.dismissNotice = { [weak self] id in self?.announcer.bubbles.dismiss(id) }
@@ -214,7 +216,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chat.onAutomation = { [weak service] id, event in service?.chatOutcome(id, event) }
         automations = service
         settingsModel.automations = service
-        settingsModel.showLogs = { [weak self] id in self?.logWindow.show(automation: id) }
+        settingsModel.showLogs = { [weak self] id in
+            // The log is a normal window, so it would open behind the floating ironpet window.
+            self?.pet.closeWindow()
+            self?.logWindow.show(automation: id)
+        }
         service.logRetentionDays = { [config] in config.config.automations.logRetentionDays }
         service.autoFixEnabled = { [config] in config.config.automations.autoFix }
         service.autoApproveEnabled = { [config] in config.config.automations.autoApprove }
@@ -411,7 +417,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showSettings(_ sender: Any?) {
+        showSettings(tab: nil)
+    }
+
+    /// Opens the Settings window, on `tab` when given, else on the last tab shown.
+    private func showSettings(tab: String?) {
+        if let tab { settingsModel.tab = tab }
+        if !pet.isChatVisible { pet.closeWindow() }
         settingsWindow.show()
+    }
+
+    @objc private func showAutomationSettings(_ sender: Any?) {
+        pet.showWindow(.automations)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -442,9 +459,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let control = TestControl(chat: chat, actions: TestControl.Actions(
                 showChat: { [weak self] in self?.showChat() },
                 buildPet: { [weak self] description in self?.requestPet(description) },
-                chatWindowID: { [weak self] in self?.chatPanel.windowNumber ?? 0 },
+                chatWindowID: { [weak self] in self?.pet.windowNumber ?? 0 },
                 chatFrame: { [weak self] in
-                    guard let frame = self?.chatPanel.frame, let screen = NSScreen.screens.first else { return .zero }
+                    guard let frame = self?.pet.window.frame, let screen = NSScreen.screens.first else { return .zero }
                     return CGRect(x: frame.minX, y: screen.frame.height - frame.maxY, width: frame.width, height: frame.height)
                 },
                 openSession: { [weak self] id in self?.openSession(id) },
@@ -454,7 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         guard let view else { return [] }
                         return (view as? NSScrollView).map { [$0] } ?? [] + view.subviews.flatMap { find($0) }
                     }
-                    let scrolls = find(self?.chatPanel.contentView)
+                    let scrolls = find(self?.pet.window.contentView)
                     guard let scroll = scrolls.max(by: { ($0.documentView?.bounds.height ?? 0) < ($1.documentView?.bounds.height ?? 0) }), let doc = scroll.documentView else { return [String: Any]() }
                     let visible = scroll.contentView.bounds
                     if let fraction {
@@ -465,7 +482,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let now = scroll.contentView.bounds
                     let result: [String: Any] = ["top": now.minY, "bottomGap": doc.bounds.height - now.maxY, "content": doc.bounds.height, "viewport": now.height]
                     if let path {
-                        if let view = self?.chatPanel.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                        if let view = self?.pet.window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
                             view.cacheDisplay(in: view.bounds, to: rep)
                             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
                         }
@@ -473,10 +490,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return result
                 },
                 showSettings: { [weak self] tab, snapshot in
-                    self?.settingsWindow.show()
-                    if let tab { self?.settingsModel.tab = tab }
-                    if let snapshot { _ = self?.settingsWindow.snapshot(to: URL(fileURLWithPath: snapshot)) }
-                    return self?.settingsWindow.windowNumber ?? 0
+                    guard let self else { return 0 }
+                    // A section of the ironpet window, such as "automations", opens that window instead.
+                    if let section = tab.flatMap(IronPetSection.init(rawValue:)) {
+                        pet.showWindow(section)
+                        if let snapshot { _ = pet.snapshotWindow(to: URL(fileURLWithPath: snapshot)) }
+                        return pet.windowNumber
+                    }
+                    showSettings(tab: tab)
+                    if let snapshot { _ = settingsWindow.snapshot(to: URL(fileURLWithPath: snapshot)) }
+                    return settingsWindow.windowNumber
                 },
                 capture: { [weak self] region in self?.captureScreen(region: region) },
                 notificationAction: { [weak self] id, allow in self?.notifier.onApprovalAction?(id, allow) },
@@ -562,7 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func toggleChat() {
-        chatPanel.isVisible && chatPanel.isKeyWindow && NSApp.isActive ? chatPanel.close() : showChat()
+        pet.isChatVisible && pet.window.isKeyWindow && NSApp.isActive ? pet.closeWindow() : showChat()
     }
 
     /// Opening the chat never changes its session or folder. Only the user does, with New Chat, the folder picker,
@@ -570,19 +593,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showChat() {
         let front = NSWorkspace.shared.frontmostApplication
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
+        pet.showWindow(.chat)
+    }
+
+    /// The Chat section came on screen (the hotkey, a click on Ghost, the sidebar) or left it.
+    private func chatShown(_ shown: Bool) {
+        guard shown else {
+            wispr.stop()
+            chat.isVisible = false
+            pet.refreshMood()
+            return
+        }
         chat.prepareForShow()
         chat.isVisible = true
         wispr.start()
-        NSApp.activate()
-        chatPanel.show(near: pet.panel.frame)
         pet.refreshMood()
+        pet.window.focusInput()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let self else { return }
+            guard let self, pet.isChatVisible else { return }
             // Cooperative activation can be refused for a background app; force it so Wispr Flow
             // sees ironpet as the frontmost app.
             if !NSApp.isActive { NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps]) }
-            self.chatPanel.makeKeyAndOrderFront(nil)
-            self.chatPanel.focusInput()
+            pet.window.makeKeyAndOrderFront(nil)
+            pet.window.focusInput()
         }
     }
 
@@ -596,7 +629,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let front = NSWorkspace.shared.frontmostApplication
         let target = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? previousApp : front
-        if chatPanel.isVisible { chatPanel.orderOut(nil) }
+        if pet.isWindowVisible { pet.window.orderOut(nil) }
         Task { @MainActor in
             let shot = region ? await ScreenCapture.captureRegion() : await ScreenCapture.captureWindow(of: target)
             if let shot { chat.attach(shot) }
@@ -693,7 +726,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showTasks() {
-        pet.showAgents(tab: .tasks)
+        pet.showWindow(.tasks)
     }
 
     private func syncMeetingPanel() {
@@ -899,7 +932,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let logs = NSMenuItem(title: "Show logs…", action: #selector(showAutomationLogs), keyEquivalent: "")
         logs.target = self
         submenu.addItem(logs)
-        let more = NSMenuItem(title: "Edit automations…", action: #selector(showSettings(_:)), keyEquivalent: "")
+        let more = NSMenuItem(title: "Edit automations…", action: #selector(showAutomationSettings(_:)), keyEquivalent: "")
         more.target = self
         submenu.addItem(more)
         let item = NSMenuItem(title: "Automations", action: nil, keyEquivalent: "")
@@ -908,6 +941,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showAutomationLogs() {
+        pet.closeWindow()
         logWindow.show()
     }
 
@@ -956,7 +990,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let newChat = NSMenuItem(title: "New Chat", action: #selector(newChat(_:)), keyEquivalent: "n")
         newChat.target = self
         main.addItem(submenu("Chat", [newChat]))
-        // performClose(_:) beeps on the chat panel, which has no .closable style, so close the key window directly.
+        // performClose(_:) beeps on the ironpet window, which has no .closable style, so close the key window directly.
         let close = NSMenuItem(title: "Close", action: #selector(closeKeyWindow(_:)), keyEquivalent: "w")
         close.target = self
         main.addItem(submenu("Window", [close]))

@@ -11,7 +11,7 @@ final class TestControl {
         let showChat: () -> Void
         /// Sends the "build a new pet" request as the gallery tile does.
         let buildPet: (String) -> Void
-        /// The chat panel's frame in top-left screen coordinates, for `screencapture -R`.
+        /// The ironpet window's frame while it shows Chat, in top-left screen coordinates, for `screencapture -R`.
         let chatWindowID: () -> Int
         let chatFrame: () -> CGRect
         let openSession: (String) -> Void

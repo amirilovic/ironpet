@@ -35,13 +35,23 @@ enum PreviewRenderer {
         let signals = SignalStore()
         sampleSignals.forEach { signals.add($0, notify: false) }
         let tasks = sampleTasks()
-        func list(_ sessions: SessionStore, tasks: TaskStore, on tab: SessionListView.Tab? = nil) -> some View {
-            SessionListView(store: sessions, signals: signals, tasks: tasks, onJump: { _ in }, onAsk: { _ in }, onTrick: { _ in },
-                            onTellGhost: { _ in }, onOpenThread: { _ in }, onOpenSession: { _ in }, initialTab: tab).panel()
+        let chat = ChatSession(restore: false)
+        chat.loadPreview(.done)
+        let meetings = MeetingLibrary(root: sampleMeetings())
+        meetings.reload()
+        func list(_ sessions: SessionStore, tasks: TaskStore, on section: IronPetSection? = nil) -> some View {
+            let model = IronPetWindowModel()
+            model.section = section ?? IronPetSection.needingAttention(store: sessions, signals: signals, tasks: tasks)
+            return IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: chat,
+                                     meetings: meetings, actions: .none)
+                .frame(width: 780, height: 560).panel()
         }
+        render(list(sessions, tasks: tasks, on: .chat), to: dir, "window-chat")
+        render(list(sessions, tasks: tasks, on: .transcripts), to: dir, "transcripts")
         render(list(sessions, tasks: tasks), to: dir, "agents")
-        // The list opens on Alerts when no agent needs you or is working.
+        // The window opens on Alerts when no agent needs you or is working.
         render(list(SessionStore(), tasks: tasks), to: dir, "alerts")
+        render(list(sessions, tasks: tasks, on: .actions), to: dir, "actions")
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks")
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks-light", scheme: .light)
         let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
@@ -153,6 +163,25 @@ enum PreviewRenderer {
     }
 
     /// An in-memory list with one task in each state, created at made-up times.
+    /// Two made-up meetings in a temporary folder, for the Transcripts section.
+    private static func sampleMeetings() -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-meetings")
+        try? FileManager.default.removeItem(at: root)
+        let meetings = [
+            ("2026-11-16-0930", "# Summary\n\n- **Ship** the one-window layout on Friday; Settings stays its own window.\n",
+             "**You:** Shall we keep Settings separate?\n\n**Them:** Yes, it matches what Mac apps do.\n"),
+            ("2026-11-13-1400", "# Summary\n\n- Tasks get due dates next; reminders come from Automations.\n",
+             "**You:** What is after tasks?\n\n**Them:** Due dates.\n"),
+        ]
+        for (folder, summary, transcript) in meetings {
+            let url = root.appendingPathComponent(folder)
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            try? summary.write(to: url.appendingPathComponent("summary.md"), atomically: true, encoding: .utf8)
+            try? transcript.write(to: url.appendingPathComponent("transcript.md"), atomically: true, encoding: .utf8)
+        }
+        return root
+    }
+
     private static func sampleTasks() -> TaskStore {
         var clock = Date()
         let store = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database, now: { clock })
