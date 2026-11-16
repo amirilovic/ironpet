@@ -45,6 +45,11 @@ final class AutomationService {
     var nudge: ([PetMood]) -> Void = { _ in }
     /// Runs a `prompt` action in a background session. Returns the answer or an error text.
     var runPrompt: (_ automation: Automation, _ prompt: String) async -> Result<String, AutomationError> = { _, _ in .failure(.init(message: "no agent")) }
+    /// Puts a message into the chat the user is looking at, as a queued message that runs with the chat's tools. Returns
+    /// false when the chat took nothing. Without it (tests, no chat), a `prompt` action runs in the background.
+    var sendToChat: ((_ automationID: String, _ message: String) -> Bool)?
+    /// True while a message from this automation is queued or running in the chat.
+    var chatRunPending: (_ automationID: String) -> Bool = { _ in false }
     var runShell: (_ command: String, _ timeout: TimeInterval) async -> CommandResult = { command, timeout in
         await CommandRunner.run(shell: command, timeout: timeout, environment: CommandRunner.defaultEnvironment())
     }
@@ -251,6 +256,8 @@ final class AutomationService {
                 let result = await runShell(command, a.action.timeoutSeconds ?? 60)
                 finish(a, ok: result.ok, text: result.summary.isEmpty ? (result.ok ? "done" : "failed") : result.summary, fire: fire, truncated: result.truncated)
             }
+        case "prompt" where runsInChat(a):
+            deliverToChat(a, fire: fire, values: values)
         case "prompt":
             let prompt = AutomationTemplate.render(a.action.prompt ?? "", values: values)
             runInBackground(a) { [self] in
@@ -264,6 +271,53 @@ final class AutomationService {
                  body: AutomationTemplate.render(a.action.body ?? "", values: values), fire: fire, ok: true)
             record(a.id, "fired", AutomationTemplate.render(a.action.title ?? a.name, values: values))
             afterRun(a)
+        }
+    }
+
+    /// A prompt without poll item data runs in the user's chat, with the chat's agent, tools and memory. Item text comes
+    /// from outside (a web page, an issue title), so a prompt that uses it stays in the restricted background run.
+    func runsInChat(_ a: Automation) -> Bool {
+        guard sendToChat != nil, a.action.type == "prompt" else { return false }
+        return !Self.usesItemData(a.action.prompt ?? "")
+    }
+
+    static func usesItemData(_ prompt: String) -> Bool {
+        var rest = Substring(prompt)
+        while let open = rest.range(of: "{{") {
+            guard let close = rest.range(of: "}}", range: open.upperBound..<rest.endIndex) else { return false }
+            let key = rest[open.upperBound..<close.lowerBound].trimmingCharacters(in: .whitespaces)
+            if key == "item" || key.hasPrefix("item.") { return true }
+            rest = rest[close.upperBound...]
+        }
+        return false
+    }
+
+    /// The line the chat shows above the prompt, so the user can see where the message came from.
+    func chatHeader(_ a: Automation) -> String {
+        let when = a.trigger.type == "interval" ? "every \(String(format: "%g", a.trigger.minutes ?? 0)) min" : describe(a.trigger)
+        let name = a.name.components(separatedBy: .newlines).joined(separator: " ")
+        return "Automation \"\(name)\" (\(when)):"
+    }
+
+    private func deliverToChat(_ a: Automation, fire: AutomationEngine.Fire, values: [String: Any]) {
+        // One message per automation: a slow turn must not stack up behind its own schedule.
+        if chatRunPending(a.id) { return record(a.id, "skipped", "skipped: previous run still in the chat") }
+        let message = chatHeader(a) + "\n\n" + AutomationTemplate.render(a.action.prompt ?? "", values: values)
+        // Record before sending: the chat reports "running" synchronously, and that row must come after this one.
+        record(a.id, "sent", "sent to chat")
+        if sendToChat?(a.id, message) != true {
+            record(a.id, "failed", "the chat did not take the message")
+        }
+        afterRun(a)
+    }
+
+    /// How a turn that an automation sent ended. The answer stays in the chat, so only the outcome is recorded.
+    func chatOutcome(_ id: String, _ event: ChatSession.AutomationEvent) {
+        switch event {
+        case .started: record(id, "running", "running in the chat")
+        case .finished: record(id, "ok", "finished in the chat")
+        case .failed(let reason): record(id, "failed", "failed in the chat: \(reason)")
+        case .cancelled(let reason): record(id, "skipped", "not finished: \(reason)")
         }
     }
 

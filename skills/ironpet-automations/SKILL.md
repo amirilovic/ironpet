@@ -31,7 +31,7 @@ Use `once` with a full timestamp. Work out the user's time zone and today's date
 ## Actions (for every trigger except `script`)
 
 - `{"type":"bubble","title":"...","body":"..."}` shows a popup. `presentation` sets `mood`, `symbol` (an SF Symbol name), `buttons` (`["done","snooze"]`), `notification` (also a macOS notification) and `expiresSeconds`.
-- `{"type":"prompt","prompt":"..."}` asks an agent in a background session and shows the answer. It can only read.
+- `{"type":"prompt","prompt":"..."}` sends the prompt into the chat the user has open, under a header naming the automation. The chat's agent runs it with its full tools (including the `tasks_*` tools), memory and context, and the answer appears in the chat, not in a bubble. `agent` and `model` are ignored there. If the previous run is still queued or running when it fires again, that tick is skipped. This is how to build a recurring "loop": an `interval` automation with a `prompt` action, such as "check my open tasks and move one forward" every 10 minutes. A prompt that uses `{{item.*}}` is the exception, because poll items hold text from outside. It runs in a background session that can only read and shows the answer in a bubble.
 - `{"type":"shell","command":"..."}` runs a command and shows its output.
 
 Text can use `{{name}}`, `{{now}}` and, for `poll`, `{{item.field}}`.
@@ -74,7 +74,7 @@ Rules for the script:
 - Actions, in order, at most 20 per run:
   - `bubble`: a short-lived popup. Fields `title`, `body`, `severity` (`info`, `good`, `warn`, `bad`), `url` (adds an Open button), `symbol`, `expiresSeconds`, `id` (the same id replaces the old bubble).
   - `alert`: an open item in the alerts list. It also sets Ghost's mood and badge. Fields `id` (required), `title`, `subtitle`, `label`, `severity`, `url`, `ask` (the prompt for "Ask Ghost"), `version`. Send `{type:"alert", id, resolved:true}` when the thing is fixed.
-  - `prompt`: `prompt`, `title`, `agent`, `model`. Asks an agent and shows the answer.
+  - `prompt`: `prompt`, `title`, `agent`, `model`. Asks an agent in a background session that can only read, and shows the answer. Unlike a top-level `prompt` action, it does not run in the chat.
 - An alert is shown with a bubble when it is new or changed. If you list it again unchanged, nothing happens, even if the user dismissed it. The first run (state is null) adds alerts quietly. List every alert that is still true on every run, and resolve the ones that are not.
 - The script has `sh(command, {timeoutSeconds})`, which returns `{code, stdout, stderr, timedOut}`, and `console.log(...)`. At most 8 `sh` calls per run, 60 seconds and 32 MiB in all. There is no `fetch`, no files, no modules, no timers. For the network run `curl` through `sh`.
 - Quote anything you put in a shell command. Prefer fixed commands and read values from the JSON you got back.

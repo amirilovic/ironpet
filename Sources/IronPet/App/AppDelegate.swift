@@ -208,6 +208,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         service.nudge = { [weak self] moods in self?.pet.nudge(moods, each: moods == [.done] ? 3 : 4) }
         let workspace = store.paths.workspace
         service.runPrompt = { automation, prompt in await AutomationPrompt.run(automation, prompt: prompt, workspace: workspace) }
+        service.sendToChat = { [weak self] id, message in self?.chat.submitFromAutomation(message, automation: id) ?? false }
+        service.chatRunPending = { [weak self] id in self?.chat.hasAutomationRun(id) ?? false }
+        chat.onAutomation = { [weak service] id, event in service?.chatOutcome(id, event) }
         automations = service
         settingsModel.automations = service
         settingsModel.showLogs = { [weak self] id in self?.logWindow.show(automation: id) }

@@ -19,7 +19,7 @@ enum AutomationMCP {
             {"type":"alert","id","title","subtitle"?,"label"?,"severity"?:"warn|bad|good|info","url"?,"ask"?,"version"?,"resolved"?}: an open item in the alerts list. A new or changed one also gets a bubble (the first run is quiet). Listed again unchanged, it is left alone even if the user dismissed it. "resolved": true removes it.
             {"type":"prompt","prompt","title"?,"agent"?,"model"?}: asks an agent in a background session and shows the answer.
           It stops after 60 seconds or 32 MiB. No fetch, files, modules or timers.
-        For the other triggers, action.type is one of: bubble {"title","body"}, prompt {"prompt","agent"?,"model"?} (asks an agent in a background session and shows its answer), shell {"command","timeoutSeconds"?}.
+        For the other triggers, action.type is one of: bubble {"title","body"}, prompt {"prompt"} (sends the prompt into the user's open chat, where the chat's agent runs it with its full tools, memory and context; agent and model are ignored; with an interval trigger it is a recurring loop; a prompt that uses {{item.*}} instead runs in a read-only background session and shows the answer in a bubble), shell {"command","timeoutSeconds"?}.
         Text may use {{item.field}} (poll), {{name}} and {{now}}.
         presentation (optional): mood, symbol (SF Symbol), buttons (["done","snooze"]), notification (also a macOS notification).
         Shell commands, prompts, scripts and poll shell sources that an agent creates or changes wait for the user to press Approve in a bubble before they run. Never put secrets in an automation: use $ENV_VAR references.
