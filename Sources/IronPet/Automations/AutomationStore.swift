@@ -35,12 +35,20 @@ final class AutomationStore: ObservableObject {
     private var lastReported: String?
     private var timer: Timer?
 
-    init(paths: AutomationPaths = .standard, defaults: () -> [Automation], watch: Bool = true) {
+    /// `builtIns` are added when the list has no automation with that id, for a new file and an existing one. One that
+    /// is there stays as the user left it, including switched off.
+    init(paths: AutomationPaths = .standard, defaults: () -> [Automation], builtIns: [Automation] = [], watch: Bool = true) {
         self.paths = paths
         if FileManager.default.fileExists(atPath: paths.file.path) {
             reload(force: true)
+            // An invalid file keeps the list empty and is left alone.
+            if error == nil {
+                let missing = builtIns.filter { built in !automations.contains { $0.id == built.id } }
+                if !missing.isEmpty { try? replace(automations + missing) }
+            }
         } else {
-            automations = defaults()
+            let base = defaults()
+            automations = base + builtIns.filter { built in !base.contains { $0.id == built.id } }
             try? write(automations)
         }
         writeSchema()

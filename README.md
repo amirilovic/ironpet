@@ -110,6 +110,8 @@ See [SPEC.md](SPEC.md) for the full design and the decisions behind it, and [SEC
 
 Every reminder and watcher is an automation in `~/.ironpet/automations.json`. On the first launch with this version, the reminders in `config.json` become automations with the same values. GitHub and Sentry alerts are added only if you already had them on (`integrations.githubAlerts`, or a `~/.ironpet/sentry.json`), as script automations. A fresh install starts with the three reminders (`config.json` keeps `idleResetMinutes`, `snoozeMinutes` and `paused`). The file is checked and reloaded within two seconds. An invalid edit leaves the last good list running and shows a bubble that names the problem. `automations.schema.json` next to it describes every field.
 
+A built-in automation, `review-tasks` ("Review tasks"), is added to every install, new or existing. Every 10 minutes of wall clock time it sends `/ironpet-tasks` to your chat, so the agent reviews the task list. It does not run when no task is in backlog, in progress or needs you (the history shows `skipped: no open tasks`), and not while its previous message is still queued or running. When the agent answers exactly `ironpet-tasks: no changes`, the chat removes the prompt and the reply and the history shows `no changes`. Any other reply stays in the chat. Turn it off in Settings or set `"enabled": false`; ironpet keeps your choice and adds the automation again only if it is missing from the file.
+
 ```json
 {
   "automations": [
