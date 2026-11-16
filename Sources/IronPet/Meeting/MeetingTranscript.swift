@@ -16,6 +16,19 @@ struct MeetingLine: Equatable {
     var track: MeetingTrack
     var start: TimeInterval
     var text: String
+    /// Which voice of the meeting spoke, when speaker recognition ran on this line's chunk. Only "Them" lines have one.
+    var speakerId: Int?
+    /// What the line shows in place of "Them": a name, or "Speaker 2" until the user names that voice.
+    var speaker: String?
+
+    var label: String { speaker ?? track.rawValue }
+}
+
+/// Who spoke from `start` to `end`, in seconds from the start of the chunk.
+struct SpeakerTurn: Equatable {
+    var speakerId: Int
+    var start: TimeInterval
+    var end: TimeInterval
 }
 
 /// A stretch of audio that could not be transcribed.
@@ -29,12 +42,29 @@ struct MissedRange: Equatable {
 /// Turns the segments of both tracks into `transcript.md`.
 enum MeetingTranscript {
     /// Moves a chunk's segments to meeting time. `offset` is where the chunk starts in the meeting.
-    static func lines(from segments: [TimedSegment], track: MeetingTrack, offset: TimeInterval) -> [MeetingLine] {
+    static func lines(from segments: [TimedSegment], track: MeetingTrack, offset: TimeInterval,
+                      turns: [SpeakerTurn] = []) -> [MeetingLine] {
         segments.compactMap { segment in
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !isSilenceOnly(text) else { return nil }
-            return MeetingLine(track: track, start: offset + max(0, segment.start), text: text)
+            return MeetingLine(track: track, start: offset + max(0, segment.start), text: text,
+                               speakerId: track == .them ? speaker(for: segment, in: turns) : nil)
         }
+    }
+
+    /// The speaker whose turns cover at least half of the segment. Anything less stays "Them".
+    static func speaker(for segment: TimedSegment, in turns: [SpeakerTurn]) -> Int? {
+        let length = segment.end - segment.start
+        guard length > 0 else { return nil }
+        var overlap: [Int: TimeInterval] = [:]
+        for turn in turns {
+            let shared = min(segment.end, turn.end) - max(segment.start, turn.start)
+            if shared > 0 { overlap[turn.speakerId, default: 0] += shared }
+        }
+        // Ties go to the lower id, so the result does not depend on dictionary order.
+        guard let best = overlap.min(by: { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }),
+              best.value / length >= 0.5 else { return nil }
+        return best.key
     }
 
     /// Empty text, punctuation only, or the markers some models print for quiet audio, such as `[BLANK_AUDIO]`.
@@ -80,7 +110,7 @@ enum MeetingTranscript {
         for entry in entries {
             switch entry {
             case .line(let line):
-                out += "[\(clock(startedAt, plus: line.start, timeZone: timeZone))] \(line.track.rawValue): \(line.text)\n"
+                out += "[\(clock(startedAt, plus: line.start, timeZone: timeZone))] \(line.label): \(line.text)\n"
             case .missed(let range):
                 let text = "[\(clock(startedAt, plus: range.start, timeZone: timeZone))–"
                     + "\(clock(startedAt, plus: range.end, timeZone: timeZone))] (not transcribed: \(range.reason))"

@@ -52,6 +52,9 @@ struct Config: Codable, Equatable {
         var autoSummary = true
         /// Ghost offers to record when another app holds the microphone for a call. Only applies with `enabled` on.
         var offerToRecordCalls = true
+        /// Splits "Them" into individual speakers and recognises voices the user has named. Off by default because
+        /// voiceprints are biometric data. Turning it on downloads the models once.
+        var recogniseSpeakers = false
     }
 
     struct Reminders: Codable, Equatable {

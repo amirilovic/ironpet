@@ -52,6 +52,12 @@ if security find-generic-password -s ironpet.voice >/dev/null 2>&1; then
   ok "Deleted the voice transcription API key from the Keychain"
 fi
 
+if security find-generic-password -s ironpet.voiceprints >/dev/null 2>&1; then
+  while security delete-generic-password -s ironpet.voiceprints >/dev/null 2>&1; do :; done
+  rm -rf "$HOME/Library/Application Support/IronPet"
+  ok "Deleted the stored voiceprints and their Keychain key"
+fi
+
 defaults delete dev.ironpet.app >/dev/null 2>&1 && ok "Deleted preferences" || true
 rm -rf "$HOME/.ironpet/bin" "$HOME/.ironpet/port"
 

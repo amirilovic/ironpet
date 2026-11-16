@@ -191,7 +191,7 @@ struct MeetingView: View {
         } else {
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(Array(recent.enumerated()), id: \.offset) { _, line in
-                    (Text(line.track.rawValue + ": ").fontWeight(.medium).foregroundColor(line.track == .me ? .accentColor : .secondary)
+                    (Text(line.label + ": ").fontWeight(.medium).foregroundColor(line.track == .me ? .accentColor : .secondary)
                         + Text(line.text))
                         .font(.system(size: 11))
                         .lineLimit(2)
@@ -245,6 +245,7 @@ struct MeetingView: View {
                 EmptyView()
             }
             lines
+            SpeakerPrompt(controller: controller)
             HStack(spacing: 8) {
                 Button("Open transcript") { controller.openTranscript() }
                 if case .ready = controller.summary { Button("Open summary") { controller.openSummary() } }
