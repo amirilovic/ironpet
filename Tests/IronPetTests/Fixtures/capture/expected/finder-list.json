@@ -1,0 +1,15 @@
+{
+  "app": {
+    "bundle_id": "com.apple.finder",
+    "name": "Finder",
+    "pid": 0
+  },
+  "content": {
+    "kind": "page",
+    "text": "Package.swift 3 KB\nREADME.md 12 KB\nFavorites\nFolder controls",
+    "title": ""
+  },
+  "parser": "finder/v1",
+  "thread_key": "finder:/sample-root/project",
+  "thread_title": "project"
+}

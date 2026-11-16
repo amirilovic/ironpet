@@ -1,0 +1,21 @@
+{
+  "phase": 4,
+  "content": {
+    "kind": "conversation",
+    "title": "Contact Quill",
+    "messages": [
+      {
+        "author": "Contact Quill",
+        "text": "synthetic inbound note",
+        "sent_at": "16:02",
+        "is_me": false
+      },
+      {
+        "author": "You",
+        "text": "synthetic outbound note",
+        "sent_at": "16:04",
+        "is_me": true
+      }
+    ]
+  }
+}

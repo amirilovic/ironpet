@@ -1,0 +1,16 @@
+{
+  "app": {
+    "bundle_id": "com.apple.Notes",
+    "name": "Notes",
+    "pid": 0
+  },
+  "content": {
+    "kind": "document",
+    "text": "milk\noats",
+    "title": "Grocery list"
+  },
+  "parser": "notes/v1",
+  "thread_key": "notes:grocery-list",
+  "thread_title": "Grocery list",
+  "window_title": "Grocery list"
+}

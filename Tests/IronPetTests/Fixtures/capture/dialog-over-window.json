@@ -1,0 +1,142 @@
+{
+  "app": {
+    "bundle_id": "fixture.unknown",
+    "name": "Unknown",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "Cloudflare WARP",
+    "frame": {
+      "x": 200.0,
+      "y": 150.0,
+      "width": 900.0,
+      "height": 650.0
+    },
+    "children": [
+      {
+        "role": "Group",
+        "frame": {
+          "x": 200.0,
+          "y": 150.0,
+          "width": 900.0,
+          "height": 650.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Main body line one",
+            "frame": {
+              "x": 220.0,
+              "y": 200.0,
+              "width": 400.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Main body line two",
+            "frame": {
+              "x": 220.0,
+              "y": 220.0,
+              "width": 400.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Main body line three",
+            "frame": {
+              "x": 220.0,
+              "y": 240.0,
+              "width": 400.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Main body line four",
+            "frame": {
+              "x": 220.0,
+              "y": 260.0,
+              "width": 400.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Main body line five",
+            "frame": {
+              "x": 220.0,
+              "y": 280.0,
+              "width": 400.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Main body line six",
+            "frame": {
+              "x": 220.0,
+              "y": 300.0,
+              "width": 400.0,
+              "height": 16.0
+            }
+          }
+        ]
+      },
+      {
+        "role": "Sheet",
+        "frame": {
+          "x": 450.0,
+          "y": 300.0,
+          "width": 400.0,
+          "height": 200.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Quit Cloudflare WARP?",
+            "frame": {
+              "x": 470.0,
+              "y": 330.0,
+              "width": 360.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Open tunnels will disconnect.",
+            "frame": {
+              "x": 470.0,
+              "y": 354.0,
+              "width": 360.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "Button",
+            "name": "Quit",
+            "frame": {
+              "x": 470.0,
+              "y": 420.0,
+              "width": 80.0,
+              "height": 24.0
+            }
+          },
+          {
+            "role": "Button",
+            "name": "Cancel",
+            "frame": {
+              "x": 560.0,
+              "y": 420.0,
+              "width": 80.0,
+              "height": 24.0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

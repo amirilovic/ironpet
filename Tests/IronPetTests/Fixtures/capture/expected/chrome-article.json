@@ -1,0 +1,17 @@
+{
+  "app": {
+    "bundle_id": "com.google.Chrome",
+    "name": "Google Chrome",
+    "pid": 0
+  },
+  "content": {
+    "kind": "page",
+    "text": "Architecture of SQLite\nThis document describes the architecture.",
+    "title": ""
+  },
+  "parser": "generic/v1",
+  "thread_key": "web:https://docs.invalid/architecture",
+  "thread_title": "How SQLite Works",
+  "url": "https://docs.invalid/architecture",
+  "window_title": "How SQLite Works"
+}

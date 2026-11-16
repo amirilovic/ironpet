@@ -1,0 +1,37 @@
+{
+  "account": "Acme",
+  "app": {
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "name": "Slack",
+    "pid": 0
+  },
+  "content": {
+    "is_group": true,
+    "kind": "conversation",
+    "messages": [
+      {
+        "author": "Arin",
+        "is_me": false,
+        "sent_at": "09:12 AM",
+        "text": "cache warmup finished"
+      },
+      {
+        "author": "Bela",
+        "is_me": false,
+        "sent_at": "09:14 AM",
+        "text": "queue is clear"
+      },
+      {
+        "author": "You",
+        "draft": true,
+        "is_me": true,
+        "text": "I will verify the report"
+      }
+    ],
+    "title": "general"
+  },
+  "parser": "slack/v1",
+  "thread_key": "slack:acme/general",
+  "thread_title": "general",
+  "window_title": "#general - Acme - Slack"
+}

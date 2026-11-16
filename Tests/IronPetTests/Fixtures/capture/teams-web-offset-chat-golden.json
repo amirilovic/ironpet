@@ -1,0 +1,19 @@
+{
+  "phase": 1,
+  "content": {
+    "kind": "conversation",
+    "title": "Release review",
+    "messages": [
+      {
+        "text": "Rin Vale, 04:40 PM, deploy handoff confirmed",
+        "is_me": false
+      },
+      {
+        "author": "You",
+        "text": "I will join after the handoff.",
+        "is_me": true,
+        "draft": true
+      }
+    ]
+  }
+}

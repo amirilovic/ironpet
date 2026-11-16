@@ -1,0 +1,213 @@
+{
+  "app": {
+    "bundle_id": "com.google.Chrome",
+    "name": "Google Chrome",
+    "pid": 0
+  },
+  "url": "https://www.linkedin.com/messaging/",
+  "root": {
+    "role": "Window",
+    "name": "Messaging | LinkedIn",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1440.0,
+      "height": 900.0
+    },
+    "children": [
+      {
+        "role": "Image",
+        "attrs": {
+          "dom_classes": "global-nav__me-photo",
+          "label": "Photo of Devin Shore"
+        },
+        "frame": {
+          "x": 1200.0,
+          "y": 10.0,
+          "width": 24.0,
+          "height": 24.0
+        }
+      },
+      {
+        "role": "StaticText",
+        "value": "Morgan Vale",
+        "attrs": {
+          "dom_classes": "msg-entity-lockup__entity-title"
+        },
+        "frame": {
+          "x": 400.0,
+          "y": 60.0,
+          "width": 300.0,
+          "height": 16.0
+        }
+      },
+      {
+        "role": "Group",
+        "attrs": {
+          "dom_classes": "msg-s-message-list__event"
+        },
+        "frame": {
+          "x": 400.0,
+          "y": 100.0,
+          "width": 500.0,
+          "height": 60.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Morgan Vale",
+            "attrs": {
+              "dom_classes": "msg-s-message-group__name"
+            },
+            "frame": {
+              "x": 400.0,
+              "y": 100.0,
+              "width": 150.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "08:17 AM",
+            "attrs": {
+              "dom_classes": "msg-s-message-group__timestamp"
+            },
+            "frame": {
+              "x": 600.0,
+              "y": 100.0,
+              "width": 80.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "Group",
+            "attrs": {
+              "dom_classes": "msg-s-event-listitem__body"
+            },
+            "frame": {
+              "x": 400.0,
+              "y": 120.0,
+              "width": 400.0,
+              "height": 18.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "The cache sample is ready.",
+                "frame": {
+                  "x": 400.0,
+                  "y": 120.0,
+                  "width": 300.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "Group",
+        "attrs": {
+          "dom_classes": "msg-s-message-list__event"
+        },
+        "frame": {
+          "x": 400.0,
+          "y": 160.0,
+          "width": 500.0,
+          "height": 60.0
+        },
+        "children": [
+          {
+            "role": "Group",
+            "attrs": {
+              "dom_classes": "msg-s-event-listitem__body"
+            },
+            "frame": {
+              "x": 400.0,
+              "y": 180.0,
+              "width": 400.0,
+              "height": 18.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "The dashboard is stable.",
+                "frame": {
+                  "x": 400.0,
+                  "y": 180.0,
+                  "width": 300.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "Group",
+        "attrs": {
+          "dom_classes": "msg-s-message-list__event"
+        },
+        "frame": {
+          "x": 400.0,
+          "y": 220.0,
+          "width": 500.0,
+          "height": 60.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Devin Shore",
+            "attrs": {
+              "dom_classes": "msg-s-message-group__name"
+            },
+            "frame": {
+              "x": 400.0,
+              "y": 220.0,
+              "width": 150.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "08:22 AM",
+            "attrs": {
+              "dom_classes": "msg-s-message-group__timestamp"
+            },
+            "frame": {
+              "x": 600.0,
+              "y": 220.0,
+              "width": 80.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "Group",
+            "attrs": {
+              "dom_classes": "msg-s-event-listitem__body"
+            },
+            "frame": {
+              "x": 400.0,
+              "y": 240.0,
+              "width": 400.0,
+              "height": 18.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "I will review the cutover.",
+                "frame": {
+                  "x": 400.0,
+                  "y": 240.0,
+                  "width": 300.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

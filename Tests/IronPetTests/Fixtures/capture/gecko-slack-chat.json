@@ -1,0 +1,125 @@
+{
+  "app": {
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "name": "Slack",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "general - Workspace",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1200.0,
+      "height": 800.0
+    },
+    "children": [
+      {
+        "role": "Toolbar",
+        "frame": {
+          "x": 0.0,
+          "y": 0.0,
+          "width": 1200.0,
+          "height": 40.0
+        },
+        "children": [
+          {
+            "role": "ComboBox",
+            "name": "Address and search",
+            "value": "app.slack.com/fixture/workspace-alpha/channel-general/thread-placeholder?source=fixture",
+            "frame": {
+              "x": 200.0,
+              "y": 5.0,
+              "width": 600.0,
+              "height": 30.0
+            }
+          }
+        ]
+      },
+      {
+        "role": "WebArea",
+        "name": "general - Workspace",
+        "attrs": {
+          "url": "https://app.slack.com/fixture/workspace-alpha/channel-general/thread-placeholder?source=fixture"
+        },
+        "frame": {
+          "x": 0.0,
+          "y": 40.0,
+          "width": 1200.0,
+          "height": 760.0
+        },
+        "children": [
+          {
+            "role": "Row",
+            "attrs": {
+              "identifier": "message-1"
+            },
+            "frame": {
+              "x": 260.0,
+              "y": 100.0,
+              "width": 800.0,
+              "height": 50.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Alex",
+                "frame": {
+                  "x": 270.0,
+                  "y": 105.0,
+                  "width": 100.0,
+                  "height": 20.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "Morning update",
+                "frame": {
+                  "x": 380.0,
+                  "y": 105.0,
+                  "width": 300.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Row",
+            "attrs": {
+              "identifier": "message-2"
+            },
+            "frame": {
+              "x": 260.0,
+              "y": 170.0,
+              "width": 800.0,
+              "height": 50.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Sam",
+                "frame": {
+                  "x": 270.0,
+                  "y": 175.0,
+                  "width": 100.0,
+                  "height": 20.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "Reviewing the browser parser",
+                "frame": {
+                  "x": 380.0,
+                  "y": 175.0,
+                  "width": 400.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

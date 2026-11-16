@@ -1,0 +1,147 @@
+{
+  "app": {
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "name": "Slack",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "general - Acme - Slack",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1200.0,
+      "height": 800.0
+    },
+    "children": [
+      {
+        "role": "Group",
+        "name": "sidebar",
+        "frame": {
+          "x": 0.0,
+          "y": 0.0,
+          "width": 220.0,
+          "height": 800.0
+        },
+        "children": [
+          {
+            "role": "StaticText",
+            "value": "Home",
+            "frame": {
+              "x": 10.0,
+              "y": 20.0,
+              "width": 100.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "general",
+            "frame": {
+              "x": 10.0,
+              "y": 60.0,
+              "width": 100.0,
+              "height": 16.0
+            }
+          },
+          {
+            "role": "Row",
+            "frame": {
+              "x": 10.0,
+              "y": 90.0,
+              "width": 200.0,
+              "height": 24.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "random-channel",
+                "frame": {
+                  "x": 10.0,
+                  "y": 90.0,
+                  "width": 180.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "Group",
+        "name": "messages",
+        "frame": {
+          "x": 220.0,
+          "y": 0.0,
+          "width": 980.0,
+          "height": 800.0
+        },
+        "children": [
+          {
+            "role": "Row",
+            "frame": {
+              "x": 240.0,
+              "y": 100.0,
+              "width": 900.0,
+              "height": 40.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Alice",
+                "frame": {
+                  "x": 240.0,
+                  "y": 100.0,
+                  "width": 80.0,
+                  "height": 16.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "shipped the build",
+                "frame": {
+                  "x": 240.0,
+                  "y": 118.0,
+                  "width": 300.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Row",
+            "frame": {
+              "x": 240.0,
+              "y": 160.0,
+              "width": 900.0,
+              "height": 40.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Bob",
+                "frame": {
+                  "x": 240.0,
+                  "y": 160.0,
+                  "width": 80.0,
+                  "height": 16.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "deploy looks green",
+                "frame": {
+                  "x": 240.0,
+                  "y": 178.0,
+                  "width": 300.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

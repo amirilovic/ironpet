@@ -1,0 +1,147 @@
+{
+  "app": {
+    "bundle_id": "com.tinyspeck.slackmacgap",
+    "name": "Slack",
+    "pid": 0
+  },
+  "window_title": "#general - Acme - Slack",
+  "root": {
+    "role": "Window",
+    "frame": {
+      "x": 1440.0,
+      "y": 220.0,
+      "width": 1200.0,
+      "height": 800.0
+    },
+    "children": [
+      {
+        "role": "Group",
+        "attrs": {
+          "dom_classes": "c-message_list"
+        },
+        "frame": {
+          "x": 1700.0,
+          "y": 220.0,
+          "width": 900.0,
+          "height": 700.0
+        },
+        "children": [
+          {
+            "role": "Group",
+            "attrs": {
+              "dom_classes": "c-virtual_list__item"
+            },
+            "frame": {
+              "x": 1700.0,
+              "y": 320.0,
+              "width": 900.0,
+              "height": 40.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Arin",
+                "attrs": {
+                  "dom_classes": "c-message__sender"
+                },
+                "frame": {
+                  "x": 1700.0,
+                  "y": 320.0,
+                  "width": 120.0,
+                  "height": 16.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "09:12 AM",
+                "attrs": {
+                  "dom_classes": "c-timestamp"
+                },
+                "frame": {
+                  "x": 2140.0,
+                  "y": 320.0,
+                  "width": 100.0,
+                  "height": 16.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "cache warmup finished",
+                "frame": {
+                  "x": 1700.0,
+                  "y": 338.0,
+                  "width": 300.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Group",
+            "attrs": {
+              "dom_classes": "c-virtual_list__item"
+            },
+            "frame": {
+              "x": 1700.0,
+              "y": 380.0,
+              "width": 900.0,
+              "height": 40.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Bela",
+                "attrs": {
+                  "dom_classes": "c-message__sender"
+                },
+                "frame": {
+                  "x": 1700.0,
+                  "y": 380.0,
+                  "width": 120.0,
+                  "height": 16.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "09:14 AM",
+                "attrs": {
+                  "dom_classes": "c-timestamp"
+                },
+                "frame": {
+                  "x": 2140.0,
+                  "y": 380.0,
+                  "width": 100.0,
+                  "height": 16.0
+                }
+              },
+              {
+                "role": "StaticText",
+                "value": "queue is clear",
+                "frame": {
+                  "x": 1700.0,
+                  "y": 398.0,
+                  "width": 300.0,
+                  "height": 16.0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "TextArea",
+        "value": "I will verify the report",
+        "attrs": {
+          "dom_classes": "ql-editor"
+        },
+        "frame": {
+          "x": 1700.0,
+          "y": 860.0,
+          "width": 900.0,
+          "height": 60.0
+        }
+      }
+    ]
+  },
+  "captured_at": 0
+}

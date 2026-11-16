@@ -17,6 +17,10 @@ final class SettingsModel: ObservableObject {
     var automations: AutomationService?
     /// The meeting controller, for labelling the voices of the last meeting.
     var meeting: MeetingController?
+    /// Screen capture, built with the database. Nil only before the app has started.
+    var capture: CaptureService?
+    /// Opens the window that lists what screen capture stored.
+    var showCaptures: () -> Void = {}
     /// Opens the execution log window, for one automation or all of them.
     var showLogs: (String?) -> Void = { _ in }
     /// Sends what the user wants to the chat, for the agent to create the automation.
@@ -135,6 +139,7 @@ struct SettingsView: View {
         Page(tag: "voice", title: "Voice", symbol: "mic"),
         Page(tag: "meetings", title: "Meetings", symbol: "person.2.wave.2"),
         Page(tag: "usage", title: "Usage", symbol: "chart.bar"),
+        Page(tag: "screen", title: "Screen", symbol: "rectangle.dashed.badge.record"),
     ]
     static let sidebarWidth: CGFloat = 180
     /// The pages keep the width they had as tabs, beside the sidebar.
@@ -176,6 +181,7 @@ struct SettingsView: View {
         case "voice": VoiceSettings(model: model)
         case "meetings": MeetingSettings(model: model)
         case "usage": UsageSettings()
+        case "screen": ScreenSettings(model: model)
         default: GeneralSettings(model: model)
         }
     }

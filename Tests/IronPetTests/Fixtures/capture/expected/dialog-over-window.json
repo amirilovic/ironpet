@@ -1,0 +1,15 @@
+{
+  "app": {
+    "bundle_id": "fixture.unknown",
+    "name": "Unknown",
+    "pid": 0
+  },
+  "content": {
+    "kind": "page",
+    "text": "Main body line one\nMain body line two\nMain body line three\nMain body line four\nMain body line five\nMain body line six\nQuit Cloudflare WARP?\nOpen tunnels will disconnect.\nQuit\nCancel",
+    "title": ""
+  },
+  "parser": "generic/v1",
+  "thread_key": "app:fixture.unknown",
+  "thread_title": "Unknown"
+}

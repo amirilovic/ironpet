@@ -1,0 +1,97 @@
+{
+  "app": {
+    "bundle_id": "com.apple.MobileSMS",
+    "name": "Messages",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "Priya Vantar",
+    "frame": {
+      "x": 1440.0,
+      "y": 220.0,
+      "width": 900.0,
+      "height": 700.0
+    },
+    "children": [
+      {
+        "role": "List",
+        "attrs": {
+          "identifier": "message-list"
+        },
+        "frame": {
+          "x": 1460.0,
+          "y": 300.0,
+          "width": 860.0,
+          "height": 560.0
+        },
+        "children": [
+          {
+            "role": "Row",
+            "frame": {
+              "x": 1480.0,
+              "y": 320.0,
+              "width": 300.0,
+              "height": 40.0
+            },
+            "children": [
+              {
+                "role": "TextArea",
+                "value": "review has begun",
+                "frame": {
+                  "x": 1480.0,
+                  "y": 320.0,
+                  "width": 300.0,
+                  "height": 40.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Row",
+            "frame": {
+              "x": 1980.0,
+              "y": 380.0,
+              "width": 300.0,
+              "height": 40.0
+            },
+            "children": [
+              {
+                "role": "TextArea",
+                "value": "noted, I will verify",
+                "frame": {
+                  "x": 1980.0,
+                  "y": 380.0,
+                  "width": 300.0,
+                  "height": 40.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Row",
+            "frame": {
+              "x": 2140.0,
+              "y": 425.0,
+              "width": 100.0,
+              "height": 14.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Delivered",
+                "frame": {
+                  "x": 2140.0,
+                  "y": 425.0,
+                  "width": 100.0,
+                  "height": 14.0
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

@@ -1,0 +1,32 @@
+{
+  "account": "Acme",
+  "app": {
+    "bundle_id": "com.google.Chrome",
+    "name": "Google Chrome",
+    "pid": 0
+  },
+  "content": {
+    "is_group": true,
+    "kind": "conversation",
+    "messages": [
+      {
+        "author": "Nori",
+        "is_me": false,
+        "sent_at": "09:41 AM",
+        "text": "report queue cleared"
+      },
+      {
+        "author": "Kai",
+        "is_me": false,
+        "sent_at": "09:43 AM",
+        "text": "handoff is ready"
+      }
+    ],
+    "title": "operations"
+  },
+  "parser": "slack/v1",
+  "thread_key": "slack:acme/general",
+  "thread_title": "operations",
+  "url": "https://app.slack.com/client/T01/C02",
+  "window_title": "general - Acme - Slack"
+}

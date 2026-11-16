@@ -1,0 +1,17 @@
+{
+  "app": {
+    "bundle_id": "com.google.Chrome",
+    "name": "Google Chrome",
+    "pid": 0
+  },
+  "content": {
+    "kind": "page",
+    "text": "Architecture overview\nThis guide explains the component layout.\nIt keeps content readable.\nContents\nDocs",
+    "title": ""
+  },
+  "parser": "generic/v1",
+  "thread_key": "web:https://example.com/docs/architecture",
+  "thread_title": "Architecture",
+  "url": "https://example.com/docs/architecture",
+  "window_title": "Architecture"
+}

@@ -1,0 +1,139 @@
+{
+  "app": {
+    "bundle_id": "com.apple.MobileSMS",
+    "name": "Messages",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "Priya Vantar",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 900.0,
+      "height": 700.0
+    },
+    "children": [
+      {
+        "role": "StaticText",
+        "value": "Search conversations",
+        "frame": {
+          "x": 20.0,
+          "y": 20.0,
+          "width": 160.0,
+          "height": 20.0
+        }
+      },
+      {
+        "role": "Outline",
+        "frame": {
+          "x": 0.0,
+          "y": 60.0,
+          "width": 220.0,
+          "height": 640.0
+        },
+        "children": [
+          {
+            "role": "Row",
+            "frame": {
+              "x": 20.0,
+              "y": 100.0,
+              "width": 180.0,
+              "height": 20.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Sidebar contact",
+                "frame": {
+                  "x": 20.0,
+                  "y": 100.0,
+                  "width": 160.0,
+                  "height": 20.0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "List",
+        "attrs": {
+          "identifier": "message-list"
+        },
+        "frame": {
+          "x": 240.0,
+          "y": 80.0,
+          "width": 640.0,
+          "height": 560.0
+        },
+        "children": [
+          {
+            "role": "Row",
+            "frame": {
+              "x": 40.0,
+              "y": 100.0,
+              "width": 300.0,
+              "height": 40.0
+            },
+            "children": [
+              {
+                "role": "TextArea",
+                "value": "review has begun",
+                "frame": {
+                  "x": 40.0,
+                  "y": 100.0,
+                  "width": 300.0,
+                  "height": 40.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Row",
+            "frame": {
+              "x": 540.0,
+              "y": 160.0,
+              "width": 300.0,
+              "height": 40.0
+            },
+            "children": [
+              {
+                "role": "TextArea",
+                "value": "noted, I will verify",
+                "frame": {
+                  "x": 540.0,
+                  "y": 160.0,
+                  "width": 300.0,
+                  "height": 40.0
+                }
+              }
+            ]
+          },
+          {
+            "role": "Row",
+            "frame": {
+              "x": 700.0,
+              "y": 205.0,
+              "width": 100.0,
+              "height": 14.0
+            },
+            "children": [
+              {
+                "role": "StaticText",
+                "value": "Delivered",
+                "frame": {
+                  "x": 700.0,
+                  "y": 205.0,
+                  "width": 100.0,
+                  "height": 14.0
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}

@@ -1,0 +1,15 @@
+{
+  "app": {
+    "bundle_id": "com.apple.finder",
+    "name": "Finder",
+    "pid": 0
+  },
+  "content": {
+    "kind": "page",
+    "text": "Archive.zip 3 KB\nGuide.md 12 KB\nDownloads\nUploading 34 items",
+    "title": ""
+  },
+  "parser": "finder/v1",
+  "thread_key": "finder:/sample-root/project",
+  "thread_title": "project"
+}

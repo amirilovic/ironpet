@@ -1,0 +1,99 @@
+{
+  "app": {
+    "bundle_id": "com.apple.reminders",
+    "name": "Reminders",
+    "pid": 0
+  },
+  "root": {
+    "role": "Window",
+    "name": "Reminders",
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1100.0,
+      "height": 760.0
+    },
+    "children": [
+      {
+        "role": "Group",
+        "attrs": {
+          "identifier": "reminder-detail"
+        },
+        "frame": {
+          "x": 350.0,
+          "y": 80.0,
+          "width": 600.0,
+          "height": 560.0
+        },
+        "children": [
+          {
+            "role": "Heading",
+            "value": "Submit project notes",
+            "attrs": {
+              "identifier": "task-title"
+            },
+            "frame": {
+              "x": 390.0,
+              "y": 120.0,
+              "width": 350.0,
+              "height": 30.0
+            }
+          },
+          {
+            "role": "CheckBox",
+            "value": "0",
+            "attrs": {
+              "identifier": "completed-checkbox"
+            },
+            "frame": {
+              "x": 360.0,
+              "y": 125.0,
+              "width": 20.0,
+              "height": 20.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Work",
+            "attrs": {
+              "identifier": "list-name"
+            },
+            "frame": {
+              "x": 390.0,
+              "y": 180.0,
+              "width": 180.0,
+              "height": 20.0
+            }
+          },
+          {
+            "role": "StaticText",
+            "value": "Tomorrow, 5:00 PM",
+            "attrs": {
+              "identifier": "due-date"
+            },
+            "frame": {
+              "x": 390.0,
+              "y": 220.0,
+              "width": 250.0,
+              "height": 20.0
+            }
+          },
+          {
+            "role": "TextArea",
+            "value": "Attach the final screenshots.",
+            "attrs": {
+              "identifier": "task-notes"
+            },
+            "frame": {
+              "x": 390.0,
+              "y": 270.0,
+              "width": 400.0,
+              "height": 100.0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "captured_at": 0
+}
