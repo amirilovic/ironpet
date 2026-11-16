@@ -10,14 +10,25 @@ struct ACPToolCall {
     var paths: [String]
     /// The agent's own tool name when it gives one (the Claude adapter sends `_meta.claudeCode.toolName`).
     var toolName: String?
+    /// The tool call of the subagent this call runs under. The Claude adapter stamps `_meta.claudeCode.parentToolUseId`
+    /// on every update that comes from a subagent, including a background one. Nil for the main agent's own calls.
+    var parentToolUseID: String?
 
-    init(id: String = "", title: String = "", kind: String = "other", rawInput: Any? = nil, paths: [String] = [], toolName: String? = nil) {
+    init(id: String = "", title: String = "", kind: String = "other", rawInput: Any? = nil, paths: [String] = [], toolName: String? = nil,
+         parentToolUseID: String? = nil) {
         self.id = id
         self.title = title
         self.kind = kind
         self.rawInput = rawInput
         self.paths = paths
         self.toolName = toolName
+        self.parentToolUseID = parentToolUseID
+    }
+
+    /// The parent tool-use id an update's `_meta` names, if it comes from a subagent.
+    static func parentID(in update: JSON) -> String? {
+        let id = (((update["_meta"] as? JSON)?["claudeCode"] as? JSON)?["parentToolUseId"]) as? String
+        return id?.isEmpty == false ? id : nil
     }
 
     init(json: JSON) {
@@ -36,6 +47,7 @@ struct ACPToolCall {
             if !found.isEmpty { paths = found }
         }
         if let name = ((json["_meta"] as? JSON)?["claudeCode"] as? JSON)?["toolName"] as? String { toolName = name }
+        if let parent = Self.parentID(in: json) { parentToolUseID = parent }
     }
 
     var input: JSON { rawInput as? JSON ?? [:] }

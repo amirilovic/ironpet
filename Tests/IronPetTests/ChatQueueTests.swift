@@ -56,6 +56,54 @@ final class ChatQueueTests: XCTestCase {
         XCTAssertTrue(session.queue.isEmpty)
     }
 
+    private var itemKinds: [String] {
+        session.items.map {
+            switch $0.kind {
+            case .assistant(let text): "assistant:\(text)"
+            case .tool(let summary, _): "tool:\(summary)"
+            default: "other"
+            }
+        }
+    }
+
+    func testSubagentToolCallsDoNotSplitTheReply() async {
+        await type("go")
+        deliver[0](.assistant("an offer to start "))
+        deliver[0](.toolStarted(id: "agent", summary: "Research"))
+        deliver[0](.assistant("then "))
+        deliver[0](.subagentTool(parent: "agent", id: "s1", summary: "Ran `ls`", ok: nil))
+        deliver[0](.assistant("recording."))
+        deliver[0](.subagentTool(parent: "agent", id: "s1", summary: "Ran `ls`", ok: true))
+        XCTAssertEqual(itemKinds.dropFirst(), ["assistant:an offer to start ", "tool:Research · 1 tool call", "assistant:then recording."])
+    }
+
+    func testSubagentCallBetweenTextChunksKeepsOneMessage() async {
+        await type("go")
+        deliver[0](.toolStarted(id: "agent", summary: "Research"))
+        deliver[0](.assistant("an offer to start "))
+        deliver[0](.subagentTool(parent: "agent", id: "s1", summary: "Ran `ls`", ok: nil))
+        deliver[0](.assistant("recording."))
+        XCTAssertEqual(assistantTexts, ["an offer to start recording."])
+    }
+
+    func testMainAgentToolStillSplitsTheReplyInline() async {
+        await type("go")
+        deliver[0](.assistant("before "))
+        deliver[0](.toolStarted(id: "t", summary: "Ran `ls`"))
+        deliver[0](.assistant("after"))
+        XCTAssertEqual(itemKinds.dropFirst(), ["assistant:before ", "tool:Ran `ls`", "assistant:after"])
+    }
+
+    func testSubagentCallAfterTheTurnUpdatesItsParentRow() async {
+        await type("go")
+        deliver[0](.toolStarted(id: "agent", summary: "Research"))
+        await complete(0)
+        session.handleBackground(.subagentTool(parent: "agent", id: "s1", summary: "Ran `ls`", ok: nil))
+        session.handleBackground(.subagentTool(parent: "agent", id: "s2", summary: "Read a.txt", ok: nil))
+        XCTAssertEqual(itemKinds.dropFirst(), ["tool:Research · 2 tool calls"])
+        XCTAssertFalse(session.isRunning)
+    }
+
     func testBackgroundUpdateDuringTheNextTurnIsKept() async {
         await type("one")
         session.handleBackground(.assistant("late result"))

@@ -42,6 +42,9 @@ enum AgentEvent {
     case toolStarted(id: String, summary: String)
     case toolUpdated(id: String, summary: String)
     case toolFinished(id: String, ok: Bool)
+    /// A tool call made by a subagent. It belongs under the subagent's own tool row (`parent`), not in the reply.
+    /// `ok` is nil while the call runs.
+    case subagentTool(parent: String, id: String, summary: String, ok: Bool?)
     /// The agent needs a sign-in before it can run.
     case needsSignIn([AuthMethod])
     /// The adapter has no JS runtime to run on until the user allows the Bun download.
@@ -244,6 +247,21 @@ final class ACPBackend {
 
     private func emit(_ event: AgentEvent) {
         onEvent?(event)
+    }
+
+    /// A subagent's tool call becomes a `subagentTool` event under its parent's row. The main agent's calls pass through.
+    private func emitTool(_ call: ACPToolCall, _ event: AgentEvent) {
+        if let parent = call.parentToolUseID {
+            switch event {
+            case .toolStarted(let id, let summary), .toolUpdated(let id, let summary):
+                emitTranscript(.subagentTool(parent: parent, id: id, summary: summary, ok: nil))
+            case .toolFinished(let id, let ok):
+                emitTranscript(.subagentTool(parent: parent, id: id, summary: call.summary, ok: ok))
+            default: break
+            }
+        } else {
+            emitTranscript(event)
+        }
     }
 
     /// Text and tool updates belong to the running turn. With no prompt in flight, they come from work the agent
@@ -507,6 +525,8 @@ final class ACPBackend {
         guard !replaying else { return }
         switch update["sessionUpdate"] as? String {
         case "agent_message_chunk":
+            // A subagent's own chatter is not part of the main reply.
+            if ACPToolCall.parentID(in: update) != nil { return }
             if let content = update["content"] as? JSON, content["type"] as? String == "text", let text = content["text"] as? String, !text.isEmpty {
                 emitTranscript(.assistant(text))
             }
@@ -516,7 +536,7 @@ final class ACPBackend {
         case "tool_call":
             let call = ACPToolCall(json: update)
             tools[call.id] = call
-            emitTranscript(.toolStarted(id: call.id, summary: call.summary))
+            emitTool(call, .toolStarted(id: call.id, summary: call.summary))
             finishIfDone(update, call)
         case "tool_call_update":
             guard let id = update["toolCallId"] as? String else { return }
@@ -524,7 +544,7 @@ final class ACPBackend {
             let before = call.summary
             call.merge(update)
             tools[id] = call
-            if call.summary != before, !finishedTools.contains(id) { emitTranscript(.toolUpdated(id: id, summary: call.summary)) }
+            if call.summary != before, !finishedTools.contains(id) { emitTool(call, .toolUpdated(id: id, summary: call.summary)) }
             finishIfDone(update, call)
         default:
             break
@@ -533,7 +553,7 @@ final class ACPBackend {
 
     private func finishIfDone(_ update: JSON, _ call: ACPToolCall) {
         guard let status = update["status"] as? String, status == "completed" || status == "failed", finishedTools.insert(call.id).inserted else { return }
-        emitTranscript(.toolFinished(id: call.id, ok: status == "completed"))
+        emitTool(call, .toolFinished(id: call.id, ok: status == "completed"))
     }
 
     private func agentRequest(_ method: String, _ params: JSON, _ respond: @escaping (Result<JSON, ACPError>) -> Void) {
