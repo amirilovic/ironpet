@@ -44,7 +44,9 @@ struct MeetingSpeakerTable: Equatable {
     mutating func link(_ chunk: ChunkDiarization, chunkURL: URL, store: [VoiceCandidate]) -> [String: Int] {
         var assigned: [String: Int] = [:]
         for local in chunk.speakers.sorted(by: { $0.seconds > $1.seconds }) where !local.embedding.isEmpty {
-            let inMeeting = speakers.map { VoiceCandidate(id: String($0.id), name: $0.displayName, centroid: $0.centroid) }
+            // Two speakers the diarizer separated inside one chunk are two people, so a taken id is not a candidate.
+            let taken = Set(assigned.values)
+            let inMeeting = speakers.filter { !taken.contains($0.id) }.map { VoiceCandidate(id: String($0.id), name: $0.displayName, centroid: $0.centroid) }
             let longest = local.longestTurn
             let clip = longest.map { SpeakerClip(url: chunkURL, start: $0.lowerBound, end: $0.upperBound) }
             if case .known(let id, _, _) = SpeakerMatcher.match(local.embedding, against: inMeeting),
@@ -87,6 +89,8 @@ struct MeetingSpeakerTable: Equatable {
                     keep.seconds += gone.seconds
                     if gone.clipLength > keep.clipLength { keep.clip = gone.clip; keep.clipLength = gone.clipLength }
                     keep.name = keep.name ?? gone.name
+                    // A voice the user told ironpet to ignore stays ignored after a merge.
+                    keep.dismissed = keep.dismissed || gone.dismissed
                     keep.personId = keep.personId ?? gone.personId
                     keep.suggestion = keep.suggestion ?? gone.suggestion
                     speakers[index] = keep

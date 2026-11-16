@@ -36,6 +36,7 @@ final class SpeakerClipPlayer: ObservableObject {
 struct SpeakerPrompt: View {
     @ObservedObject var controller: MeetingController
     @StateObject private var clips = SpeakerClipPlayer()
+    @State private var storedNames: [String] = []
 
     var body: some View {
         let speakers = controller.speakersToName
@@ -43,7 +44,7 @@ struct SpeakerPrompt: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Who is this?").font(.system(size: 12, weight: .semibold))
                 ForEach(speakers) { speaker in
-                    SpeakerRow(controller: controller, clips: clips, speaker: speaker)
+                    SpeakerRow(controller: controller, clips: clips, speaker: speaker, storedNames: storedNames)
                 }
                 if controller.namesChangedSinceSummary, case .ready = controller.summary {
                     HStack {
@@ -53,6 +54,7 @@ struct SpeakerPrompt: View {
                     }
                 }
             }
+            .onAppear { storedNames = controller.storedNames }
             .onDisappear { clips.stop() }
         } else if controller.namesChangedSinceSummary, case .ready = controller.summary {
             HStack {
@@ -70,10 +72,11 @@ private struct SpeakerRow: View {
     let speaker: MeetingSpeaker
     @State private var name = ""
     @State private var showNames = false
+    let storedNames: [String]
 
     private var matches: [String] {
         let typed = name.trimmingCharacters(in: .whitespaces)
-        return controller.knownNames.filter { typed.isEmpty || $0.localizedCaseInsensitiveContains(typed) }.prefix(4).map { $0 }
+        return controller.knownNames(stored: storedNames).filter { typed.isEmpty || $0.localizedCaseInsensitiveContains(typed) }.prefix(4).map { $0 }
     }
 
     var body: some View {

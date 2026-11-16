@@ -44,8 +44,11 @@ final class VoiceStore {
     func voices() -> [StoredVoice] {
         lock.lock()
         defer { lock.unlock() }
-        return read().filter { $0.modelId == modelId }
+        return (read() ?? []).filter { $0.modelId == modelId }
     }
+
+    /// True when a store file exists, readable or not. Settings uses it to keep "Forget all voices" available for a file that cannot be read.
+    var hasFile: Bool { FileManager.default.fileExists(atPath: url.path) }
 
     var candidates: [VoiceCandidate] {
         voices().map { VoiceCandidate(id: $0.id, name: $0.name, centroid: $0.centroid) }
@@ -59,7 +62,11 @@ final class VoiceStore {
         guard !name.isEmpty, seconds >= SpeakerThresholds.minEnrollSeconds, !embedding.isEmpty else { return nil }
         lock.lock()
         defer { lock.unlock() }
-        var all = read().filter { $0.modelId == modelId }
+        guard let stored = read() else {
+            NSLog("ironpet: the voice store cannot be read, so it is left as it is. Forget all voices to start again.")
+            return nil
+        }
+        var all = stored.filter { $0.modelId == modelId }
         let unit = SpeakerMatcher.normalized(embedding)
         var voice: StoredVoice
         if let index = all.firstIndex(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
@@ -81,7 +88,11 @@ final class VoiceStore {
     func forget(id: String) {
         lock.lock()
         defer { lock.unlock() }
-        write(read().filter { $0.id != id && $0.modelId == modelId })
+        guard let stored = read() else {
+            NSLog("ironpet: the voice store cannot be read, so no voice was forgotten. Forget all voices deletes the file.")
+            return
+        }
+        write(stored.filter { $0.id != id && $0.modelId == modelId })
     }
 
     /// Deletes the file, so nothing is left to recover.
@@ -93,11 +104,13 @@ final class VoiceStore {
 
     // MARK: File
 
-    private func read() -> [StoredVoice] {
+    /// Nil when a file exists but cannot be decrypted or decoded, so a caller never overwrites it with a shorter list.
+    private func read() -> [StoredVoice]? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         guard let key = key(), let data = try? Data(contentsOf: url),
               let box = try? AES.GCM.SealedBox(combined: data),
-              let plain = try? AES.GCM.open(box, using: key) else { return [] }
-        return (try? JSONDecoder.iso.decode([StoredVoice].self, from: plain)) ?? []
+              let plain = try? AES.GCM.open(box, using: key) else { return nil }
+        return try? JSONDecoder.iso.decode([StoredVoice].self, from: plain)
     }
 
     private func write(_ voices: [StoredVoice]) {

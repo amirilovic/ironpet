@@ -547,7 +547,7 @@ private struct SpeakerSettings: View {
                 }
             }
             Button("Forget all voices", role: .destructive) { confirmForgetAll = true }
-                .disabled(voices.isEmpty)
+                .disabled(voices.isEmpty && !VoiceStore.shared.hasFile)
                 .confirmationDialog("Forget all voices?", isPresented: $confirmForgetAll) {
                     Button("Forget all voices", role: .destructive) { VoiceStore.shared.forgetAll(); reload() }
                 }

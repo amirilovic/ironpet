@@ -134,6 +134,16 @@ final class VoiceStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("voices.enc").path))
     }
 
+    func testAnUnreadableStoreIsNotOverwritten() throws {
+        let file = dir.appendingPathComponent("voices.enc")
+        store().enroll(name: "Marko", embedding: unit(0), seconds: 20)
+        let before = try Data(contentsOf: file)
+        let wrongKey = VoiceStore(url: file, key: { SymmetricKey(size: .bits256) }, modelId: "m1")
+        XCTAssertNil(wrongKey.enroll(name: "Ana", embedding: unit(1), seconds: 20))
+        XCTAssertEqual(try Data(contentsOf: file), before)
+        XCTAssertEqual(store().voices().map(\.name), ["Marko"])
+    }
+
     func testAChangedModelIdInvalidatesTheCentroids() {
         store(modelId: "m1").enroll(name: "Marko", embedding: unit(0), seconds: 20)
         XCTAssertTrue(store(modelId: "m2").voices().isEmpty)
@@ -209,6 +219,13 @@ final class MeetingSpeakerTableTests: XCTestCase {
         XCTAssertEqual(first["0"], second["1"])
         XCTAssertEqual(first["1"], second["0"])
         XCTAssertEqual(table.speaker(first["0"]!)?.seconds, 18)
+    }
+
+    func testTwoSpeakersOfOneChunkStayApart() {
+        var table = MeetingSpeakerTable()
+        _ = table.link(chunk([("0", unit(0), 10)]), chunkURL: url, store: [])
+        let ids = table.link(chunk([("0", vector(cosine: 0.95), 8), ("1", vector(cosine: 0.93), 6)]), chunkURL: url, store: [])
+        XCTAssertNotEqual(ids["0"], ids["1"])
     }
 
     func testStoredVoiceNamesASpeaker() {

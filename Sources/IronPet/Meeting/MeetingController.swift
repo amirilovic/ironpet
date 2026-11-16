@@ -554,8 +554,11 @@ final class MeetingController: ObservableObject {
     }
 
     /// People ironpet knows, for the name field's autocomplete.
-    var knownNames: [String] {
-        var names = voiceStore.voices().map(\.name)
+    /// Names in the voice store. Reads and decrypts the file, so views call it once, not on every render.
+    var storedNames: [String] { voiceStore.voices().map(\.name) }
+
+    func knownNames(stored: [String]) -> [String] {
+        var names = stored
         for speaker in speakerTable.speakers { if let name = speaker.name, !names.contains(name) { names.append(name) } }
         return names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
@@ -565,6 +568,9 @@ final class MeetingController: ObservableObject {
         lines.filter { $0.speakerId == id }.max { $0.text.count < $1.text.count }?.text
     }
 
+    /// Names already enrolled in this meeting, so a person split into two voices counts the meeting once.
+    private var enrolledNames = Set<String>()
+
     /// The user named a voice. Every line of it shows the name, transcript.md is written again, and the voice goes into the
     /// store when it has enough speech and the feature is on.
     func nameSpeaker(_ id: Int, as name: String) {
@@ -572,7 +578,11 @@ final class MeetingController: ObservableObject {
         guard !name.isEmpty, let speaker = speakerTable.speaker(id) else { return }
         speakerTable.setName(id, name)
         if recogniseSpeakers(), !speaker.mixed {
-            voiceStore.enroll(name: name, embedding: speaker.centroid, seconds: speaker.seconds)
+            // A person split into two voices still counts the meeting once.
+            let first = !enrolledNames.contains(name.lowercased())
+            if voiceStore.enroll(name: name, embedding: speaker.centroid, seconds: speaker.seconds, meetingConfirmed: first) != nil {
+                enrolledNames.insert(name.lowercased())
+            }
         }
         refreshSpeakerNames()
         writeTranscript()
@@ -756,6 +766,7 @@ final class MeetingController: ObservableObject {
         sources = [:]
         lines = []
         speakerTable = MeetingSpeakerTable()
+        enrolledNames = []
         namesChangedSinceSummary = false
         jobs = []
         summary = .none
