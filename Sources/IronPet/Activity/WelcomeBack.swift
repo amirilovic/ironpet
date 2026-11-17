@@ -49,7 +49,7 @@ final class WelcomeBack {
     func tick() {
         let now = env.now()
         let transition = tracker.sample(now: now, idleSeconds: env.idleSeconds(), threshold: env.threshold(), present: env.isPresent())
-        if case .returned(let since, _) = transition { pendingSince = since }
+        if case .returned(let since, _) = transition { pendingSince = min(pendingSince ?? since, since) }
         guard let since = pendingSince, !env.isScreenLocked() else { return }
         pendingSince = nil
         summarize(DateInterval(start: since, end: max(since, now)))

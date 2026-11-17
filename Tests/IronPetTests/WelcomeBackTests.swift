@@ -178,6 +178,19 @@ final class WelcomeBackTests: XCTestCase {
         XCTAssertNil(f.welcome.pendingSince)
     }
 
+    func testASecondStretchBeforeUnlockKeepsTheFirstStart() throws {
+        let f = try fixture(live: .init(sessions: ["claude:1": .sessionDone, "claude:2": .sessionDone]))
+        f.clock.locked = true
+        awayAndBack(f) { done(f, "claude:1") }
+        let first = try XCTUnwrap(f.welcome.pendingSince)
+        awayAndBack(f) { done(f, "claude:2") }
+        XCTAssertEqual(f.welcome.pendingSince, first)
+        f.clock.locked = false
+        f.clock.now = f.clock.now.addingTimeInterval(2)
+        f.welcome.tick()
+        XCTAssertEqual(f.shown.first?.0.items.first?.count, 2, "both stretches are in the summary")
+    }
+
     func testAMeetingThroughTheStretchShowsNothing() throws {
         let f = try fixture(live: .init(sessions: ["claude:1": .sessionDone, "claude:2": .sessionDone]))
         f.clock.present = true
