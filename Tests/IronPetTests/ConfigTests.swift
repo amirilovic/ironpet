@@ -100,6 +100,23 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(Config.load(from: file).config, config)
     }
 
+    func testPasteLimitsDefaultAndAreClamped() throws {
+        XCTAssertEqual(Config().chat.pasteAttachmentChars, 4_000)
+        XCTAssertEqual(Config().chat.pasteAttachmentLines, 60)
+        try write(#"{"chat":{"pasteAttachmentChars":10,"pasteAttachmentLines":99999}}"#)
+        var (config, _) = Config.load(from: file)
+        XCTAssertEqual(config.chat.pasteAttachmentChars, 500)
+        XCTAssertEqual(config.chat.pasteAttachmentLines, 2_000)
+        try write(#"{"chat":{"pasteAttachmentChars":1000000,"pasteAttachmentLines":1}}"#)
+        (config, _) = Config.load(from: file)
+        XCTAssertEqual(config.chat.pasteAttachmentChars, 100_000)
+        XCTAssertEqual(config.chat.pasteAttachmentLines, 10)
+        try write(#"{"chat":{"pasteAttachmentChars":1500}}"#)
+        (config, _) = Config.load(from: file)
+        XCTAssertEqual(config.chat.pasteAttachmentChars, 1_500)
+        XCTAssertEqual(config.chat.pasteAttachmentLines, 60)
+    }
+
     func testOldConfigWithoutVoiceKeysKeepsVoiceOff() throws {
         try write(#"{"pet":{"name":"Mochi"},"hotkeys":{"chat":"cmd+opt+h"}}"#)
         let (config, error) = Config.load(from: file)

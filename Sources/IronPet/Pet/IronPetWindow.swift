@@ -183,22 +183,26 @@ final class IronPetPanel: NSPanel {
         return newKey is MeetingPanel
     }
 
-    /// Intercepts ⌘V only when the pasteboard holds an image and no text; text paste stays with the field.
+    /// Intercepts ⌘V when the pasteboard holds an image or text over the paste limit; other text paste stays with the field.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if onChat, let session, flags == .command, event.charactersIgnoringModifiers == "v", ImageIntake.decide(.general) != .text {
-            let saved = ImageIntake.importPaste(.general)
-            if !saved.isEmpty {
-                saved.forEach(session.attach)
-                return true
-            }
-        }
+        if flags == .command, event.charactersIgnoringModifiers == "v", attachPaste() { return true }
         if onChat, flags == .command, event.charactersIgnoringModifiers == "f", isKeyWindow {
             revealFind()
             return true
         }
         if isKeyWindow, runSidebarShortcut(flags: flags, characters: event.charactersIgnoringModifiers) { return true }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// Attaches what the general pasteboard holds when it must not reach the text field. Also used by Edit > Paste.
+    @discardableResult
+    func attachPaste() -> Bool {
+        guard onChat, let session else { return false }
+        let saved = PasteIntake.importPaste(.general)
+        guard !saved.isEmpty else { return false }
+        session.attach(saved)
+        return true
     }
 
     /// ⌃⌘S collapses or expands the sidebar; ⌘1 to ⌘9 select the Nth row, in either state. Returns whether it handled the key.

@@ -26,6 +26,14 @@ enum PreviewRenderer {
             session.loadPreview(preview)
             render(ChatView(session: session).frame(width: 520, height: 640).panel(), to: dir, file)
         }
+        // A ~60 KB crash log pasted into the chat: over the paste limits, so the input shows an attachment chip.
+        let pasted = ChatSession(restore: false)
+        pasted.loadPreview(.done)
+        let log = (0..<1_800).map { "0x\(String($0, radix: 16)) frame \($0) in IronPet.crash()" }.joined(separator: "\n")
+        let pasteDir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-paste-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: pasteDir) }
+        pasted.attach(PasteIntake.importPaste(pasteboardHolding(log), imageDirectory: pasteDir, textDirectory: pasteDir))
+        render(ChatView(session: pasted).frame(width: 520, height: 640).panel(), to: dir, "chat-pasted-text")
         let settings = ChatSession(restore: false)
         settings.loadPreview(.done)
         render(ChatView(session: settings, settingsOnly: true).panel(), to: dir, "chat-settings")
@@ -127,6 +135,13 @@ enum PreviewRenderer {
                      wait: 0.02).flatMap { downscale($0, width: 640) }.map { ($0, shot.delay) }
         }
         writeGIF(frames, to: dir.appendingPathComponent("pet.gif"))
+    }
+
+    private static func pasteboardHolding(_ text: String) -> NSPasteboard {
+        let board = NSPasteboard(name: NSPasteboard.Name("ironpet-preview-\(UUID().uuidString)"))
+        board.clearContents()
+        board.setString(text, forType: .string)
+        return board
     }
 
     private static func render(_ view: some View, to dir: URL, _ name: String, scheme: ColorScheme = .dark) {

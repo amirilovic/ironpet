@@ -37,6 +37,8 @@ struct ChatView: View {
     @State private var resizeEnd: DispatchWorkItem?
     /// How many of the newest items the transcript renders. A resumed session can hold thousands.
     @State private var shownItems = TranscriptGroup.pageSize
+    /// Long user messages the reader expanded. View state only, not saved with the thread.
+    @State private var expandedMessages: Set<UUID> = []
     @State private var findQuery = ""
     /// The query after a 150 ms pause, so typing does not search and re-render on every keystroke.
     @State private var activeQuery = ""
@@ -689,7 +691,9 @@ struct ChatView: View {
                 UserBubble(text: text, date: item.date, reply: item.reply, highlighted: highlightedID == item.id,
                            onReply: { session.reply(to: item) }, onQuoteTap: { if let reply = item.reply { jumpTick = JumpRequest(target: reply.itemID) } },
                            onAsk: { askAbout(item) }, onCopy: { copyText(item, text) }, onHoverChange: { hoverChanged(item.id, $0) },
-                           source: item.origin, find: highlights[item.id])
+                           source: item.origin, find: highlights[item.id],
+                           expanded: expandedMessages.contains(item.id),
+                           onToggleExpand: { if !expandedMessages.insert(item.id).inserted { expandedMessages.remove(item.id) } })
             case .screenshot(let path):
                 HStack {
                     Spacer(minLength: 60)
@@ -1099,7 +1103,8 @@ private struct ReplyQuote: View {
             RoundedRectangle(cornerRadius: 1.5).fill(onUser ? Color.white.opacity(0.8) : Color.accentColor).frame(width: 3)
             VStack(alignment: .leading, spacing: 1) {
                 Text(reply.sender).font(.system(size: 11, weight: .semibold))
-                Text(reply.text).font(.system(size: 11.5)).lineLimit(2).truncationMode(.tail)
+                // Only the start fits in two lines, and a quoted 60 KB paste should not be laid out in full.
+                Text(reply.text.prefix(300)).font(.system(size: 11.5)).lineLimit(2).truncationMode(.tail)
             }
             .foregroundStyle(onUser ? Color.white : Color.primary)
             Spacer(minLength: 0)
@@ -1130,12 +1135,19 @@ private struct UserBubble: View {
     var source: String?
     var find: ChatFind.RowHighlight?
     @ObservedObject private var paths = PathCache.shared
+    /// Whether the user expanded this message. ChatView owns it, because a lazy row scrolled out of view
+    /// loses its own @State and would collapse again. It is not persisted.
+    var expanded = false
+    var onToggleExpand: () -> Void = {}
 
     var body: some View {
+        let preview = MessageCollapse.preview(of: text)
+        // A row with find matches shows the whole text, so the highlighted occurrences exist on screen.
+        let showsAll = expanded || find != nil
         VStack(alignment: .trailing, spacing: 3) {
             VStack(alignment: .leading, spacing: 6) {
                 if let reply { ReplyQuote(reply: reply, onUser: true, tap: onQuoteTap) }
-                let linked = FilePathLinks.link(AttributedString(text), underline: true)
+                let linked = FilePathLinks.link(AttributedString(showsAll ? text : (preview?.text ?? text)), underline: true)
                 ChatFind.text(linked, segment: 0, find: find)
                     .font(.system(size: 13.5))
                     .linkCursor(linked, size: 13.5)
@@ -1147,6 +1159,17 @@ private struct UserBubble: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.accentColor, in: UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 5, topTrailingRadius: 16))
+            // While find matches this row it shows the whole text, so there is nothing to toggle.
+            if let preview, find == nil {
+                Button {
+                    onToggleExpand()
+                } label: {
+                    Text(expanded ? "Show less" : "Show more · \(preview.hiddenCharacters.formatted()) characters")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
             HStack(spacing: 4) {
                 ReplyButton(visible: hovering, action: onReply)
                 if source == ChatSession.telegramOrigin {
@@ -1376,32 +1399,30 @@ private struct TypingIndicator: View {
     }
 }
 
-/// Three dots that light up in turn, animated by Core Animation so SwiftUI never re-evaluates for a frame.
-private struct PulsingDots: NSViewRepresentable {
+/// Three dots that pulse in turn, animated by Core Animation so SwiftUI never re-evaluates for a frame.
+struct PulsingDots: NSViewRepresentable {
     func makeNSView(context: Context) -> DotsView { DotsView() }
     func updateNSView(_ view: DotsView, context: Context) {}
 
     final class DotsView: NSView {
+        static let cycle: CFTimeInterval = 1.3
+        static let reducedMotionCycle: CFTimeInterval = 2.6
+        static let animationKey = "pulse"
+
         private var dots: [CALayer] = []
+        private var occlusionObserver: NSObjectProtocol?
+        /// Tests set this to exercise the Reduce Motion path.
+        var reduceMotionOverride: Bool?
 
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
-            for i in 0..<3 {
+            for _ in 0..<3 {
                 let dot = CALayer()
                 dot.bounds = CGRect(x: 0, y: 0, width: 6, height: 6)
                 dot.cornerRadius = 3
                 dot.backgroundColor = NSColor.secondaryLabelColor.cgColor
                 dot.opacity = 0.35
-                // One third of the cycle each, like the old 0.15s phase steps.
-                let pulse = CAKeyframeAnimation(keyPath: "opacity")
-                pulse.values = [1, 0.35, 0.35]
-                pulse.keyTimes = [0, 0.33, 1]
-                pulse.duration = 0.45
-                pulse.beginTime = CACurrentMediaTime() + 0.15 * Double(i)
-                pulse.repeatCount = .infinity
-                pulse.calculationMode = .discrete
-                dot.add(pulse, forKey: "pulse")
                 layer?.addSublayer(dot)
                 dots.append(dot)
             }
@@ -1409,7 +1430,57 @@ private struct PulsingDots: NSViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError() }
 
+        deinit { if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) } }
+
         override var isFlipped: Bool { true }
+
+        var reduceMotion: Bool { reduceMotionOverride ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+        /// The opacity pulse for dot `index`, started at `layerTime` (the layer's own clock, not the global one).
+        static func animation(index: Int, layerTime: CFTimeInterval, reduceMotion: Bool) -> CAKeyframeAnimation {
+            let cycle = reduceMotion ? reducedMotionCycle : Self.cycle
+            let pulse = CAKeyframeAnimation(keyPath: "opacity")
+            pulse.values = [0.35, 1, 0.35]
+            pulse.keyTimes = [0, 0.5, 1]
+            pulse.timingFunctions = [CAMediaTimingFunction(name: .easeInEaseOut), CAMediaTimingFunction(name: .easeInEaseOut)]
+            pulse.duration = cycle
+            pulse.beginTime = layerTime + cycle / 3 * Double(index)
+            pulse.repeatCount = .infinity
+            pulse.isRemovedOnCompletion = false
+            return pulse
+        }
+
+        /// Removes any old animations and adds fresh ones, so a re-hosted view never has stale or doubled pulses.
+        func installAnimations() {
+            for (i, dot) in dots.enumerated() {
+                dot.removeAnimation(forKey: Self.animationKey)
+                let now = dot.convertTime(CACurrentMediaTime(), from: nil)
+                dot.add(Self.animation(index: i, layerTime: now, reduceMotion: reduceMotion), forKey: Self.animationKey)
+            }
+        }
+
+        private func removeAnimations() {
+            dots.forEach { $0.removeAnimation(forKey: Self.animationKey) }
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let occlusionObserver {
+                NotificationCenter.default.removeObserver(occlusionObserver)
+                self.occlusionObserver = nil
+            }
+            guard let window else { removeAnimations(); return }
+            installAnimations()
+            occlusionObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                // Safe: the observer was registered with queue: .main, so this closure already runs on the main thread.
+                MainActor.assumeIsolated {
+                    guard let self, let window = self.window, window.occlusionState.contains(.visible) else { return }
+                    self.installAnimations()
+                }
+            }
+        }
 
         override func layout() {
             super.layout()
@@ -1419,6 +1490,8 @@ private struct PulsingDots: NSViewRepresentable {
         override func viewDidChangeEffectiveAppearance() {
             dots.forEach { $0.backgroundColor = NSColor.secondaryLabelColor.cgColor }
         }
+
+        func dotAnimation(_ index: Int) -> CAAnimation? { dots[index].animation(forKey: Self.animationKey) }
     }
 }
 

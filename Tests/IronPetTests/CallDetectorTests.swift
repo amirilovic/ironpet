@@ -141,3 +141,74 @@ final class CallAppsTests: XCTestCase {
         XCTAssertEqual(AudioApps.preselect(from: apps, remembered: ""), .app(apps[1]))
     }
 }
+
+@MainActor
+final class CallMonitorTests: XCTestCase {
+    private var clock: TimeInterval = 0
+    private var time = Date(timeIntervalSince1970: 1000)
+
+    private func make(_ query: @escaping @Sendable () -> [MicClient]) -> (CallMonitor, CallDetector) {
+        let d = CallDetector(source: { [] }, now: { [unowned self] in time }, debounce: 10, ownPID: 100, ownBundleID: "dev.ironpet")
+        let m = CallMonitor(detector: d, slowThreshold: 2, maxBackoff: 60, uptime: { [unowned self] in clock }, query: query)
+        return (m, d)
+    }
+
+    private func pollAndWait(_ m: CallMonitor) {
+        let done = expectation(description: "polled")
+        m.onPolled = { done.fulfill() }
+        m.poll()
+        wait(for: [done], timeout: 5)
+    }
+
+    func testSlowSourceNeverBlocksMainAndTicksDoNotPileUp() {
+        let release = DispatchSemaphore(value: 0)
+        let calls = LockedCounter()
+        let (m, _) = make { calls.increment(); _ = release.wait(timeout: .now() + 10); return [] }
+        let done = expectation(description: "polled")
+        m.onPolled = { done.fulfill() }
+        var beats = 0
+        let heart = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { _ in beats += 1 }
+        for _ in 0..<20 { m.poll() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        heart.invalidate()
+        XCTAssertGreaterThan(beats, 4, "main thread kept running while the source blocked")
+        XCTAssertEqual(calls.value, 1, "polls while a read is in flight are skipped")
+        release.signal()
+        wait(for: [done], timeout: 5)
+    }
+
+    func testBacksOffAfterSlowReadThenResumesAndReportsCall() {
+        let whatsapp = MicClient(pid: 200, bundleID: "net.whatsapp.WhatsApp")
+        let calls = LockedCounter()
+        let (m, d) = make { calls.increment(); return [whatsapp] }
+        var started: [String] = []
+        d.onStarted = { started.append($0) }
+
+        // First read "takes" 5 s on the fake clock.
+        let done = expectation(description: "polled")
+        m.onPolled = { done.fulfill() }
+        m.poll()
+        clock += 5
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(calls.value, 1)
+
+        m.poll()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(calls.value, 1, "backoff blocks the next poll")
+
+        clock += 10
+        for _ in 0..<12 {
+            time += 1
+            pollAndWait(m)
+        }
+        XCTAssertGreaterThan(calls.value, 1)
+        XCTAssertEqual(started, ["net.whatsapp.WhatsApp"])
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func increment() { lock.lock(); n += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+}

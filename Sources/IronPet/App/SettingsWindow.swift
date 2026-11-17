@@ -238,6 +238,7 @@ private struct GeneralSettings: View {
                 PetGallery(gallery: model.pets, buildPet: model.actions.buildPet)
             }
             ChatBackgroundSection()
+            PasteLimitsSection()
             Section("Shortcuts") {
                 ShortcutRow(title: "Open chat", path: \.chat, model: model)
                 ShortcutRow(title: "Ask about front window", path: \.captureWindow, model: model)
@@ -716,6 +717,64 @@ struct IntegrationsSettings: View {
         alert.addButton(withTitle: "Cancel")
         NSApp.activate()
         return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+// MARK: - Pasted text
+
+private struct PasteLimitsSection: View {
+    @ObservedObject private var store = ConfigStore.shared
+
+    var body: some View {
+        Section {
+            LabeledContent("Over this many characters") {
+                NumberField(value: Binding(get: { store.config.chat.pasteAttachmentChars },
+                                           set: { v in store.update { $0.chat.pasteAttachmentChars = v } }),
+                            range: Config.Chat.pasteCharsRange, label: "Characters")
+            }
+            LabeledContent("Over this many lines") {
+                NumberField(value: Binding(get: { store.config.chat.pasteAttachmentLines },
+                                           set: { v in store.update { $0.chat.pasteAttachmentLines = v } }),
+                            range: Config.Chat.pasteLinesRange, label: "Lines")
+            }
+        } header: {
+            Text("Pasted text")
+        } footer: {
+            Text("Pasting more than either limit adds the text to the chat as a pasted-text.txt attachment. The agent still reads all of it. Characters: \(Config.Chat.pasteCharsRange.lowerBound) to \(Config.Chat.pasteCharsRange.upperBound). Lines: \(Config.Chat.pasteLinesRange.lowerBound) to \(Config.Chat.pasteLinesRange.upperBound).")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// A whole-number field that keeps the value inside `range`: typing a number outside it snaps back on Return or when focus leaves.
+private struct NumberField: View {
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    let label: String
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(label, text: $text)
+            .labelsHidden()
+            .multilineTextAlignment(.trailing)
+            .monospacedDigit()
+            .frame(width: 80)
+            .focused($focused)
+            .onAppear { text = String(value) }
+            .onSubmit(commit)
+            .onChange(of: focused) { if !focused { commit() } }
+            .onChange(of: value) { if !focused { text = String(value) } }
+            .accessibilityLabel(label)
+    }
+
+    private func commit() {
+        let digits = text.filter(\.isNumber)
+        // Digits too long for an Int still mean "too big", so clamp to the top instead of reverting.
+        let parsed = digits.isEmpty ? value : (Int(digits) ?? range.upperBound)
+        let clamped = min(range.upperBound, max(range.lowerBound, parsed))
+        if clamped != value { value = clamped }
+        text = String(clamped)
     }
 }
 
