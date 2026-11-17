@@ -104,15 +104,18 @@ final class WelcomeBack {
     /// The live state from the app's stores at `now`.
     static func liveState(sessions: [AgentSession], signals: [Signal], tasks: [TaskItem], suggestions: [TaskSuggestion], now: Date) -> ActivityDigest.LiveState {
         var sessionKinds: [String: ActivityEvent.Kind] = [:]
+        var idleSince: [String: Date] = [:]
         for session in sessions {
             switch session.status {
             case .needsInput: sessionKinds[session.id] = .sessionNeedsInput
             case .failed: sessionKinds[session.id] = .sessionFailed
             case .done: sessionKinds[session.id] = .sessionDone
+            // The sweep makes a quiet session idle without touching `updatedAt`, so this is its last event.
+            case .idle where !session.ended: idleSince[session.id] = session.updatedAt
             default: break
             }
         }
-        return ActivityDigest.LiveState(sessions: sessionKinds, openAlerts: Set(signals.map(\.id)),
+        return ActivityDigest.LiveState(sessions: sessionKinds, idleSince: idleSince, openAlerts: Set(signals.map(\.id)),
                                         waitingSuggestions: Set(suggestions.map(\.id)),
                                         dueTasks: Set(tasks.filter { TaskDue.hasCome($0, now: now) }.map(\.id)))
     }

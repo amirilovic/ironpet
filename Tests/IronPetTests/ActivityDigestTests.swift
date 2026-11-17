@@ -66,6 +66,20 @@ final class ActivityDigestTests: XCTestCase {
                        ["still-done", "waiting", "open", "waiting-suggestion", "due-task", "news", "meeting"])
     }
 
+    func testANeedsInputSessionSweptIdleWithoutAnAnswerIsStillWaiting() {
+        let asked = start.addingTimeInterval(60)
+        let events = [event(.sessionNeedsInput, "unanswered"), event(.sessionNeedsInput, "answered"),
+                      event(.sessionDone, "done-then-idle"), event(.sessionNeedsInput, "gone")]
+        let live = ActivityDigest.LiveState(idleSince: [
+            "unanswered": asked.addingTimeInterval(-0.01),   // its last event is the request itself
+            "answered": asked.addingTimeInterval(120),       // it ran again after the request, then went quiet
+            "done-then-idle": asked.addingTimeInterval(-0.01),
+        ])
+        let digest = ActivityDigest.build(events: events, window: window, live: live)
+        XCTAssertEqual(digest.items.flatMap { $0.events.map(\.ref) }, ["unanswered"],
+                       "an answered, finished or forgotten session drops; only needs input survives the sweep")
+    }
+
     func testExcludedKindsAreLeftOut() {
         let events = [event(.taskDue, "d"), event(.sessionDone, "s")]
         let live = ActivityDigest.LiveState(sessions: ["s": .sessionDone], dueTasks: ["d"], excluded: [.taskDue])

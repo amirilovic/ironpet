@@ -289,6 +289,32 @@ final class WelcomeBackTests: XCTestCase {
         XCTAssertEqual(live.waitingSuggestions, ["s"])
     }
 
+    func testAWaitingSessionTheStoreSweptIdleStaysInTheSummary() {
+        var unanswered = AgentSession(id: "claude:1", source: .claude)
+        unanswered.status = .needsInput
+        unanswered.updatedAt = start
+        let asked = ActivityEvent.session(unanswered, at: start.addingTimeInterval(0.001))!
+        var answered = AgentSession(id: "claude:2", source: .claude)
+        answered.status = .needsInput
+        answered.updatedAt = start
+        let askedToo = ActivityEvent.session(answered, at: start.addingTimeInterval(0.001))!
+        answered.status = .running
+        answered.updatedAt = start.addingTimeInterval(60)
+        var ended = AgentSession(id: "claude:3", source: .claude)
+        ended.updatedAt = start
+        ended.ended = true
+
+        // `SessionStore.sweep` turns quiet sessions idle after 30 minutes and leaves `updatedAt` alone.
+        unanswered.status = .idle
+        answered.status = .idle
+        ended.status = .idle
+        let live = WelcomeBack.liveState(sessions: [unanswered, answered, ended], signals: [], tasks: [], suggestions: [],
+                                         now: start.addingTimeInterval(45 * 60))
+        XCTAssertEqual(live.idleSince, ["claude:1": start, "claude:2": start.addingTimeInterval(60)], "an ended session is not waiting")
+        let digest = ActivityDigest.build(events: [asked, askedToo], window: DateInterval(start: start, duration: 3600), live: live)
+        XCTAssertEqual(digest.items.flatMap { $0.events.map(\.ref) }, ["claude:1"])
+    }
+
     func testBubbleIDsMatchWhatTheAppShows() {
         func id(_ kind: ActivityEvent.Kind, _ ref: String) -> String { WelcomeBack.bubbleID(for: ActivityEvent(kind: kind, ref: ref, title: "")) }
         XCTAssertEqual(id(.sessionFailed, "claude:1"), "session:claude:1")

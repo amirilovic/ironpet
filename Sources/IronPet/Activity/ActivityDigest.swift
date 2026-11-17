@@ -61,6 +61,9 @@ struct ActivityDigest: Equatable {
     struct LiveState: Equatable {
         /// Session id to the kind of its current status (`session.done` for a session that is still done).
         var sessions: [String: ActivityEvent.Kind] = [:]
+        /// Sessions the store turned idle after a long time without events, with the time of their last event. One that
+        /// needed input and heard nothing since is still waiting; one that was answered has a later last event.
+        var idleSince: [String: Date] = [:]
         var openAlerts: Set<String> = []
         var waitingSuggestions: Set<String> = []
         /// Open tasks that are due now or overdue.
@@ -105,6 +108,11 @@ struct ActivityDigest: Equatable {
     }
 
     private static func isCurrent(_ event: ActivityEvent, in live: LiveState) -> Bool {
+        if event.kind == .sessionNeedsInput, live.sessions[event.ref] == nil,
+           let lastEvent = live.idleSince[event.ref] {
+            // The needs-input event is recorded just after the session's last event; the slack covers the stored time's rounding.
+            return lastEvent <= event.at.addingTimeInterval(1)
+        }
         if event.kind.isSession { return live.sessions[event.ref] == event.kind }
         switch event.kind {
         case .alertOpened: return live.openAlerts.contains(event.ref)
