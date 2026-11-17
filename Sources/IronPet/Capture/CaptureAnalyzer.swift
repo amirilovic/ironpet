@@ -162,6 +162,9 @@ final class CaptureAnalyzer {
 
     var isRunning: Bool { lock.withLock { running } }
 
+    /// The longest a ready item waits for a quiet period, in seconds.
+    static let maxWait: TimeInterval = 15 * 60
+
     /// Records that an item became ready, which restarts the quiet period.
     func noteReady(at date: Date = Date()) {
         lock.withLock { lastNote = date }
@@ -178,10 +181,12 @@ final class CaptureAnalyzer {
     /// The time the pending batch will be sent, or nil when nothing is waiting.
     func dueDate() -> Date? {
         let ready = store.items(inState: "ready")
-        guard let newest = ready.map(\.at).max() else { return nil }
+        guard let newest = ready.map(\.at).max(), let oldest = ready.map(\.at).min() else { return nil }
         let (note, retry) = lock.withLock { (lastNote, retryAfter) }
         let quiet = max(newest, note ?? .distantPast).addingTimeInterval(settings().delay)
-        return max(quiet, retry ?? .distantPast)
+        // Steady activity must not postpone the send forever.
+        let capped = min(quiet, oldest.addingTimeInterval(Self.maxWait))
+        return max(capped, retry ?? .distantPast)
     }
 
     /// Runs once when the quiet period has passed. Returns the proposals, or nil when nothing was due.

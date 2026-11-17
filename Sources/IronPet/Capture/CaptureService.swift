@@ -253,11 +253,11 @@ final class CaptureService: @unchecked Sendable {
             filtering = true
             let (filter, store, tasks, queue) = (self.filter, self.store, self.tasks, self.queue)
             Task.detached(priority: .utility) {
-                let done = await filter.run(on: store, tasks: tasks)
+                let result = await filter.run(on: store, tasks: tasks)
                 queue.async { [weak self] in
                     guard let self else { return }
                     self.filtering = false
-                    if done > 0 { self.analyzer.noteReady(at: self.deps.now()) }
+                    if result.ready > 0 { self.analyzer.noteReady(at: self.deps.now()) }
                     self.refreshModel()
                     self.scheduleAnalysis()
                     // The model may be down. Look again in a minute, but only while something waits.

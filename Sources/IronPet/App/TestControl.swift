@@ -369,7 +369,7 @@ final class TestControl {
                                            taskId: body["taskId"] as? String, status: nil, sources: [1], quote: body["quote"] as? String ?? "", diff: [])
             showProposal?(proposal)
         case "/test/screen/filter":
-            Task { _ = await screen.filter.run(on: screen.store, tasks: screen.tasks); screen.analyzer.noteReady(); screen.refreshModel() }
+            Task { let result = await screen.filter.run(on: screen.store, tasks: screen.tasks); if result.ready > 0 { screen.analyzer.noteReady() }; screen.refreshModel() }
         case "/test/screen/send":
             // Sends the pending batch now instead of waiting for the delay.
             Task { _ = await screen.analyzer.run(); screen.refreshModel() }

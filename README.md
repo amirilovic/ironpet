@@ -346,7 +346,7 @@ Turn it on under **Settings → Screen**. macOS asks for Accessibility then. Scr
 | Calendar threshold | `screenCapture.decision.calendarThreshold` | Default 0.2. Only matters with a skip threshold: an item at or above it is never skipped as a possible calendar event |
 | Skip threshold | `screenCapture.decision.skipThreshold` | Default 0, which skips nothing. The follow-up and new-task answers of 4B models were unreliable in the evaluation |
 | Agent and model | `screenCapture.agent`, `.model` | An ACP agent id. Its only tools are `tasks_list` and `tasks_get` (read-only), it looks existing tasks up itself, every other permission request is refused, and it runs in `~/.ironpet/capture/agent`, not in your chat folder |
-| Delay | `screenCapture.delayMinutes` | Default 3. Quiet time before a batch is sent |
+| Delay | `screenCapture.delayMinutes` | Default 3. Quiet time after the last ready item before a batch is sent. Items kept on the Mac do not restart it, and a batch goes out at most 15 minutes after its oldest item whatever happens in between |
 | Apps allowed to send | `screenCapture.sendApps` | Bundle ids. Empty by default: captures stay on this Mac |
 | Apps never captured | `screenCapture.excludedApps` | Bundle ids or app names, also under **Never capture** in Settings |
 | Retention | `screenCapture.retentionDays` | Default 30 |
