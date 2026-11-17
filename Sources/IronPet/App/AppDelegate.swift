@@ -226,6 +226,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setUpWelcomeBack(log, tasks: tasks)
         pet.settings = settingsModel
         pet.onSettings = { [weak self] in self?.showSettings(tab: nil) }
+        pet.onScreenSettings = { [weak self] in self?.showSettings(tab: "screen") }
+        settingsModel.showScreenSection = { [weak self] in self?.pet.showWindow(.screen) }
         setUpScreenCapture(database)
         let service = AutomationService(store: store, engine: engine, database: database)
         service.notice = { [weak self] notice in

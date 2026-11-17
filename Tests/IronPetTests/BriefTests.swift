@@ -616,7 +616,7 @@ final class TodaySectionTests: XCTestCase {
         XCTAssertFalse(hidden.contains(.today))
         let shown = IronPetSection.shown(chat: true, transcripts: true, automations: true, today: true)
         XCTAssertEqual(shown.last, .today)
-        XCTAssertEqual(IronPetSection.forShortcut("8", in: shown), .today)
+        XCTAssertEqual(IronPetSection.forShortcut("9", in: shown), .today)
         XCTAssertEqual(Array(shown.dropLast()), hidden, "the other rows keep their shortcuts")
         XCTAssertTrue(IronPetSection.today.hidesBubbles)
     }

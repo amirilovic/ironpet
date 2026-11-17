@@ -60,7 +60,6 @@ private struct ScreenSettingsBody: View {
                 agentSection
                 appsSection
                 excludeSection
-                logSection
                 dataSection
             }
         }
@@ -113,10 +112,11 @@ private struct ScreenSettingsBody: View {
                 Button("Until tomorrow") { service.privacy.pauseUntilTomorrow(); service.refreshModel() }
                 Button("Resume") { service.privacy.resume(); service.refreshModel() }.disabled(!model.paused)
             }
-            LabeledContent("Captured") {
-                Text("\(model.itemCount) items, \(model.pendingCount) waiting, \(model.localOnlyCount) kept on this Mac")
+            HStack {
+                Text("Activity and send history are in the main window under Screen.").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Open Screen") { settings.showScreenSection() }
             }
-            Button("Show captures…") { settings.showCaptures() }
             if let skip = model.lastSkip {
                 LabeledContent("Last skipped") { Text(skip).foregroundStyle(.secondary) }
             }
@@ -295,27 +295,6 @@ private struct ScreenSettingsBody: View {
     private func addTyped() {
         exclude(excludeText)
         excludeText = ""
-    }
-
-    // MARK: Log
-
-    private var logSection: some View {
-        Section {
-            if model.sendLog.isEmpty {
-                Text("Nothing has been sent.").font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(model.sendLog, id: \.id) { record in
-                VStack(alignment: .leading) {
-                    Text("\(record.at.formatted(date: .abbreviated, time: .shortened)): \(record.harness) / \(record.model)")
-                    Text("\(record.items.count) items, \(record.bytes) bytes, \(record.outcome)").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        } header: {
-            Text("Sent to the agent")
-        } footer: {
-            Text("Every send is listed here with the time, the agent and model, the capture ids and the size. The text itself is not logged.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
     }
 
     // MARK: Data and rules

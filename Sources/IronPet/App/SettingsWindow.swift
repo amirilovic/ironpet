@@ -21,6 +21,8 @@ final class SettingsModel: ObservableObject {
     var capture: CaptureService?
     /// Opens the window that lists what screen capture stored.
     var showCaptures: () -> Void = {}
+    /// Opens the main window on its Screen section.
+    var showScreenSection: () -> Void = {}
     /// Opens the execution log window, for one automation or all of them.
     var showLogs: (String?) -> Void = { _ in }
     /// Sends what the user wants to the chat, for the agent to create the automation.
