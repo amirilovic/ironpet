@@ -123,6 +123,8 @@ struct Config: Codable, Equatable {
     struct Tasks: Codable, Equatable {
         /// After a meeting summary, offer the action items that belong to "Me" as tasks. Nothing is added without a click.
         var meetingSuggestions = true
+        /// Ghost says when an open task is due today or overdue, once per due date. Held by `reminders.paused`.
+        var dueReminders = true
         /// Done tasks older than this many days are deleted, with their history.
         var keepDoneDays = 30
     }

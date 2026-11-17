@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var automations: AutomationService!
     private var capture: CaptureService?
     private lazy var captureInspector = CaptureInspectorWindow(service: { [weak self] in self?.capture })
+    private var dueReminders: TaskDueReminders?
     private lazy var logWindow = AutomationLogWindow(service: { [weak self] in self?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
@@ -208,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
         pet.tasks = tasks
+        setUpDueReminders(tasks)
         pet.settings = settingsModel
         pet.onSettings = { [weak self] in self?.showSettings(tab: nil) }
         setUpScreenCapture(database)
@@ -890,6 +892,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showTasks() {
         pet.showWindow(.tasks)
+    }
+
+    private func setUpDueReminders(_ tasks: TaskStore) {
+        let reminders = TaskDueReminders(store: tasks, now: { [weak self] in Date().addingTimeInterval(self?.testClockOffset ?? 0) })
+        let bubbles = announcer.bubbles
+        reminders.isShowing = { bubbles.bubbles.contains { $0.id == Announcer.tasksDueID } }
+        reminders.hide = { bubbles.dismiss(Announcer.tasksDueID) }
+        reminders.show = { [weak self, weak reminders] list, isNew in
+            let ids = list.map(\.id)
+            self?.announcer.tasksDue(list, chime: isNew, done: { reminders?.done(ids) }, snooze: { reminders?.snooze(ids) },
+                                     open: { self?.showTasks() })
+        }
+        // Async, so a bubble button that changes a task finishes and closes its bubble before the check replaces it.
+        tasks.onChange = { [weak reminders] _ in DispatchQueue.main.async { reminders?.check() } }
+        dueReminders = reminders
+        timers.append(Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak reminders] _ in
+            MainActor.assumeIsolated { reminders?.check() }
+        })
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak reminders] in reminders?.check() }
     }
 
     private func syncMeetingPanel() {

@@ -473,6 +473,7 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(reopened.suggestions, [TaskSuggestion(id: "book-the-room", title: "Book the room", due: "Friday",
                                                              origin: .meeting(meeting), created: clock)])
         XCTAssertEqual(reopened.task("reply-to-sam")?.source, .capture)
+        XCTAssertEqual(reopened.dueMarks(), [:])
         XCTAssertEqual(try migrated.read { try $0.rows("SELECT fingerprint FROM capture_ignored") }.first?.first as? String, "abc")
 
         let added = reopened.suggest([TaskSuggestion.Draft(key: "1", title: "Review PR 12", due: nil)], automation: "prs", name: "PRs")
@@ -503,7 +504,9 @@ final class TaskStoreTests: XCTestCase {
                                                       PRIMARY KEY(automation, key)) WITHOUT ROWID;
                     ALTER TABLE task_items ADD COLUMN waiting_on TEXT;
                     ALTER TABLE task_suggestions ADD COLUMN waiting_on TEXT;
+                    CREATE TABLE task_due_marks(task TEXT PRIMARY KEY, due REAL NOT NULL, snoozed_until REAL) WITHOUT ROWID;
                     """)
+                try db.execute("INSERT INTO task_due_marks(task, due, snoozed_until) VALUES('send-the-deck', ?, NULL)", [clock.timeIntervalSince1970])
                 try db.execute("""
                     INSERT INTO task_items(id, title, notes, status, source, created, updated, waiting_on)
                     VALUES('send-the-deck', 'Send the deck', '', 'backlog', 'meeting', ?, ?, 'Ana')
@@ -525,6 +528,7 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(reopened.suggest([TaskSuggestion.Draft(key: "12", title: "Something else", due: nil)], automation: "prs", name: "PRs"), [],
                        "the stored key survives")
         XCTAssertEqual(reopened.task("send-the-deck")?.waitingOn, "Ana")
+        XCTAssertEqual(reopened.dueMarks(), ["send-the-deck": TaskDueMark(due: clock, snoozedUntil: nil)])
     }
 
     func testTaskMigrationsComeAfterCaptureMigrations() {

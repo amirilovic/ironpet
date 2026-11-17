@@ -369,14 +369,9 @@ extension TaskLink {
 }
 
 extension TaskItem {
-    /// A due date at local midnight came from a plain date (`2026-11-20`) and lasts the whole day.
-    private func dueIsAllDay(_ due: Date, calendar: Calendar) -> Bool {
-        calendar.dateComponents([.hour, .minute, .second], from: due) == DateComponents(hour: 0, minute: 0, second: 0)
-    }
-
     func isOverdue(now: Date, calendar: Calendar = .current) -> Bool {
         guard let due, status != .done else { return false }
-        return dueIsAllDay(due, calendar: calendar) ? due < calendar.startOfDay(for: now) : due < now
+        return TaskDue.isAllDay(due, calendar: calendar) ? due < calendar.startOfDay(for: now) : due < now
     }
 
     /// "Due tomorrow", "Due Nov 20 at 15:30", "Overdue since yesterday". Nil without a due date.
@@ -397,7 +392,7 @@ extension TaskItem {
         var timeFormat = Date.FormatStyle.dateTime.hour().minute()
         timeFormat.calendar = calendar
         timeFormat.timeZone = calendar.timeZone
-        let time = dueIsAllDay(due, calendar: calendar) ? nil : due.formatted(timeFormat)
+        let time = TaskDue.isAllDay(due, calendar: calendar) ? nil : due.formatted(timeFormat)
         if isOverdue(now: now, calendar: calendar) {
             if day == "today", let time { return "Overdue since \(time)" }
             return "Overdue since \(day)" + (time.map { " \($0)" } ?? "")

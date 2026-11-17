@@ -169,6 +169,54 @@ final class Announcer {
                             title: "Added \(count) \(count == 1 ? "task" : "tasks")", expires: Date().addingTimeInterval(8)))
     }
 
+    static let tasksDueID = "task-due"
+
+    /// Open tasks that are due today or overdue. Stays until answered or closed, since it comes once per due date.
+    func tasksDue(_ tasks: [TaskItem], chime: Bool, done: @escaping () -> Void, snooze: @escaping () -> Void,
+                  open: @escaping () -> Void) {
+        guard !tasks.isEmpty else { return }
+        bubbles.show(Self.tasksDueBubble(tasks, now: Date(), done: done, snooze: snooze, open: open))
+        if chime { self.chime() }
+    }
+
+    static func tasksDueBubble(_ tasks: [TaskItem], now: Date, calendar: Calendar = .current, done: @escaping () -> Void,
+                               snooze: @escaping () -> Void, open: @escaping () -> Void) -> Bubble {
+        let overdue = tasks.contains { TaskDue.kind($0, now: now, calendar: calendar) == .overdue }
+        let title: String
+        let subtitle: String?
+        let body: String?
+        if tasks.count == 1, let task = tasks.first {
+            switch TaskDue.kind(task, now: now, calendar: calendar) {
+            case .today: title = "Due today: \(task.title)"; subtitle = nil
+            case .now: title = "Due now: \(task.title)"; subtitle = task.due.map { "Due at \($0.formatted(date: .omitted, time: .shortened))" }
+            case .overdue: title = "Overdue: \(task.title)"; subtitle = task.dueLabel(now: now, calendar: calendar)
+            }
+            body = nil
+        } else {
+            title = "\(tasks.count) tasks due"
+            subtitle = nil
+            // The body shows 4 lines, so each task has to fit on one.
+            var lines = tasks.prefix(3).map { task in
+                let name = task.title.count > 30 ? String(task.title.prefix(29)) + "…" : task.title
+                let when: String
+                switch TaskDue.kind(task, now: now, calendar: calendar) {
+                case .today: when = "today"
+                case .now: when = "now"
+                case .overdue: when = "overdue"
+                }
+                return "• \(name) · \(when)"
+            }
+            if tasks.count > 3 { lines.append("and \(tasks.count - 3) more") }
+            body = lines.joined(separator: "\n")
+        }
+        let later = TaskDue.snoozesToTomorrow(tasks, calendar: calendar) ? "Remind tomorrow" : "Snooze 1 h"
+        return Bubble(id: tasksDueID, symbol: overdue ? "calendar.badge.exclamationmark" : "calendar", tint: overdue ? .orange : .accentColor,
+                      title: title, subtitle: subtitle, body: body,
+                      actions: [.init(title: tasks.count == 1 ? "Done" : "All done", style: .primary, run: done),
+                                .init(title: later, run: snooze), .init(title: "Open", run: open)],
+                      onTap: open)
+    }
+
     /// Small talk from the Actions menu.
     func say(_ text: String) {
         bubbles.show(Bubble(id: "say", symbol: "pawprint.fill", tint: .accentColor, title: ConfigStore.shared.config.pet.name, body: text,

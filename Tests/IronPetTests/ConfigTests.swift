@@ -137,7 +137,15 @@ final class ConfigTests: XCTestCase {
     func testTaskDefaults() {
         let tasks = Config().tasks
         XCTAssertTrue(tasks.meetingSuggestions)
+        XCTAssertTrue(tasks.dueReminders)
         XCTAssertEqual(tasks.keepDoneDays, 30)
+    }
+
+    func testDueRemindersCanBeTurnedOff() throws {
+        try write(#"{"tasks":{"dueReminders":false}}"#)
+        let config = Config.load(from: file).config
+        XCTAssertFalse(config.tasks.dueReminders)
+        XCTAssertTrue(config.tasks.meetingSuggestions)
     }
 
     func testKeepDoneDaysIsClamped() throws {
