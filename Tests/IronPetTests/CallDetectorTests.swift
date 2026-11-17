@@ -36,6 +36,19 @@ final class CallDetectorTests: XCTestCase {
         XCTAssertEqual(started.count, 1)
     }
 
+    func testResetForgetsACallWithoutReportingAnEnd() {
+        let d = detector()
+        clients = [whatsapp]
+        d.tick()
+        advance(10, d)
+        XCTAssertEqual(d.activeApps, ["net.whatsapp.WhatsApp"])
+        d.reset()
+        XCTAssertTrue(d.activeApps.isEmpty)
+        XCTAssertEqual(ended, [])
+        advance(9, d)
+        XCTAssertEqual(started.count, 1, "a call still going after a restart waits out the debounce again")
+    }
+
     func testShortBlipEmitsNothing() {
         let d = detector()
         clients = [whatsapp]

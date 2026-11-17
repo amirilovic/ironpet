@@ -1,8 +1,8 @@
 import Foundation
 
 /// Tells when the user stepped away from the Mac and when they came back, from samples of the system idle time. Away
-/// starts once nothing was typed or clicked for `threshold`, or when two samples are `threshold` apart (the Mac slept and
-/// the timer did not fire). It ends at the first sample with recent input. Pure, so tests drive it with a fake clock.
+/// starts once nothing was typed or clicked for `threshold`, or when two samples are `threshold` apart and the Mac woke
+/// from sleep in between (`woke`). It ends at the first sample with recent input. Pure, so tests drive it with a fake clock.
 struct AwayTracker: Equatable {
     enum Transition: Equatable {
         case left(since: Date)
@@ -17,8 +17,9 @@ struct AwayTracker: Equatable {
     private(set) var lastSample: Date?
 
     /// `present` is true while the user is at the Mac without typing, such as on a call: no stretch starts, and one that
-    /// is running ends without a return.
-    mutating func sample(now: Date, idleSeconds: TimeInterval, threshold: TimeInterval, present: Bool) -> Transition? {
+    /// is running ends without a return. `woke` is true when the Mac woke from sleep since the previous sample; a long
+    /// gap without it (App Nap, a busy main thread) is not taken as time away.
+    mutating func sample(now: Date, idleSeconds: TimeInterval, threshold: TimeInterval, present: Bool, woke: Bool = false) -> Transition? {
         let previous = lastSample
         lastSample = now
         if present {
@@ -31,7 +32,7 @@ struct AwayTracker: Equatable {
             awaySince = nil
             return .returned(since: since, at: now)
         }
-        if let previous, now.timeIntervalSince(previous) >= threshold {
+        if woke, let previous, now.timeIntervalSince(previous) >= threshold {
             // Woke from sleep: the stretch began at the last sample before it.
             if active { return .returned(since: previous, at: now) }
             awaySince = previous

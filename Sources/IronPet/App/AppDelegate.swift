@@ -946,10 +946,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var env = WelcomeBack.Environment()
         let systemIdle = env.idleSeconds
         env.idleSeconds = { [weak self] in self?.testIdleSeconds ?? systemIdle() }
-        env.isPresent = { [weak self] in
-            guard let self else { return false }
-            return [.recording, .finishing, .summarizing].contains(meeting.phase) || !(callMonitor?.detector.activeApps.isEmpty ?? true)
-        }
+        let micWatch = MicWatch()
+        let presence = Presence(
+            meetingActive: { [weak self] in self.map { [.recording, .finishing, .summarizing].contains($0.meeting.phase) } ?? false },
+            detectedCalls: { [weak self] in self?.callMonitor.flatMap { $0.isRunning ? $0.detector.activeApps : nil } },
+            micCalls: micWatch.calls)
+        env.isPresent = presence.isPresent
+        env.presenceNotNeeded = micWatch.stop
         env.isEnabled = { ConfigStore.shared.config.welcomeBack.enabled }
         env.threshold = { ConfigStore.shared.config.reminders.idleResetMinutes * 60 }
         let welcome = WelcomeBack(log: log, bubbles: announcer.bubbles, env: env)

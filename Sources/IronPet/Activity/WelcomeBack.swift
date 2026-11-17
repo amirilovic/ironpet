@@ -14,8 +14,13 @@ final class WelcomeBack {
         var isScreenLocked: () -> Bool = {
             (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool == true
         }
-        /// A meeting is being recorded or a call is on: the user is at the Mac even without typing.
+        /// A meeting is being recorded or a call is on: the user is at the Mac even without typing. Asked only once the
+        /// user would otherwise count as away, so a costly check does not run while they type.
         var isPresent: () -> Bool = { false }
+        /// Called on ticks where presence does not matter, so a background check can stop.
+        var presenceNotNeeded: () -> Void = {}
+        /// Whether the Mac woke from sleep after the given time.
+        var wokeSince: @MainActor (Date) -> Bool = { WakeMonitor.shared.woke(since: $0) }
         var isEnabled: () -> Bool = { true }
         /// How long without input counts as away. The app passes `reminders.idleResetMinutes`.
         var threshold: () -> TimeInterval = { 5 * 60 }
@@ -48,7 +53,12 @@ final class WelcomeBack {
     /// Call every couple of seconds.
     func tick() {
         let now = env.now()
-        let transition = tracker.sample(now: now, idleSeconds: env.idleSeconds(), threshold: env.threshold(), present: env.isPresent())
+        let idle = env.idleSeconds(), threshold = env.threshold()
+        let woke = tracker.lastSample.map(env.wokeSince) ?? false
+        let needsPresence = idle >= threshold || woke || tracker.awaySince != nil
+        if !needsPresence { env.presenceNotNeeded() }
+        let present = needsPresence && env.isPresent()
+        let transition = tracker.sample(now: now, idleSeconds: idle, threshold: threshold, present: present, woke: woke)
         if case .returned(let since, _) = transition { pendingSince = min(pendingSince ?? since, since) }
         guard let since = pendingSince, !env.isScreenLocked() else { return }
         pendingSince = nil

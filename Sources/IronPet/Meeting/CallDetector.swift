@@ -63,6 +63,13 @@ final class CallDetector {
 
     var activeApps: Set<String> { active }
 
+    /// Forgets every app, without reporting an end, for when detection stops.
+    func reset() {
+        since = [:]
+        lastHeld = [:]
+        active = []
+    }
+
     func tick() {
         let time = now()
         let holding = Set(source().compactMap { CallApps.app(for: $0, ownPID: ownPID, ownBundleID: ownBundleID) })
@@ -122,6 +129,8 @@ final class CallMonitor {
         detector.source = { [unowned self] in snapshot }
     }
 
+    var isRunning: Bool { timer != nil }
+
     func start() {
         guard timer == nil else { return }
         poll()
@@ -133,6 +142,7 @@ final class CallMonitor {
     func stop() {
         timer?.invalidate()
         timer = nil
+        detector.reset()
     }
 
     /// Starts one background read unless one is running or a backoff is in effect.

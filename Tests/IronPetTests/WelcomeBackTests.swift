@@ -30,14 +30,23 @@ final class WelcomeBackTests: XCTestCase {
         var tracker = AwayTracker()
         _ = tracker.sample(now: start, idleSeconds: 0, threshold: threshold, present: false)
         let woke = start.addingTimeInterval(3600)
-        XCTAssertEqual(tracker.sample(now: woke, idleSeconds: 3600, threshold: threshold, present: false), .left(since: start))
+        XCTAssertEqual(tracker.sample(now: woke, idleSeconds: 3600, threshold: threshold, present: false, woke: true), .left(since: start))
         XCTAssertEqual(tracker.sample(now: woke.addingTimeInterval(2), idleSeconds: 0, threshold: threshold, present: false),
                        .returned(since: start, at: woke.addingTimeInterval(2)))
 
         var typing = AwayTracker()
         _ = typing.sample(now: start, idleSeconds: 0, threshold: threshold, present: false)
-        XCTAssertEqual(typing.sample(now: woke, idleSeconds: 2, threshold: threshold, present: false), .returned(since: start, at: woke),
-                       "woke and already typing")
+        XCTAssertEqual(typing.sample(now: woke, idleSeconds: 2, threshold: threshold, present: false, woke: true),
+                       .returned(since: start, at: woke), "woke and already typing")
+    }
+
+    func testAGapWithoutAWakeIsNotTimeAway() {
+        var tracker = AwayTracker()
+        _ = tracker.sample(now: start, idleSeconds: 0, threshold: threshold, present: false)
+        let late = start.addingTimeInterval(3600)
+        XCTAssertNil(tracker.sample(now: late, idleSeconds: 2, threshold: threshold, present: false, woke: false),
+                     "App Nap or a busy main thread held the timer back while the user kept typing")
+        XCTAssertNil(tracker.awaySince)
     }
 
     func testPresenceNeverLeavesAndCancelsAStretch() {
@@ -62,6 +71,8 @@ final class WelcomeBackTests: XCTestCase {
         var idle: TimeInterval = 0
         var locked = false
         var present = false
+        var presenceChecks = 0
+        var lastWake: Date?
         var enabled = true
         init(_ now: Date) { self.now = now }
     }
@@ -86,7 +97,8 @@ final class WelcomeBackTests: XCTestCase {
         env.now = { clock.now }
         env.idleSeconds = { clock.idle }
         env.isScreenLocked = { clock.locked }
-        env.isPresent = { clock.present }
+        env.isPresent = { clock.presenceChecks += 1; return clock.present }
+        env.wokeSince = { since in clock.lastWake.map { $0 > since } ?? false }
         env.isEnabled = { clock.enabled }
         env.threshold = { 300 }
         let welcome = WelcomeBack(log: log, bubbles: bubbles, env: env)
@@ -191,6 +203,37 @@ final class WelcomeBackTests: XCTestCase {
         XCTAssertEqual(f.shown.first?.0.items.first?.count, 2, "both stretches are in the summary")
     }
 
+    func testPresenceIsOnlyAskedOnceTheUserWouldCountAsAway() throws {
+        let f = try fixture()
+        for _ in 0..<5 {
+            f.clock.now = f.clock.now.addingTimeInterval(2)
+            f.clock.idle = 1
+            f.welcome.tick()
+        }
+        XCTAssertEqual(f.clock.presenceChecks, 0, "no microphone query while the user types")
+        f.clock.idle = 300
+        f.welcome.tick()
+        XCTAssertEqual(f.clock.presenceChecks, 1)
+    }
+
+    func testOnlyARealWakeTurnsATimerGapIntoTimeAway() throws {
+        let f = try fixture(live: .init(sessions: ["claude:1": .sessionDone, "claude:2": .sessionDone]))
+        f.clock.now = f.clock.now.addingTimeInterval(3600)
+        f.clock.idle = 3
+        f.welcome.tick()
+        XCTAssertTrue(f.shown.isEmpty, "a gap without a wake (App Nap) is not a return")
+        XCTAssertNil(f.welcome.tracker.awaySince)
+
+        let slept = f.clock.now
+        f.clock.now = f.clock.now.addingTimeInterval(1800)
+        done(f, "claude:1"); done(f, "claude:2")
+        f.clock.now = f.clock.now.addingTimeInterval(1800)
+        f.clock.lastWake = f.clock.now.addingTimeInterval(-1)
+        f.welcome.tick()
+        XCTAssertEqual(f.shown.first?.1, 3600, "woke and already typing: away since the last tick before sleep")
+        XCTAssertEqual(f.welcome.lastDigest?.window.start, slept)
+    }
+
     func testAMeetingThroughTheStretchShowsNothing() throws {
         let f = try fixture(live: .init(sessions: ["claude:1": .sessionDone, "claude:2": .sessionDone]))
         f.clock.present = true
@@ -254,6 +297,63 @@ final class WelcomeBackTests: XCTestCase {
         XCTAssertEqual(id(.taskDue, "x"), Announcer.tasksDueID)
         XCTAssertEqual(id(.meetingSummary, "/m/summary.md"), "meeting-summary")
         XCTAssertEqual(id(.chatFinished, "chat"), "chat")
+    }
+
+    // MARK: Presence
+
+    func testPresenceUsesCallDetectionWhileItRunsAndTheMicrophoneOtherwise() {
+        var meeting = false
+        var detected: Set<String>?
+        var mic: Set<String> = []
+        var micQueries = 0
+        let presence = Presence(meetingActive: { meeting }, detectedCalls: { detected },
+                                micCalls: { micQueries += 1; return mic })
+
+        XCTAssertFalse(presence.isPresent())
+        mic = ["us.zoom.xos"]
+        XCTAssertTrue(presence.isPresent(), "meetings off: an app holding the microphone is a call")
+
+        detected = []
+        micQueries = 0
+        XCTAssertFalse(presence.isPresent(), "detection running and it sees no call")
+        XCTAssertEqual(micQueries, 0, "detection's answer is used instead of a second watch")
+        detected = ["us.zoom.xos"]
+        XCTAssertTrue(presence.isPresent())
+
+        detected = nil
+        mic = []
+        meeting = true
+        XCTAssertTrue(presence.isPresent(), "recording a meeting")
+    }
+
+    func testMicWatchPollsOffTheMainThreadOnlyWhileAsked() {
+        let clients = [MicClient(pid: 300, bundleID: "us.zoom.xos"), MicClient(pid: 301, bundleID: "com.apple.Siri"),
+                       MicClient(pid: ProcessInfo.processInfo.processIdentifier, bundleID: "dev.ironpet")]
+        let monitor = CallMonitor(detector: CallDetector(source: { [] }, debounce: 0), query: { clients })
+        let polled = expectation(description: "first poll")
+        monitor.onPolled = { polled.fulfill() }
+        let watch = MicWatch(monitor: monitor)
+        XCTAssertFalse(watch.isRunning)
+        XCTAssertEqual(watch.calls(), [], "nothing known before the first poll finishes")
+        XCTAssertTrue(watch.isRunning)
+        wait(for: [polled], timeout: 5)
+        monitor.onPolled = nil
+        XCTAssertEqual(watch.calls(), ["us.zoom.xos"], "an assistant and ironpet itself are not calls")
+        watch.stop()
+        XCTAssertFalse(watch.isRunning)
+        XCTAssertEqual(monitor.detector.activeApps, [], "stopping forgets the call")
+    }
+
+    func testPresenceStopsBeingWatchedWhileTheUserTypes() throws {
+        let f = try fixture()
+        var stops = 0
+        f.welcome.env.presenceNotNeeded = { stops += 1 }
+        f.clock.now = f.clock.now.addingTimeInterval(2)
+        f.welcome.tick()
+        XCTAssertEqual(stops, 1)
+        f.clock.idle = 300
+        f.welcome.tick()
+        XCTAssertEqual(stops, 1, "idle past the threshold: presence matters")
     }
 
     // MARK: Bubble store
