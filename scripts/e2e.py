@@ -1531,8 +1531,9 @@ def post_hook(source, name, payload, cwd=WS):
 
 def scenario_welcome_back():
     """Welcome back: two agents finish while the user is away (a stand-in idle time, no real waiting), one summary
-    bubble replaces their bubbles on return; switched off, nothing is summarized. Runs no agent; puts config.json back."""
-    with PreservedUserState():
+    bubble replaces their bubbles on return; switched off, nothing is summarized. Runs no agent; puts config.json and
+    ironpet.db back, so the fake sessions leave no rows in the activity log."""
+    with PreservedUserState(), PreservedTasks():
         relaunch(test_mode=True)
         state = call("POST", "/test/presence", {"idle": None, "tick": True})
         if not state.get("ok"):
@@ -1591,7 +1592,7 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # "screen" feeds synthetic captures in and stubs the model and the agent, so it reads no screen and starts no agent; it puts ironpet.db and
 # config.json back afterwards.
 # "tasks" runs two short turns on $IRONPET_E2E_AGENT (default cursor) and puts ironpet.db back afterwards.
-# "welcome-back" posts synthetic Claude hook events and a stand-in idle time, so it runs no agent; it puts config.json back.
+# "welcome-back" posts synthetic Claude hook events and a stand-in idle time, so it runs no agent; it puts config.json and ironpet.db back.
 OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks", "meeting", "meeting-system"}
 
 if __name__ == "__main__":
