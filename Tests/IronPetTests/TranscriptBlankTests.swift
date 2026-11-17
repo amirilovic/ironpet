@@ -207,7 +207,8 @@ final class TranscriptBlankTests: XCTestCase {
             XCTAssertGreaterThan(visibleRows(panel), 0, "no rows at y=\(y)")
         }
         XCTAssertEqual(ChatView.blankRepairsForTesting, 0, "a transcript with rows on screen was repaired")
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: doc.bounds.height))
+        // Far enough past the end that the header's top inset (52 pt) cannot keep the last rows on screen.
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: doc.bounds.height + 3000))
         scroll.reflectScrolledClipView(scroll.contentView)
         spin(2.5)
         XCTAssertGreaterThan(visibleRows(panel), 0, "the jump past the end stayed blank")
