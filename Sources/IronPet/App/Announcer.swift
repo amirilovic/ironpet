@@ -134,39 +134,35 @@ final class Announcer {
         if alsoSystemNotifications { notifier.announceMeetingSummary(url) }
     }
 
-    /// Action items from a meeting summary (the user's, and the ones they wait on from others), or tasks a watcher
-    /// automation proposed. Nothing becomes a task until they choose.
-    func taskSuggestions(_ suggestions: [TaskSuggestion], addAll: @escaping () -> Void, review: @escaping () -> Void) {
-        guard !suggestions.isEmpty else { return }
-        let text = Self.taskSuggestionsText(suggestions)
-        bubbles.show(Bubble(id: "task-suggestions", symbol: "checklist", tint: .accentColor, title: text.title, body: text.body,
-                            actions: [.init(title: "Add all", style: .primary, run: addAll), .init(title: "Review", run: review)],
-                            onTap: review, expires: Date().addingTimeInterval(60)))
-        chime()
-    }
+    static let taskSuggestionsID = "task-suggestions"
 
-    /// "3 action items from the meeting" over "2 for you, 1 waiting on others" and the first three items, or
-    /// "2 suggested tasks from <automation>" for one watcher run.
-    static func taskSuggestionsText(_ suggestions: [TaskSuggestion]) -> (title: String, body: String) {
-        let count = suggestions.count
-        let waiting = suggestions.filter { $0.waitingOn != nil }.count
-        let mine = count - waiting
-        let title = if case .automation(_, let name) = suggestions.first?.origin {
-            "\(count) suggested \(count == 1 ? "task" : "tasks") from \(name)"
-        } else if mine == 0 {
-            "\(count) \(count == 1 ? "item" : "items") you're waiting on from the meeting"
-        } else {
-            "\(count) action \(count == 1 ? "item" : "items") from the meeting"
+    /// One info bubble for suggestions that just arrived from a meeting summary, a watcher or screen capture: the count and the
+    /// first title, no buttons. They stay pending until resolved in the Tasks tab or over MCP. Nil when there are none.
+    static func taskSuggestionsBubble(_ added: [TaskSuggestion], review: @escaping () -> Void = {}, now: Date = Date()) -> Bubble? {
+        guard let first = added.first else { return nil }
+        let title: String
+        switch first.origin {
+        case .meeting: title = "From your meeting"
+        case .capture: title = "From your screen"
+        case .automation(_, let name): title = name
         }
-        var lines = mine > 0 && waiting > 0 ? ["\(mine) for you, \(waiting) waiting on others"] : []
-        lines += suggestions.prefix(3).map { s in "• " + (s.waitingLabel.map { "\($0): \(s.title)" } ?? s.title) }
-        if count > 3 { lines.append("and \(count - 3) more") }
-        return (title, lines.joined(separator: "\n"))
+        let count = added.count
+        return Bubble(id: taskSuggestionsID, symbol: first.source.symbol, tint: .blue, title: title,
+                      body: "\(count) \(count == 1 ? "suggestion" : "suggestions") for review\n\(first.title)",
+                      onTap: review, expires: now.addingTimeInterval(20))
     }
 
-    func tasksAdded(_ count: Int) {
-        bubbles.show(Bubble(id: "task-suggestions", symbol: "checkmark.circle.fill", tint: .green,
-                            title: "Added \(count) \(count == 1 ? "task" : "tasks")", expires: Date().addingTimeInterval(8)))
+    /// Replaces the previous one, so a run shows one bubble however many suggestions it stored.
+    func taskSuggestions(_ added: [TaskSuggestion], review: @escaping () -> Void = {}) {
+        if Self.showTaskSuggestions(added, in: bubbles, review: review) { chime() }
+    }
+
+    /// Shows the bubble and returns whether there was one to show.
+    @discardableResult
+    static func showTaskSuggestions(_ added: [TaskSuggestion], in store: BubbleStore, review: @escaping () -> Void = {}) -> Bool {
+        guard let bubble = taskSuggestionsBubble(added, review: review) else { return false }
+        store.show(bubble)
+        return true
     }
 
     static let tasksDueID = "task-due"

@@ -95,6 +95,7 @@ Installed-app and e2e checks change the user's machine (see Ground rules in `SKI
 | `Tasks/`, task tools, `IronPet tasks` | `tasks` |
 | `Activity/`, digest bubbles | `welcome-back` |
 | `Brief/`, `TodayView`, `digest` actions, daily `catchUpMinutes` | `brief` |
+| `TaskRunner`, `GitWorktree`, `TaskRunViews`, `ApprovalRules` run scope | `task-run` (opt-in: spends agent quota, runs git in a repo under `/tmp`) |
 
 Summary rows for the **App** table:
 

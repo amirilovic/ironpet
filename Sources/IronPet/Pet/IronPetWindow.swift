@@ -64,11 +64,13 @@ enum IronPetSection: String, CaseIterable, Identifiable {
     /// visible, so an approval is not missed while reading a transcript or editing an automation.
     var hidesBubbles: Bool { [.chat, .agents, .alerts, .tasks, .actions, .today].contains(self) }
 
-    /// Agents that need the user win; otherwise alerts when there are some and no agent is working, then tasks that
-    /// wait on the user or on Add / Skip.
-    @MainActor static func needingAttention(store: SessionStore, signals: SignalStore, tasks: TaskStore) -> IronPetSection {
+    /// Agents that need the user win, task runs waiting on an approval among them; otherwise alerts when there are some
+    /// and no agent is working, then tasks that wait on the user or on Add / Skip.
+    @MainActor static func needingAttention(store: SessionStore, signals: SignalStore, tasks: TaskStore,
+                                            runs: TaskRunner? = nil) -> IronPetSection {
         if store.ordered.contains(where: { $0.status == .needsInput || $0.status == .failed }) { return .agents }
-        let idle = store.ordered.allSatisfy { $0.status != .running }
+        if runs?.waiting.isEmpty == false { return .agents }
+        let idle = store.ordered.allSatisfy { $0.status != .running } && runs?.liveCount ?? 0 == 0
         if !signals.signals.isEmpty, idle { return .alerts }
         if idle, !tasks.suggestions.isEmpty || tasks.tasks.contains(where: \.needsUser) { return .tasks }
         return .agents
@@ -457,6 +459,8 @@ struct IronPetWindowView: View {
     var settings: SettingsModel?
     /// The Today page's content. Nil in tests that do not show it.
     var brief: BriefModel?
+    /// Nil hides task runs: no Start button, no run rows.
+    var runs: TaskRunner? = nil
     let actions: SessionActions
     @ObservedObject private var config = ConfigStore.shared
 
@@ -610,7 +614,7 @@ struct IronPetWindowView: View {
 
     private func count(_ section: IronPetSection) -> Int {
         switch section {
-        case .agents: return store.ordered.count
+        case .agents: return store.ordered.count + (runs?.liveCount ?? 0)
         case .alerts: return signals.signals.count
         case .tasks: return tasks.activeCount + tasks.suggestions.count
         default: return 0
@@ -621,15 +625,18 @@ struct IronPetWindowView: View {
         if model.section == .chat, let chat {
             // The chat draws its own floating header up to the top edge.
             ChatView(session: chat)
+                .overlay(alignment: .top) { taskRunStrip }
         } else {
             VStack(spacing: 0) {
                 switch model.section {
                 case .chat: EmptyView()
-                case .agents: AgentsSection(store: store, onJump: actions.onJump)
+                case .agents:
+                    AgentsSection(store: store, onJump: actions.onJump, runs: runs, tasks: tasks, onOpenThread: actions.onOpenThread,
+                                  onOpenTasks: { model.section = .tasks })
                 case .alerts: AlertsSection(signals: signals, onAsk: actions.onAsk)
                 case .tasks:
                     TaskListView(tasks: tasks, onTellGhost: actions.onTellGhost, onOpenThread: actions.onOpenThread,
-                                 onOpenSession: actions.onOpenSession, focus: $model.focusTask)
+                                 onOpenSession: actions.onOpenSession, focus: $model.focusTask, runner: runs)
                         .pageHeader(IronPetSection.tasks.title)
                 case .transcripts:
                     if let meetings {
@@ -657,6 +664,18 @@ struct IronPetWindowView: View {
             }
             // A photo behind unfilled rows would hide their text; the built-in patterns are faint enough without it.
             .background { if config.config.chat.background == ChatBackground.customID { Rectangle().fill(.thinMaterial) } }
+        }
+    }
+}
+
+extension IronPetWindowView {
+    /// A task run's approval, floating under the chat's header, since bubbles wait while Chat is open.
+    @ViewBuilder var taskRunStrip: some View {
+        if let runs {
+            TaskRunApprovalStrip(runner: runs, tasks: tasks, onOpenTasks: { model.section = .tasks })
+                .padding(.horizontal, 16)
+                .padding(.top, 56)
+                .frame(maxWidth: 560)
         }
     }
 }

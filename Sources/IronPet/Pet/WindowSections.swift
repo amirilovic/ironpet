@@ -31,6 +31,16 @@ struct ActionsSection: View {
 struct AgentsSection: View {
     @ObservedObject var store: SessionStore
     let onJump: (AgentSession) -> Void
+    /// Task runs listed above the watched sessions. Nil lists none.
+    var runs: TaskRunner? = nil
+    var tasks: TaskStore? = nil
+    var onOpenThread: (String) -> Void = { _ in }
+    var onOpenTasks: () -> Void = {}
+
+    private var hasRuns: Bool {
+        guard let runs, let tasks else { return false }
+        return !runs.shown(in: tasks).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,12 +67,15 @@ struct AgentsSection: View {
 
     private var agents: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if store.ordered.isEmpty {
+            if store.ordered.isEmpty, !hasRuns {
                 EmptyState(symbol: "moon.zzz", title: "No agents running",
                            detail: "Cursor and Claude Code sessions show up here.")
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
+                        if let runs, let tasks {
+                            TaskRunAgentRows(runner: runs, tasks: tasks, onOpenThread: onOpenThread, onOpenTasks: onOpenTasks)
+                        }
                         ForEach(sections, id: \.title) { section in
                             if section.title == "Finished" {
                                 SectionHeader(section.title, action: "Clear finished") { store.acknowledgeAll() }

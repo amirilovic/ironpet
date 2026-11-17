@@ -82,7 +82,7 @@ struct ChatView: View {
         // The header and composer float as glass over the content; safe-area insets keep the first and
         // last rows clear of them at the scroll ends while letting everything scroll underneath.
         SwiftUI.Group {
-            if session.items.isEmpty && session.approvals.isEmpty {
+            if session.items.isEmpty && session.approvals.isEmpty && session.forms.isEmpty {
                 welcome
             } else {
                 transcript
@@ -129,7 +129,7 @@ struct ChatView: View {
 
     private var headerControls: some View {
         HStack(spacing: 2) {
-            if session.autoMode {
+            if session.autoMode, session.taskRunScope == nil {
                 // The switch lives in settings; this stays so it is always obvious the agent runs unattended.
                 Image(systemName: "bolt.fill")
                     .font(.system(size: 11))
@@ -158,6 +158,7 @@ struct ChatView: View {
                 if !session.models.isEmpty { SettingsRow("Model", last: true) { modelMenu } }
             }
             SettingsCard {
+                let inRun = session.taskRunScope != nil
                 SettingsRow("Auto") {
                     Toggle("", isOn: $session.autoMode)
                         .labelsHidden()
@@ -165,8 +166,10 @@ struct ChatView: View {
                         .controlSize(.small)
                         .tint(.orange)
                         .pointerCursor()
+                        .disabled(inRun)
                 }
-                .help("Let the agent edit and run commands without asking (destructive commands still ask)")
+                .help(inRun ? "This chat is a task run's copy, where the agent asks before every change. Auto does not apply here"
+                            : "Let the agent edit and run commands without asking (destructive commands still ask)")
                 SettingsRow("Send voice notes automatically", last: true) {
                     Toggle("", isOn: $session.sendAfterDictation)
                         .labelsHidden()
@@ -332,10 +335,11 @@ struct ChatView: View {
                     ForEach(groupedItems, id: \.id) { group in
                         groupView(group, highlights: highlights).id(group.id).trackVisible(group.id, in: visibleRows) { checkBlank(proxy) }
                     }
-                    if session.isRunning, session.approvals.isEmpty {
+                    if session.isRunning, session.approvals.isEmpty, session.forms.isEmpty {
                         TypingIndicator(started: session.runStartedAt).id("typing").trackVisible("typing", in: visibleRows) { checkBlank(proxy) }
                     }
                     ForEach(session.approvals) { approval in approvalCard(approval).id(approval.id).trackVisible(approval.id, in: visibleRows) { checkBlank(proxy) } }
+                    ForEach(session.forms) { pending in ElicitationCard(session: session, pending: pending).id(pending.id).trackVisible(pending.id, in: visibleRows) { checkBlank(proxy) } }
                     if let agent = session.runtimeOffer { runtimeCard(agent).id("runtime").trackVisible("runtime", in: visibleRows) { checkBlank(proxy) } }
                     if !session.signInOptions.isEmpty { signInCard.id("signin").trackVisible("signin", in: visibleRows) { checkBlank(proxy) } }
                     Color.clear.frame(height: 1).id("bottom")
@@ -383,7 +387,7 @@ struct ChatView: View {
                 var readerSent = false
                 if last?.id != lastItemID, case .user = last?.kind, last?.origin == nil { readerSent = true }
                 lastItemID = last?.id
-                let contentKey = "\(session.items.count)-\(session.approvals.count)-\(lastAssistantLength)"
+                let contentKey = "\(session.items.count)-\(session.approvals.count)-\(session.forms.count)-\(lastAssistantLength)"
                 follow.contentArrived(readerSent: readerSent, newContent: contentKey != lastContentKey)
                 lastContentKey = contentKey
                 // With the find bar on a match, the view stays on it; only sending jumps away.
@@ -392,7 +396,7 @@ struct ChatView: View {
             }
             .onAppear {
                 lastItemID = session.items.last?.id
-                lastContentKey = "\(session.items.count)-\(session.approvals.count)-\(lastAssistantLength)"
+                lastContentKey = "\(session.items.count)-\(session.approvals.count)-\(session.forms.count)-\(lastAssistantLength)"
                 scrollToEnd(proxy)
             }
             .onChange(of: findScrollTick) { revealCurrentMatch(proxy) }
@@ -709,7 +713,7 @@ struct ChatView: View {
     }
 
     private var scrollKey: String {
-        "\(session.items.count)-\(session.approvals.count)-\(session.isRunning)-\(lastAssistantLength)"
+        "\(session.items.count)-\(session.approvals.count)-\(session.forms.count)-\(session.isRunning)-\(lastAssistantLength)"
     }
 
     private var lastAssistantLength: Int {
@@ -751,6 +755,8 @@ struct ChatView: View {
                                 onHoverChange: { hoverChanged(item.id, $0) }, find: highlights[item.id])
             case .tool:
                 EmptyView()
+            case .form(let record):
+                ElicitationRecordCard(record: record)
             case .error(let text):
                 VStack(alignment: .leading, spacing: 8) {
                     Label { ChatFind.text(AttributedString(text), segment: 0, find: highlights[item.id]) } icon: { Image(systemName: "exclamationmark.triangle.fill") }
@@ -1226,10 +1232,15 @@ private struct UserBubble: View {
                     Image(systemName: "clock.arrow.circlepath").font(.system(size: 9))
                     Text("Automation").font(.system(size: 10))
                 }
+                if source == ChatSession.taskRunOrigin {
+                    Image(systemName: "checklist").font(.system(size: 9))
+                    Text("Task").font(.system(size: 10))
+                }
                 if let date { Text(timeFormatter.string(from: date)).font(.system(size: 10)) }
             }
             .foregroundStyle(.tertiary)
-            .help(source == ChatSession.telegramOrigin ? "Sent from Telegram" : source == ChatSession.automationOrigin ? "Sent by an automation" : "")
+            .help(source == ChatSession.telegramOrigin ? "Sent from Telegram" : source == ChatSession.automationOrigin ? "Sent by an automation"
+                  : source == ChatSession.taskRunOrigin ? "Sent when the task was handed to the agent" : "")
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 50)

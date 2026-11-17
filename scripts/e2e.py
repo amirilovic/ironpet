@@ -1372,7 +1372,8 @@ def scenario_tasks():
 
         # CLI against the running app.
         env = {**os.environ, "IRONPET_ROOT": ROOT}
-        cli = subprocess.run([f"{APP}/Contents/MacOS/IronPet", "tasks", "add", "Review PR 42", "--url", "https://example.com/pr/42"],
+        cli = subprocess.run([f"{APP}/Contents/MacOS/IronPet", "tasks", "add", "Review PR 42", "--url", "https://example.com/pr/42",
+                              "--origin-kind", "pr", "--origin-ref", "https://example.com/pr/42", "--reason", "e2e check of the CLI"],
                              capture_output=True, text=True, timeout=20, env=env)
         try:
             added = json.loads(cli.stdout)
@@ -1399,8 +1400,8 @@ def scenario_tasks():
                and created["Prepare two more screenshots"]["waiting_on"] == "Them"
                and all(s["meeting"] == TASKS_MEETING for s in created.values()),
                f"created={list(created)} suggestions={[s['title'] for s in suggested.get('suggestions', [])]}")
-        bubble = next((b for b in suggested.get("bubbles", []) if {"Add all", "Review"} <= set(b["buttons"])), None)
-        record("Tasks: the app's summary path shows the Add all / Review bubble", suggested.get("appPath") and bool(bubble),
+        bubble = next((b for b in suggested.get("bubbles", []) if b["id"] == "task-suggestions" and not b["buttons"]), None)
+        record("Tasks: the app's summary path shows one info bubble without buttons", suggested.get("appPath") and bool(bubble),
                f"appPath={suggested.get('appPath')} bubbles={[(b['title'], b['buttons']) for b in suggested.get('bubbles', [])]}")
 
         accepted = call("POST", "/test/tasks/accept-all")
@@ -1410,9 +1411,149 @@ def scenario_tasks():
                and next((t for t in from_meeting if t["title"] == "Prepare two more screenshots"), {}).get("waiting_on") == "Them"
                and all(t["status"] == "backlog" and t["source"] == "meeting"
                        and any(l["kind"] == "file" and l["ref"] == TASKS_MEETING for l in t.get("links", [])) for t in from_meeting),
-               f"pressedBubble={accepted.get('pressedBubble')} tasks={[(t['title'], t['status'], t['source']) for t in from_meeting]}")
+               f"tasks={[(t['title'], t['status'], t['source']) for t in from_meeting]}")
 
         call("POST", "/test/tasks/reset")
+
+
+# MARK: task runs
+
+TASK_RUN_REPO = "/tmp/ironpet-e2e-taskrun/app"
+TASK_RUN_REMOTE = "/tmp/ironpet-e2e-taskrun/remote.git"
+
+
+def git(*args, cwd=TASK_RUN_REPO):
+    env = {**os.environ, "GIT_AUTHOR_NAME": "e2e", "GIT_AUTHOR_EMAIL": "e2e@example.com",
+           "GIT_COMMITTER_NAME": "e2e", "GIT_COMMITTER_EMAIL": "e2e@example.com"}
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30, env=env)
+
+
+def task_runs():
+    return call("GET", "/test/task-runs")
+
+
+def task_run(task):
+    return next((r for r in task_runs().get("runs", []) if r["task"] == task), None)
+
+
+def cli_task(*args):
+    env = {**os.environ, "IRONPET_ROOT": ROOT}
+    out = subprocess.run([f"{APP}/Contents/MacOS/IronPet", "tasks", *args], capture_output=True, text=True, timeout=20, env=env)
+    try:
+        return json.loads(out.stdout)
+    except ValueError:
+        return {}
+
+
+def scenario_task_run():
+    """Start on a task: the agent works in its own worktree and commits, every edit and command asks through Ghost (task
+    runs have no Auto), it cannot push, Open PR pushes to the remote URL recorded at Start through the recorded git dir
+    (recorded instead of run), Stop sends the task back, and closing the task removes the clean worktree."""
+    shutil.rmtree(os.path.dirname(TASK_RUN_REPO), ignore_errors=True)
+    os.makedirs(TASK_RUN_REPO)
+    git("init", "-q", "--bare", TASK_RUN_REMOTE, cwd="/tmp")
+    git("init", "-q", "-b", "main")
+    open(f"{TASK_RUN_REPO}/README.md", "w").write("# e2e\n")
+    git("add", ".")
+    git("commit", "-qm", "init")
+    git("remote", "add", "origin", TASK_RUN_REMOTE)
+    git("push", "-q", "-u", "origin", "main")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    made = set()
+
+    try:
+        with PreservedTasks():
+            call("POST", "/test/tasks/reset")
+            task = cli_task("add", "Create hello.txt containing the word hi, then commit it").get("id")
+            if not task or not task_runs().get("ok"):
+                return record("Task run: test endpoints answer", False, f"task={task} runs={task_runs()}")
+
+            call("POST", "/test/task-runs/start", {"task": task, "project": TASK_RUN_REPO, "agent": TASKS_AGENT})
+            cards = []
+
+            def settled():
+                run = task_run(task)
+                return run if run and (run.get("approval") or run["state"] in ("finished", "failed", "stopped")) else None
+
+            run = wait_for(settled, 60)
+            if run and run.get("worktree"):
+                made.add(os.path.dirname(run["worktree"]))
+            while run and run.get("approval"):
+                cards.append(run["approval"]["title"])
+                call("POST", "/test/task-runs/approve", {"task": task, "allow": True})
+                time.sleep(1)
+                run = wait_for(settled, 300)
+            state = tasks_state()
+            item = next((t for t in state["tasks"] if t["id"] == task), {})
+            record(f"Task run: {TASKS_AGENT} finishes the task and asks through Ghost",
+                   bool(run) and run["state"] == "finished" and bool(cards),
+                   f"state={run and run['state']} error={run and run.get('error')} cards={cards}")
+            if not run or run["state"] != "finished":
+                return
+            worktree = run["worktree"]
+            made.add(os.path.dirname(worktree))
+            record("Task run: the worktree is under ~/.ironpet/worktrees on its own branch",
+                   worktree.startswith(f"{ROOT}/worktrees/") and run["branch"] == f"ironpet/{task}" and run["baseBranch"] == "main",
+                   f"worktree={worktree} branch={run['branch']}")
+            git_dir = os.path.realpath(f"{TASK_RUN_REPO}/.git/worktrees/{os.path.basename(worktree)}")
+            record("Task run: Start recorded the copy's git dir and the push remote from the main repo",
+                   run.get("gitDir") == git_dir and run.get("pushRemote") == "origin",
+                   f"gitDir={run.get('gitDir')} expected={git_dir} pushRemote={run.get('pushRemote')}")
+            record("Task run: the agent committed hello.txt on its branch",
+                   os.path.exists(f"{worktree}/hello.txt") and run["commits"] >= 1 and not run["dirty"],
+                   f"commits={run['commits']} dirty={run['dirty']}")
+            record("Task run: the user's working copy did not change",
+                   git("rev-parse", "HEAD").stdout.strip() == head and git("status", "--porcelain").stdout.strip() == ""
+                   and git("symbolic-ref", "--short", "HEAD").stdout.strip() == "main"
+                   and not os.path.exists(f"{TASK_RUN_REPO}/hello.txt"))
+            thread = {}
+            if run.get("session") and os.path.exists(f"{ROOT}/threads/{run['session']}.json"):
+                thread = json.load(open(f"{ROOT}/threads/{run['session']}.json"))
+            record("Task run: the task waits on the user and links the run's thread",
+                   item.get("status") == "needs_you" and thread.get("task") == task
+                   and any(l["kind"] == "thread" and l["ref"] == run.get("session") for l in item.get("links", [])),
+                   f"status={item.get('status')} thread.task={thread.get('task')}")
+            remote_branches = git("ls-remote", "--heads", TASK_RUN_REMOTE).stdout
+            record("Task run: nothing was pushed", f"ironpet/{task}" not in remote_branches, remote_branches.strip()[:200])
+
+            call("POST", "/test/task-runs/open-pr", {"task": task})
+            opened = wait_for(lambda: task_runs()["openPR"] or None, 30) or []
+            flat = [" ".join(c) for c in opened]
+            branch_ref = f"refs/heads/ironpet/{task}"
+            record("Task run: Open PR pushes the branch to the recorded URL with hooks and fsmonitor off, and opens gh (recorded in test mode)",
+                   any(f"--git-dir={run.get('gitDir')} --work-tree=" in c
+                       and c.endswith(f"-c core.fsmonitor=false -c core.hooksPath=/dev/null push --no-verify {TASK_RUN_REMOTE} {branch_ref}:{branch_ref}")
+                       for c in flat)
+                   and any(f"pr create --web --head ironpet/{task} --base main" in c for c in flat)
+                   and f"ironpet/{task}" not in git("ls-remote", "--heads", TASK_RUN_REMOTE).stdout,
+                   f"commands={flat} error={task_runs().get('error')}")
+
+            cli_task("done", task)
+            cleaned = wait_for(lambda: (lambda r: r if r and r["cleanup"] == "removed" else None)(task_run(task)), 30)
+            record("Task run: closing the task removes its clean worktree and keeps the committed branch",
+                   bool(cleaned) and not os.path.exists(worktree)
+                   and git("show-ref", "--verify", "--quiet", f"refs/heads/ironpet/{task}").returncode == 0,
+                   f"cleanup={cleaned and cleaned['cleanup']} exists={os.path.exists(worktree)}")
+
+            second = cli_task("add", "List the files in this folder, then wait for me").get("id")
+            call("POST", "/test/task-runs/start", {"task": second, "project": TASK_RUN_REPO, "agent": TASKS_AGENT})
+            wait_for(lambda: (lambda r: r if r and r["state"] in ("running", "needs_approval") else None)(task_run(second)), 60)
+            call("POST", "/test/task-runs/stop", {"task": second})
+            stopped = task_run(second)
+            if stopped:
+                made.add(os.path.dirname(stopped["worktree"]))
+            status = next((t["status"] for t in tasks_state()["tasks"] if t["id"] == second), None)
+            record("Task run: Stop ends the run and sends the task back to the backlog",
+                   bool(stopped) and stopped["state"] == "stopped" and status == "backlog" and os.path.exists(stopped["worktree"]),
+                   f"state={stopped and stopped['state']} status={status}")
+            call("POST", "/test/task-runs/remove-copy", {"task": second})
+            cli_task("delete", second)
+            call("POST", "/test/tasks/reset")
+    finally:
+        # Only the folders this run made: another repo called "app" has its own worktrees next to them.
+        for folder in made:
+            shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(os.path.dirname(TASK_RUN_REPO), ignore_errors=True)
 
 
 # MARK: screen capture
@@ -1719,8 +1860,8 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
              "notification": scenario_notification_approval, "mcp": scenario_mcp,
              "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
              "voice": scenario_voice, "voice-key": scenario_voice_key, "meeting": scenario_meeting,
-             "meeting-system": scenario_meeting_system_audio, "tasks": scenario_tasks, "screen": scenario_screen,
-             "welcome-back": scenario_welcome_back, "brief": scenario_brief}
+             "meeting-system": scenario_meeting_system_audio, "tasks": scenario_tasks, "task-run": scenario_task_run,
+             "screen": scenario_screen, "welcome-back": scenario_welcome_back, "brief": scenario_brief}
 
 # Need MCP servers signed in with cursor-agent: "mcp" a Langfuse MCP (its write is denied, so nothing is created),
 # "sentry" a Sentry MCP. Run them by name, e.g. `python3 scripts/e2e.py mcp sentry`.
@@ -1733,7 +1874,10 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # "tasks" runs two short turns on $IRONPET_E2E_AGENT (default cursor) and puts ironpet.db back afterwards.
 # "welcome-back" posts synthetic Claude hook events and a stand-in idle time, so it runs no agent; it puts config.json and ironpet.db back.
 # "brief" starts no agent; it puts ironpet.db and automations.json back afterwards.
-OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks", "meeting", "meeting-system"}
+# "task-run" hands two tasks to $IRONPET_E2E_AGENT in a throwaway repo under /tmp, one short run and one stopped at once.
+# The agent must be one that can work on tasks: claude, codex, cursor or gemini (TaskRunner.agentsThatAsk).
+# It runs real agent turns with waits of up to five minutes. Open PR is recorded, never run; it puts ironpet.db back afterwards.
+OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks", "meeting", "meeting-system", "task-run"}
 
 if __name__ == "__main__":
     if {"-h", "--help"} & set(sys.argv[1:]):

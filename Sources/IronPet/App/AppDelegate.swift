@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Replaces the system idle time in test mode (`POST /test/presence`). Nil otherwise.
     private var testIdleSeconds: TimeInterval?
     private var brief: BriefSource?
+    private var taskRunner: TaskRunner?
     private lazy var logWindow = AutomationLogWindow(service: { [weak self] in self?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
@@ -154,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chat.onApprovalNeeded = { [weak self] approval in
             self?.announcer.approval(id: approval.id, title: approval.title, detail: approval.detail)
         }
+        chat.onFormNeeded = { [weak self] title, detail in self?.announcer.chat(title, detail: detail) }
         chat.onApprovalResolved = { [weak self] id in self?.announcer.clearApproval(id: id) }
         chat.objectWillChange
             .receive(on: RunLoop.main)
@@ -224,6 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.tasks = tasks
         setUpDueReminders(tasks)
         setUpWelcomeBack(log, tasks: tasks)
+        setUpTaskRuns(tasks, database: database)
         pet.settings = settingsModel
         pet.onSettings = { [weak self] in self?.showSettings(tab: nil) }
         pet.onScreenSettings = { [weak self] in self?.showSettings(tab: "screen") }
@@ -324,10 +327,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let service = CaptureService(store: captureStore, config: { ConfigStore.shared.config.screenCapture },
                                      rules: CaptureRules(folder: CaptureService.rulesFolder), dependencies: dependencies)
-        service.onProposals = { [weak self, weak service] proposals in
-            guard let self, let service else { return }
-            for proposal in proposals { self.showProposal(proposal, service: service) }
+        // Proposals wait in the task list as suggestions, for the Tasks tab or a reviewing agent. One info bubble tells the user how many (see offerSuggestions).
+        service.onProposals = { [weak self] proposals in
+            self?.offerSuggestions(TaskStore.shared?.suggest(capture: proposals) ?? [])
+            for proposal in proposals { self?.testControl?.recordProposal(proposal) }
         }
+        TaskStore.shared?.ignoreCapture = { [weak captureStore] fingerprint, kind in captureStore?.ignore(fingerprint: fingerprint, kind: kind) }
         service.model.$sending
             .removeDuplicates()
             .sink { [weak self] sending in self?.captureSendingChanged(sending) }
@@ -337,52 +342,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.showCaptures = { [weak self] in self?.captureInspector.show() }
         service.refreshModel()
         service.apply()
-    }
-
-    /// Shows what the agent suggested as a bubble. Add makes the task, Edit lets the user change it first, Ignore remembers not to ask again.
-    private func showProposal(_ proposal: CaptureProposal, service: CaptureService) {
-        let id = "capture-proposal:\(proposal.id)"
-        let dismiss = { [weak self] in self?.announcer.bubbles.dismiss(id) }
-        var body = proposal.title
-        if !proposal.diff.isEmpty { body += "\n" + proposal.diff.joined(separator: "\n") }
-        else if let due = proposal.due { body += "\nDue \(due)" }
-        if !proposal.quote.isEmpty { body += "\n\u{201C}\(proposal.quote)\u{201D}" }
-        announcer.bubbles.show(Bubble(
-            id: id, symbol: "checklist", tint: .blue, title: proposal.bubbleTitle, subtitle: "From your screen", body: body,
-            actions: [
-                .init(title: proposal.kind == .update ? "Update" : "Add", style: .primary) { Task { await service.accept(proposal) }; dismiss() },
-                .init(title: "Edit") { [weak self] in
-                    guard let edited = self?.editProposal(proposal) else { return }
-                    Task { await service.accept(proposal, title: edited.title, due: edited.due) }
-                    dismiss()
-                },
-                .init(title: "Ignore", style: .destructive) { service.ignore(proposal); dismiss() },
-            ]))
-        testControl?.recordProposal(proposal)
-    }
-
-    /// Asks for a new title and due date. Nil when the user cancels.
-    private func editProposal(_ proposal: CaptureProposal) -> (title: String, due: String?)? {
-        let alert = NSAlert()
-        alert.messageText = proposal.kind == .update ? "Update task" : "Add task"
-        alert.addButton(withTitle: proposal.kind == .update ? "Update" : "Add")
-        alert.addButton(withTitle: "Cancel")
-        let title = NSTextField(string: proposal.title)
-        let due = NSTextField(string: proposal.due ?? "")
-        due.placeholderString = "Due, such as 2026-11-20 (optional)"
-        let stack = NSStackView(views: [title, due])
-        stack.orientation = .vertical
-        stack.spacing = 8
-        stack.frame = NSRect(x: 0, y: 0, width: 320, height: 56)
-        title.widthAnchor.constraint(equalToConstant: 320).isActive = true
-        due.widthAnchor.constraint(equalToConstant: 320).isActive = true
-        alert.accessoryView = stack
-        NSApp.activate()
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        let text = title.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        let date = due.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (text, date.isEmpty ? nil : date)
     }
 
     /// A bubble stays up while captures are being sent to the agent, so the user always sees when anything leaves the Mac.
@@ -637,6 +596,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         meeting.prepareForQuit()
         chat.persistForRelaunch()
         chat.shutdown()
+        taskRunner?.shutdown()
         try? FileManager.default.removeItem(at: Paths.portFile)
     }
 
@@ -749,9 +709,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.captureInspector.show()
                 return self?.captureInspector.windowNumber ?? 0
             }
-            control.showProposal = { [weak self] proposal in
-                guard let self, let capture = self.capture else { return }
-                self.showProposal(proposal, service: capture)
+            control.showProposal = { proposal in
+                TaskStore.shared?.suggest(capture: [proposal])
             }
             control.buildBrief = { [weak self] kind in
                 let weekdays = self?.automations.store.automations.first { $0.action.digest == kind.rawValue }?.trigger.weekdays
@@ -942,14 +901,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         offerSuggestions(tasks.suggest(items, meeting: meeting))
     }
 
-    /// One bubble for suggestions that just arrived. Add all adds the ones it lists that are still waiting.
+    /// One info bubble for suggestions that just arrived, from a meeting, a watcher or screen capture. They wait until the Tasks tab
+    /// or a reviewing agent adds or rejects them.
     private func offerSuggestions(_ added: [TaskSuggestion]) {
-        guard !added.isEmpty, let tasks = TaskStore.shared else { return }
+        guard !added.isEmpty else { return }
         for suggestion in added { activity?.record(.taskSuggested(suggestion)) }
-        announcer.taskSuggestions(added, addAll: { [weak self] in
-            let accepted = added.filter { s in tasks.suggestions.contains(s) && (try? tasks.accept(s.id)) != nil }.count
-            self?.announcer.tasksAdded(accepted)
-        }, review: { [weak self] in self?.showTasks() })
+        announcer.taskSuggestions(added, review: { [weak self] in self?.showTasks() })
     }
 
     private func showTasks() {
@@ -1022,6 +979,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .chat: showChat()
         case .url(let url), .file(let url): NSWorkspace.shared.open(url)
         }
+    }
+
+    /// Start on a task hands it to an agent in its own worktree. Its approvals and results come through Ghost.
+    private func setUpTaskRuns(_ tasks: TaskStore, database: Database) {
+        let runner = TaskRunner(tasks: tasks, store: TaskRunStore(database: database))
+        TaskRunner.shared = runner
+        taskRunner = runner
+        runner.chatAgent = { [weak self] in self.map { ($0.chat.agent, $0.chat.model) } }
+        runner.agents = { [weak self] in self?.chat.agents ?? AgentCatalog.present() }
+        runner.sessionWorkspace = { [weak self] id in self?.store.sessions[id]?.origin.workspace }
+        if TestControl.isEnabled { runner.recordOpenPR = { TestControl.openPRCommands.append($0) } }
+        let title = { [weak tasks] (run: TaskRun) in tasks?.task(run.task)?.title ?? run.task }
+        runner.onApproval = { [weak self] run, approval in
+            self?.announcer.taskRunApproval(approval, task: title(run), openTasks: { self?.showTasks() })
+        }
+        runner.onApprovalResolved = { [weak self] id in self?.announcer.clearTaskRunApproval(id: id) }
+        let ended: (TaskRun) -> Void = { [weak self, weak runner] run in
+            self?.announcer.taskRunEnded(run, task: title(run), openTasks: { self?.showTasks() },
+                                         openPR: { Task { _ = await runner?.openPR(task: run.task) } })
+        }
+        runner.onFinished = ended
+        runner.onFailed = ended
+        runner.onPushed = { [weak self] run, remote in self?.announcer.taskRunPushed(run, remote: remote) }
+        runner.onOpenPRFailed = { [weak self] run, reason in
+            self?.announcer.taskRunOpenPRFailed(run, task: title(run), reason: reason, openTasks: { self?.showTasks() })
+        }
+
+        // Allow and Deny on a bubble or notification go to whichever owns the approval.
+        let decide = announcer.decide
+        announcer.decide = { [weak runner] id, allow in
+            if let runner, runner.hasPendingApproval(id) { runner.decide(id: id, allow: allow) } else { decide(id, allow) }
+        }
+        let changed = tasks.onChange
+        tasks.onChange = { [weak runner] id in
+            changed?(id)
+            DispatchQueue.main.async { runner?.tasksChanged(id) }
+        }
+        // A live run's thread opens in Tasks, where its state and approval are, not as a second agent in the chat.
+        chat.threadInUse = { [weak runner] id in runner?.isLive(thread: id) ?? false }
+        runner.threadOpenInChat = { [weak self] id in self?.chat.threadID == id }
+        chat.onThreadInUse = { [weak self] _ in self?.showTasks() }
+        chat.taskRunRepo = { [weak runner] copy in runner?.run(inCopy: copy)?.repo }
+        let openThread = pet.onOpenThread
+        pet.onOpenThread = { [weak self, weak runner] id in
+            if runner?.isLive(thread: id) == true {
+                self?.showTasks()
+            } else {
+                openThread?(id)
+            }
+        }
+        pet.runs = runner
+        runner.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.pet.refreshMood() }
+            .store(in: &cancellables)
+        Task { await runner.restore() }
     }
 
     private func syncMeetingPanel() {

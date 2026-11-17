@@ -13,6 +13,8 @@ final class ChatSession: ObservableObject {
             case assistant(String)
             case tool(String, ok: Bool?)
             case error(String)
+            /// A form the agent asked and the user answered or skipped.
+            case form(ElicitationRecord)
         }
         var id = UUID()
         var kind: Kind
@@ -79,6 +81,7 @@ final class ChatSession: ObservableObject {
 
     static let telegramOrigin = "telegram"
     static let automationOrigin = "automation"
+    static let taskRunOrigin = "task-run"
 
     struct Approval: Identifiable {
         let id = UUID()
@@ -86,12 +89,23 @@ final class ChatSession: ObservableObject {
         let detail: String
         /// Identical requests share one card and one decision.
         var responders: [(ApprovalDecision) -> Void]
+        /// False in a task run's thread, where two calls with the same card text can change different things: each gets
+        /// its own card and answer.
+        var shared = true
 
-        var key: String { title + "\u{0}" + detail }
+        var key: String { shared ? title + "\u{0}" + detail : id.uuidString }
 
         func respond(_ decision: ApprovalDecision) {
             responders.forEach { $0(decision) }
         }
+    }
+
+    /// A form the agent is waiting on (`elicitation/create`), with what the user has entered so far.
+    struct PendingForm: Identifiable {
+        let id = UUID()
+        let form: ElicitationForm
+        var answers: ElicitationAnswers = [:]
+        let respond: (ElicitationReply) -> Void
     }
 
     @Published var items: [Item] = []
@@ -126,6 +140,7 @@ final class ChatSession: ObservableObject {
     }
     @Published private(set) var state: State = .idle
     @Published private(set) var approvals: [Approval] = []
+    @Published private(set) var forms: [PendingForm] = []
     @Published private(set) var history: [ChatThread] = ThreadStore.recent()
     @Published var attachments: [URL] = [] {
         didSet { if persists { UserDefaults.standard.set(attachments.map(\.path), forKey: Self.attachmentsKey) } }
@@ -203,6 +218,8 @@ final class ChatSession: ObservableObject {
     /// A new approval card while the chat is hidden; answered from a notification.
     var onApprovalNeeded: ((Approval) -> Void)?
     var onApprovalResolved: ((UUID) -> Void)?
+    /// A new form while the chat is hidden: a title and the form's message.
+    var onFormNeeded: ((String, String) -> Void)?
     var isVisible = false
     /// Reports progress of turns that came from Telegram, with the Telegram chat id.
     var onTelegram: ((Int64, TelegramEvent) -> Void)?
@@ -226,13 +243,63 @@ final class ChatSession: ObservableObject {
     private var lastTurn: ACPTurn?
     /// Replaces the agent turn in tests: receives the turn and the callback that delivers its events.
     var turnRunner: ((ACPTurn, @escaping (AgentEvent) -> Void) async -> Void)?
-    private var toolItems: [String: UUID] = [:]
-    /// A tool row's own summary, before the count of its subagent's tool calls is added.
-    private var toolBase: [String: String] = [:]
-    /// The tool calls each subagent has made, by the subagent's tool-use id, in the order they started.
-    private var subagentCalls: [String: [(id: String, ok: Bool?)]] = [:]
-    /// The reply item that late updates extend, so a later result starts its own item.
-    private var backgroundReply: UUID?
+    private var transcript = ChatTranscript()
+    /// Kept so continuing a task run's thread in the chat still links it to the task.
+    private var threadTask: String?
+    /// Where task runs keep their copies. A test points it elsewhere.
+    var taskWorktrees = Paths.worktrees
+
+    /// A chat in a task run's copy, its thread or a new chat left in that folder: the run's rules hold here too (every
+    /// change asks, Auto or not, push and PR commands are refused, and only `taskRunAgents` get a turn). Nil elsewhere.
+    var taskRunScope: RunScope? {
+        if let cached = scopeCache, cached.workspace == workspace, cached.worktrees == taskWorktrees { return cached.scope }
+        let scope = workspace.flatMap { workspace -> RunScope? in
+            let root = RunScope.resolve(taskWorktrees.path)
+            return RunScope.resolve(workspace.path).hasPrefix(root + "/") ? RunScope(root: workspace) : nil
+        }
+        scopeCache = (workspace, taskWorktrees, scope)
+        return scope
+    }
+
+    /// `taskRunScope` for one folder: views read it on every render, and working it out follows symlinks on disk.
+    private var scopeCache: (workspace: URL?, worktrees: URL, scope: RunScope?)?
+
+    /// The agents that may work in a task run's copy, as for Start. A test adds its scripted agent.
+    var taskRunAgents = TaskRunner.agentsThatAsk
+
+    /// In a task run's copy, an agent that is not known to ask before each change gets no turn: it could change the
+    /// copy unasked. Says so in the chat and returns true.
+    private func refusesRunAgent(telegram: Int64? = nil) -> Bool {
+        guard taskRunScope != nil, !taskRunAgents.contains(agent.id) else { return false }
+        let message = "\(agent.name) cannot work in a task run's copy: only \(TaskRunner.askingAgentNames) are known to ask before each change. Pick one of them, or choose another folder."
+        items.removeAll { if case .error(message) = $0.kind { return true } else { return false } }
+        items.append(Item(kind: .error(message)))
+        if let telegram { onTelegram?(telegram, .failed(message)) }
+        return true
+    }
+
+    /// The remotes of the open chat's copy, read once per copy before its first turn.
+    private var runRemotes: (path: String, names: [String])?
+    /// The run scope the current backend's approvals were judged with.
+    private var acpScope: RunScope?
+
+    /// The push block an agent in a task run's copy gets. Until the copy's remotes are read it has only the URL rewrites.
+    var agentEnvironment: [String: String] {
+        guard let scope = taskRunScope else { return [:] }
+        return GitWorktree.pushBlockEnvironment(remotes: runRemotes?.path == scope.root.path ? runRemotes?.names ?? [] : [])
+    }
+
+    /// The main working copy of the run whose copy a folder is, so its remotes are read there and not through the
+    /// copy's `.git`. Found by folder, so a new chat left in a copy gets them too.
+    var taskRunRepo: (URL) -> URL? = { _ in nil }
+
+    /// Reads the open copy's remotes off the main thread, once per copy.
+    func loadRunRemotes() async {
+        guard let scope = taskRunScope, runRemotes?.path != scope.root.path else { return }
+        var names: [String] = []
+        if let repo = taskRunRepo(scope.root), let git = GitWorktree.locate() { names = await git.remotes(repo) }
+        if taskRunScope == scope { runRemotes = (scope.root.path, names) }
+    }
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
     private var decided: [String: Bool] = [:]
     let voice = VoiceController()
@@ -304,7 +371,7 @@ final class ChatSession: ObservableObject {
     }
 
     var mood: PetMood? {
-        if !approvals.isEmpty { return .needsInput }
+        if !approvals.isEmpty || !forms.isEmpty { return .needsInput }
         switch state {
         case .running: return .working
         case .done: return .done
@@ -318,7 +385,7 @@ final class ChatSession: ObservableObject {
     /// Called when the chat opens. The session and folder stay as they are. Only when no folder was ever chosen does
     /// the picker show.
     func prepareForShow() {
-        if state == .done || state == .failed, approvals.isEmpty { state = .idle }
+        if state == .done || state == .failed, approvals.isEmpty, forms.isEmpty { state = .idle }
         if workspace == nil { needsWorkspace = true }
     }
 
@@ -376,7 +443,7 @@ final class ChatSession: ObservableObject {
     }
 
     /// Sample conversations for `--render-previews`.
-    enum Preview { case done, approval, markdown }
+    enum Preview { case done, approval, markdown, form }
 
     func loadPreview(_ preview: Preview) {
         workspace = URL(fileURLWithPath: "/Users/you/code/demo-app")
@@ -436,8 +503,29 @@ final class ChatSession: ObservableObject {
             lastRunDuration = 14
         case .markdown:
             break
+        case .form:
+            state = .running
+            activity = "Waiting for you"
+            runStartedAt = Date().addingTimeInterval(-9)
+            if let form = ElicitationForm.parse(Self.sampleForm) {
+                forms = [PendingForm(form: form, answers: ["question_0": .one("Swift Testing"), "question_1": .many(["lint"])], respond: { _ in })]
+            }
         }
     }
+
+    private static let sampleForm: JSON = [
+        "mode": "form", "message": "Please answer the following questions.",
+        "requestedSchema": ["type": "object", "properties": [
+            "question_0": ["type": "string", "title": "Test runner", "description": "Which test runner should the new tests use?",
+                           "oneOf": [["const": "XCTest", "title": "XCTest", "description": "Already used by every test in this repo"],
+                                     ["const": "Swift Testing", "title": "Swift Testing", "description": "Newer macros, needs Xcode 16"]]],
+            "question_0_custom": ["type": "string", "title": "Other", "description": "Type your own answer, or add a note to the option you chose above (optional)."],
+            "question_1": ["type": "array", "title": "Checks", "description": "Which checks should run before the commit?",
+                           "items": ["anyOf": [["const": "lint", "title": "Lint"], ["const": "build", "title": "Build", "description": "swift build"],
+                                               ["const": "test", "title": "Tests", "description": "swift test, about two minutes"]]]],
+            "question_1_custom": ["type": "string", "title": "Other", "description": "Type your own answer to add to your selection above (optional)."],
+        ] as JSON],
+    ]
 
     func attach(_ screenshot: URL) {
         attachments.append(screenshot)
@@ -497,11 +585,21 @@ final class ChatSession: ObservableObject {
         replyingTo = nil
         items = []
         threadID = nil
+        threadTask = nil
         state = .idle
         lastRunDuration = nil
     }
 
+    /// True while a task run's agent owns the thread. Opening it then calls `onThreadInUse` instead.
+    var threadInUse: (String) -> Bool = { _ in false }
+    var onThreadInUse: ((ChatThread) -> Void)?
+
     func open(_ thread: ChatThread) {
+        if threadInUse(thread.id) {
+            ChatLog.note("thread \(thread.id) not opened: a task run is using it")
+            onThreadInUse?(thread)
+            return
+        }
         stop()
         shutdownAgent()
         apply(thread, reason: "opened from history")
@@ -513,6 +611,7 @@ final class ChatSession: ObservableObject {
         replyingTo = nil
         items = thread.items
         threadID = thread.id
+        threadTask = thread.task
         state = .idle
         let url = URL(fileURLWithPath: thread.workspace)
         workspace = url
@@ -527,7 +626,7 @@ final class ChatSession: ObservableObject {
         }.first ?? "Chat"
         let title = firstPrompt.count > 60 ? String(firstPrompt.prefix(57)) + "…" : firstPrompt
         ThreadStore.save(ChatThread(id: threadID, title: title, workspace: workspace.path, updatedAt: Date(),
-                                    items: items, agent: agent.id))
+                                    items: items, agent: agent.id, task: threadTask))
         history = ThreadStore.recent()
     }
 
@@ -563,6 +662,7 @@ final class ChatSession: ObservableObject {
             needsWorkspace = true
             return false
         }
+        if refusesRunAgent(telegram: telegram) { return false }
         if telegram != nil || automation != nil, state == .done || state == .failed { state = .idle }
         if prompt.isEmpty { prompt = telegram == nil ? "Help me with what's on my screen." : "Help me with the attached file." }
         let origin = telegram != nil ? Self.telegramOrigin : automation != nil ? Self.automationOrigin : nil
@@ -594,9 +694,12 @@ final class ChatSession: ObservableObject {
             return
         }
         if agent.id == "cursor", Config.load().config.integrations.shareMCPSignIns { MCPAuthSharing.prepare(workspace: turn.workspace) }
-        let backend = acp?.agent == agent ? acp! : makeBackend()
         Task { [weak self] in
-            await backend.runTurn(turn) { event in self?.handle(event, turn: id) }
+            await self?.loadRunRemotes()
+            guard let self, self.turnID == id else { return }
+            let reuse = self.acp?.agent == self.agent && self.acp?.extraEnvironment == self.agentEnvironment && self.acpScope == self.taskRunScope
+            let backend = reuse ? self.acp! : self.makeBackend()
+            await backend.runTurn(turn) { [weak self] event in self?.handle(event, turn: id) }
         }
     }
 
@@ -734,7 +837,12 @@ final class ChatSession: ObservableObject {
         acp?.shutdown()
         let backend = ACPBackend(agent: agent)
         backend.usageFeature = .chat
-        backend.onPermission = { [weak self] call, respond in self?.handlePermission(call, respond: respond) }
+        backend.extraEnvironment = agentEnvironment
+        let scope = taskRunScope
+        acpScope = scope
+        backend.requiresAskingMode = scope != nil
+        backend.onPermission = { [weak self] call, respond in self?.handlePermission(call, scope: scope, respond: respond) }
+        backend.onElicitation = { [weak self] form, respond in self?.handleElicitation(form, respond: respond) }
         backend.onBackground = { [weak self] event in self?.handleBackground(event) }
         acp = backend
         return backend
@@ -760,6 +868,7 @@ final class ChatSession: ObservableObject {
             if let chat = telegramChat { onTelegram?(chat, .approvalDecided(id: approval.id, outcome: .ended)) }
         }
         approvals = []
+        cancelForms()
         activity = nil
         runStartedAt = nil
         if state == .running { state = .idle }
@@ -807,19 +916,65 @@ final class ChatSession: ObservableObject {
         if let chat = telegramChat { onTelegram?(chat, .approvalDecided(id: id, outcome: allow ? .allowed : .denied)) }
     }
 
+    /// Shows the agent's `elicitation/create` form as a card. The reply goes out when the user submits or skips.
+    func handleElicitation(_ form: ElicitationForm, respond: @escaping (ElicitationReply) -> Void) {
+        let pending = PendingForm(form: form, respond: respond)
+        forms.append(pending)
+        if !isVisible {
+            onFormNeeded?("\(ConfigStore.shared.config.pet.name) has a question for you", String(form.message.prefix(240)))
+        }
+    }
+
+    func setAnswer(form id: UUID, field: String, _ value: ElicitationValue?) {
+        guard let index = forms.firstIndex(where: { $0.id == id }) else { return }
+        forms[index].answers[field] = value
+    }
+
+    func submitForm(_ id: UUID) {
+        guard let pending = forms.first(where: { $0.id == id }), pending.form.canSubmit(pending.answers) else { return }
+        finishForm(pending, reply: .accept(pending.form.content(pending.answers)),
+                   record: ElicitationRecord(message: pending.form.message, skipped: false, lines: pending.form.lines(pending.answers)))
+    }
+
+    func skipForm(_ id: UUID) {
+        guard let pending = forms.first(where: { $0.id == id }) else { return }
+        finishForm(pending, reply: .decline, record: ElicitationRecord(message: pending.form.message, skipped: true, lines: []))
+    }
+
+    private func finishForm(_ pending: PendingForm, reply: ElicitationReply, record: ElicitationRecord) {
+        forms.removeAll { $0.id == pending.id }
+        items.append(Item(kind: .form(record)))
+        pending.respond(reply)
+    }
+
+    /// The turn stopped or ended with forms open. The agent aborts the tool call that asked.
+    private func cancelForms() {
+        let open = forms
+        forms = []
+        open.forEach { $0.respond(.cancel) }
+    }
+
     /// Answers the agent's `session/request_permission`: either straight away or through an approval card.
     func handlePermission(_ call: ACPToolCall, respond: @escaping (ApprovalDecision) -> Void) {
-        switch ApprovalRules.policy(for: call, auto: autoMode) {
+        handlePermission(call, scope: taskRunScope, respond: respond)
+    }
+
+    /// `scope` is the run scope of the agent process that asks, fixed when its backend was made.
+    private func handlePermission(_ call: ACPToolCall, scope: RunScope?, respond: @escaping (ApprovalDecision) -> Void) {
+        switch ApprovalRules.policy(for: call, auto: autoMode, run: scope) {
         case .allow:
             respond(.allow)
         case .ask(let title, let detail):
-            ask(title: title, detail: detail, respond: respond)
+            ask(title: title, detail: detail, shared: scope == nil, respond: respond)
+        case .refuse(let message):
+            respond(.deny(message))
         }
     }
 
     func retryAfterFix() {
         guard let turn = lastTurn, !isRunning else { return }
         items.removeAll { if case .error = $0.kind { return true } else { return false } }
+        if refusesRunAgent() { return }
         run(turn)
     }
 
@@ -863,16 +1018,8 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    private static func presentTense(_ summary: String) -> String {
-        for (past, present) in [("Ran ", "Running "), ("Edited ", "Editing "), ("Read ", "Reading "),
-                                ("Deleted ", "Deleting "), ("Searched ", "Searching ")] where summary.hasPrefix(past) {
-            return present + summary.dropFirst(past.count)
-        }
-        return summary
-    }
-
-    private func ask(title: String, detail: String, respond: @escaping (ApprovalDecision) -> Void) {
-        let approval = Approval(title: title, detail: detail, responders: [respond])
+    private func ask(title: String, detail: String, shared: Bool = true, respond: @escaping (ApprovalDecision) -> Void) {
+        let approval = Approval(title: title, detail: detail, responders: [respond], shared: shared)
         if let previous = decided[approval.key] { return respond(previous ? .allow : .deny()) }
         if let index = approvals.firstIndex(where: { $0.key == approval.key }) {
             approvals[index].responders.append(respond)
@@ -946,59 +1093,12 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    /// Text and tool items. Outside a running turn, text opens a new item instead of extending the last reply.
     private func applyTranscript(_ event: AgentEvent) {
-        switch event {
-        case .assistant(let text):
-            if isRunning { activity = "Writing" }
-            if case .assistant(let previous) = items.last?.kind, isRunning || items.last?.id == backgroundReply {
-                items[items.count - 1].kind = .assistant(previous + text)
-            } else {
-                let item = Item(kind: .assistant(text))
-                backgroundReply = isRunning ? nil : item.id
-                items.append(item)
-            }
-        case .toolStarted(let id, let summary):
-            if isRunning { activity = Self.presentTense(summary) }
-            let item = Item(kind: .tool(summary, ok: nil))
-            toolBase[id] = summary
-            toolItems[id] = item.id
-            items.append(item)
-        case .toolUpdated(let id, let summary):
-            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
-               case .tool(_, let ok) = items[index].kind {
-                toolBase[id] = summary
-                items[index].kind = .tool(composedSummary(id), ok: ok)
-            }
-        case .subagentTool(let parent, let id, let summary, let ok):
-            // A subagent's calls count on its own row. They never open an item, so the reply's text keeps one message.
-            if isRunning, ok == nil { activity = Self.presentTense(summary) }
-            var calls = subagentCalls[parent] ?? []
-            if let index = calls.firstIndex(where: { $0.id == id }) { calls[index].ok = ok } else { calls.append((id, ok)) }
-            subagentCalls[parent] = calls
-            if let itemID = toolItems[parent], let index = items.firstIndex(where: { $0.id == itemID }),
-               case .tool(_, let parentOK) = items[index].kind {
-                items[index].kind = .tool(composedSummary(parent), ok: parentOK)
-            }
-            if !isRunning { saveThread() }
-        case .toolFinished(let id, let ok):
-            if isRunning { activity = "Thinking" }
-            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
-               case .tool(let summary, _) = items[index].kind {
-                items[index].kind = .tool(summary, ok: ok)
-            }
-            if !isRunning { saveThread() }
-        default:
-            break
-        }
-    }
-
-    /// A tool row's summary with its subagent's tool-call count, e.g. "Run research · 3 tool calls".
-    private func composedSummary(_ id: String) -> String {
-        let base = toolBase[id] ?? ""
-        let count = subagentCalls[id]?.count ?? 0
-        guard count > 0 else { return base }
-        return "\(base) · \(count) tool call\(count == 1 ? "" : "s")"
+        var next = items
+        let outcome = transcript.apply(event, to: &next, running: isRunning)
+        if outcome.changed { items = next }
+        if let next = outcome.activity { activity = next }
+        if outcome.save { saveThread() }
     }
 
     private func endTurn() {
@@ -1012,5 +1112,6 @@ final class ChatSession: ObservableObject {
             if let chat = telegramChat { onTelegram?(chat, .approvalDecided(id: approval.id, outcome: .ended)) }
         }
         approvals = []
+        cancelForms()
     }
 }

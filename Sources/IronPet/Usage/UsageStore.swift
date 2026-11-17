@@ -4,7 +4,7 @@ import Foundation
 /// (Band agents, Claude Code or Codex sessions reported through hooks, automation shell commands) has no feature here, so it
 /// cannot be recorded.
 enum UsageFeature: String, CaseIterable, Codable {
-    case chat, automations, meetingSummary, voiceTranscription, meetingTranscription
+    case chat, automations, meetingSummary, voiceTranscription, meetingTranscription, taskRuns
 
     var title: String {
         switch self {
@@ -13,6 +13,7 @@ enum UsageFeature: String, CaseIterable, Codable {
         case .meetingSummary: return "Meeting summaries"
         case .voiceTranscription: return "Voice transcription"
         case .meetingTranscription: return "Meeting transcription"
+        case .taskRuns: return "Task runs"
         }
     }
 

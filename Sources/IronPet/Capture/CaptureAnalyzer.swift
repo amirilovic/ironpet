@@ -18,6 +18,8 @@ struct CaptureProposal: Identifiable, Equatable {
     var quote: String
     /// For an update: the fields that change, as "field: old -> new".
     var diff: [String]
+    /// The send log entry of the run that made it.
+    var sendLog: Int64? = nil
 
     var bubbleTitle: String {
         switch kind {
@@ -244,7 +246,11 @@ final class CaptureAnalyzer {
         case .success(let answer):
             store.markSent(ids, at: now)
             // The agent looked tasks up itself, so check its answer against the list as it is now, done tasks included.
-            let proposals = Self.proposals(from: answer, items: batch, tasks: await taskList.all(), store: store)
+            let proposals = Self.proposals(from: answer, items: batch, tasks: await taskList.all(), store: store).map { proposal -> CaptureProposal in
+                var proposal = proposal
+                proposal.sendLog = logId
+                return proposal
+            }
             if let logId { store.updateSendOutcome(id: logId, outcome: "\(report.summary), sent; \(proposals.count) suggestion\(proposals.count == 1 ? "" : "s")") }
             if !proposals.isEmpty { onProposals(proposals) }
             return proposals
