@@ -43,6 +43,12 @@ enum IronPetSection: String, CaseIterable, Identifiable {
         return sections[digit - 1]
     }
 
+    /// The tooltip of a sidebar row or rail icon: the name and its ⌘N shortcut.
+    func hint(in sections: [IronPetSection]) -> String {
+        guard let index = sections.firstIndex(of: self), index < 9 else { return title }
+        return "\(title) (⌘\(index + 1))"
+    }
+
     /// The sections that show what a bubble would announce, so bubbles wait while one is open. The others leave them
     /// visible, so an approval is not missed while reading a transcript or editing an automation.
     var hidesBubbles: Bool { [.chat, .agents, .alerts, .tasks, .actions].contains(self) }
@@ -60,7 +66,24 @@ enum IronPetSection: String, CaseIterable, Identifiable {
 
 @MainActor
 final class IronPetWindowModel: ObservableObject {
+    static let sidebarCollapsedKey = "ironpetSidebarCollapsed"
+    /// Width of the full sidebar and of the icon rail. The rail is as wide as the traffic lights above it.
+    static let sidebarWidth: CGFloat = 190
+    static let railWidth: CGFloat = 72
+
     @Published var section: IronPetSection = .chat
+    /// True when the sidebar shows only the section icons. Saved, so it survives closing the window and restarting.
+    @Published var sidebarCollapsed: Bool {
+        didSet { defaults.set(sidebarCollapsed, forKey: Self.sidebarCollapsedKey) }
+    }
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        sidebarCollapsed = defaults.bool(forKey: Self.sidebarCollapsedKey)
+    }
+
+    func toggleSidebar() { sidebarCollapsed.toggle() }
 }
 
 /// The one ironpet window: chat, agents, alerts, tasks, transcripts, actions and automations in a floating
@@ -174,12 +197,21 @@ final class IronPetPanel: NSPanel {
             revealFind()
             return true
         }
-        if flags == .command, isKeyWindow,
-           let target = IronPetSection.forShortcut(event.charactersIgnoringModifiers, in: sidebarSections) {
+        if isKeyWindow, runSidebarShortcut(flags: flags, characters: event.charactersIgnoringModifiers) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// ⌃⌘S collapses or expands the sidebar; ⌘1 to ⌘9 select the Nth row, in either state. Returns whether it handled the key.
+    func runSidebarShortcut(flags: NSEvent.ModifierFlags, characters: String?) -> Bool {
+        if flags == [.command, .control], characters == "s" {
+            model.toggleSidebar()
+            return true
+        }
+        if flags == .command, let target = IronPetSection.forShortcut(characters, in: sidebarSections) {
             model.section = target
             return true
         }
-        return super.performKeyEquivalent(with: event)
+        return false
     }
 
     /// On Chat, Esc stops a running turn first, like the stop button; only an idle chat closes.
@@ -315,7 +347,7 @@ struct IronPetWindowView: View {
         ZStack {
             ChatBackdrop()
             HStack(spacing: 0) {
-                sidebar
+                sidebarColumn
                 Divider()
                 detail.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -326,13 +358,40 @@ struct IronPetWindowView: View {
         IronPetSection.shown(chat: chat != nil, transcripts: meetings != nil, automations: settings != nil)
     }
 
+    private var collapsed: Bool { model.sidebarCollapsed }
+
+    /// The full sidebar or the icon rail, one glass column whose width animates between the two.
+    private var sidebarColumn: some View {
+        ZStack {
+            if collapsed { rail.transition(.opacity) } else { sidebar.transition(.opacity) }
+        }
+        .frame(width: collapsed ? IronPetWindowModel.railWidth : IronPetWindowModel.sidebarWidth)
+        .clipped()
+        // The whole column, insets included, is glass over the window background: a half-strength material, so the pattern stays visible through it.
+        .background { Rectangle().fill(.ultraThinMaterial).opacity(IronPetGlass.strength) }
+        .animation(.easeInOut(duration: 0.2), value: collapsed)
+    }
+
+    private var toggleButton: some View {
+        Button { model.toggleSidebar() } label: {
+            Image(systemName: "sidebar.left").font(.system(size: 14)).frame(width: 28, height: 22).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(collapsed ? "Show sidebar (⌃⌘S)" : "Hide sidebar (⌃⌘S)")
+        .accessibilityLabel(collapsed ? "Show sidebar" : "Hide sidebar")
+    }
+
     private var sidebar: some View {
         List(selection: Binding(get: { model.section }, set: { if let section = $0 { model.section = section } })) {
             ForEach(shown) { row($0) }
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: 22) }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            // The traffic lights sit at the left of this strip, the toggle at the right.
+            HStack { Spacer(); toggleButton }.padding(.horizontal, 10).frame(height: 28, alignment: .top)
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button(action: actions.onSettings) {
                 Label("Settings", systemImage: "gearshape")
@@ -345,9 +404,53 @@ struct IronPetWindowView: View {
             .padding(.vertical, 10)
             .help("Open ironpet Settings (⌘,)")
         }
-        .frame(width: 190)
-        // The whole column, insets included, is glass over the window background: a half-strength material, so the pattern stays visible through it.
-        .background { Rectangle().fill(.ultraThinMaterial).opacity(IronPetGlass.strength) }
+    }
+
+    /// Only the section icons, in the sidebar's order, under the traffic lights.
+    private var rail: some View {
+        VStack(spacing: 4) {
+            toggleButton.padding(.top, 28)
+            ForEach(shown) { section in
+                Button { model.section = section } label: {
+                    Image(systemName: section.symbol)
+                        .font(.system(size: 16))
+                        .frame(width: 44, height: 34)
+                        .background {
+                            if model.section == section {
+                                RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.28))
+                            }
+                        }
+                        .overlay(alignment: .topTrailing) { railBadge(count(section)) }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(model.section == section ? Color.accentColor : Color.primary)
+                .help(shortcutHint(section))
+                .accessibilityLabel(section.title)
+            }
+            Spacer(minLength: 0)
+            Button(action: actions.onSettings) {
+                Image(systemName: "gearshape").font(.system(size: 16)).frame(width: 44, height: 34).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Open ironpet Settings (⌘,)")
+            .accessibilityLabel("Settings")
+            .padding(.bottom, 10)
+        }
+        .padding(.top, 4)
+    }
+
+    @ViewBuilder private func railBadge(_ count: Int) -> some View {
+        if count > 0 {
+            Text(count > 99 ? "99+" : "\(count)")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+                .frame(minWidth: 14, minHeight: 14)
+                .background(Capsule().fill(Color.accentColor))
+                .offset(x: 2, y: -2)
+        }
     }
 
     private func row(_ section: IronPetSection) -> some View {
@@ -357,10 +460,7 @@ struct IronPetWindowView: View {
             .help(shortcutHint(section))
     }
 
-    private func shortcutHint(_ section: IronPetSection) -> String {
-        guard let index = shown.firstIndex(of: section), index < 9 else { return section.title }
-        return "\(section.title) (⌘\(index + 1))"
-    }
+    private func shortcutHint(_ section: IronPetSection) -> String { section.hint(in: shown) }
 
     private func count(_ section: IronPetSection) -> Int {
         switch section {

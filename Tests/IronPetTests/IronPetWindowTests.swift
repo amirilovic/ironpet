@@ -197,7 +197,7 @@ final class IronPetWindowTests: XCTestCase {
         var config = ConfigStore.shared.config
         config.chat.background = background
         ConfigStore.shared.usePreview(config)
-        let model = IronPetWindowModel()
+        let model = IronPetWindowModel(defaults: freshDefaults())
         model.section = section
         let store = SessionStore()
         let view = IronPetWindowView(model: model, store: store, signals: SignalStore(), tasks: tasks(), chat: nil,
@@ -277,7 +277,7 @@ final class IronPetWindowTests: XCTestCase {
         var config = ConfigStore.shared.config
         config.chat.background = background
         ConfigStore.shared.usePreview(config)
-        let model = IronPetWindowModel()
+        let model = IronPetWindowModel(defaults: freshDefaults())
         model.section = .alerts
         let view = IronPetWindowView(model: model, store: SessionStore(), signals: SignalStore(), tasks: tasks(), chat: nil,
                                      meetings: nil, actions: .none)
@@ -321,5 +321,114 @@ final class IronPetWindowTests: XCTestCase {
             XCTAssertGreaterThan(differing(plain, patterned, in: region), Int(region.width * region.height) / 2,
                                  "the header does not show the chosen background in \(scheme.rawValue)")
         }
+    }
+
+    // MARK: Collapsible sidebar
+
+    private func freshDefaults() -> UserDefaults {
+        let name = "ironpet-sidebar-test-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        return defaults
+    }
+
+    func testTheSidebarStartsExpandedAndRemembersCollapsing() {
+        let defaults = freshDefaults()
+        let model = IronPetWindowModel(defaults: defaults)
+        XCTAssertFalse(model.sidebarCollapsed)
+        model.toggleSidebar()
+        XCTAssertTrue(model.sidebarCollapsed)
+        // A new model, as after closing the app and starting it again, reads the saved state.
+        XCTAssertTrue(IronPetWindowModel(defaults: defaults).sidebarCollapsed)
+        model.toggleSidebar()
+        XCTAssertFalse(IronPetWindowModel(defaults: defaults).sidebarCollapsed)
+    }
+
+    func testCollapsingSurvivesClosingAndReopeningTheWindow() {
+        let defaults = freshDefaults()
+        let model = IronPetWindowModel(defaults: defaults)
+        let panel = IronPetPanel(model: model, session: nil, content: EmptyView())
+        XCTAssertTrue(panel.runSidebarShortcut(flags: [.command, .control], characters: "s"))
+        panel.orderFront(nil)
+        panel.close()
+        XCTAssertTrue(model.sidebarCollapsed)
+    }
+
+    func testControlCommandSTogglesAndCommandDigitsWorkInBothStates() {
+        let model = IronPetWindowModel(defaults: freshDefaults())
+        let panel = IronPetPanel(model: model, session: nil, content: EmptyView())
+        for collapsed in [false, true] {
+            XCTAssertEqual(model.sidebarCollapsed, collapsed)
+            XCTAssertTrue(panel.runSidebarShortcut(flags: .command, characters: "3"))
+            XCTAssertEqual(model.section, .tasks, "⌘3 does not pick the third row when collapsed == \(collapsed)")
+            XCTAssertTrue(panel.runSidebarShortcut(flags: [.command, .control], characters: "s"))
+        }
+        XCTAssertFalse(model.sidebarCollapsed)
+        XCTAssertFalse(panel.runSidebarShortcut(flags: .control, characters: "s"))
+        XCTAssertFalse(panel.runSidebarShortcut(flags: .command, characters: "s"))
+        XCTAssertFalse(model.sidebarCollapsed)
+    }
+
+    func testControlCommandSDoesNothingWhileTheWindowIsNotKey() {
+        let model = IronPetWindowModel(defaults: freshDefaults())
+        let panel = IronPetPanel(model: model, session: nil, content: EmptyView())
+        XCTAssertFalse(panel.performKeyEquivalent(with: keyEvent("s", flags: [.command, .control])))
+        XCTAssertFalse(model.sidebarCollapsed)
+    }
+
+    func testRailTooltipsNameTheSectionAndItsShortcut() {
+        let all = IronPetSection.shown(chat: true, transcripts: true, automations: true)
+        XCTAssertEqual(all.map { $0.hint(in: all) },
+                       ["Chat (⌘1)", "Agents (⌘2)", "Alerts (⌘3)", "Tasks (⌘4)", "Transcripts (⌘5)", "Actions (⌘6)", "Automations (⌘7)"])
+        let noChat = IronPetSection.shown(chat: false, transcripts: true, automations: true)
+        XCTAssertEqual(IronPetSection.agents.hint(in: noChat), "Agents (⌘1)")
+    }
+
+    private func renderCollapsed(_ collapsed: Bool, alerts: Int = 0, background: String = ChatBackground.defaultID,
+                                 scheme: ColorScheme = .light) -> NSBitmapImageRep? {
+        var config = ConfigStore.shared.config
+        config.chat.background = background
+        ConfigStore.shared.usePreview(config)
+        let model = IronPetWindowModel(defaults: freshDefaults())
+        model.sidebarCollapsed = collapsed
+        model.section = .agents
+        let view = IronPetWindowView(model: model, store: sessions(.done), signals: signals(alerts), tasks: tasks(), chat: nil,
+                                     meetings: nil, actions: .none)
+        return bitmap(of: view, scheme: scheme)
+    }
+
+    func testTheRailIsNarrowAndTheBackgroundShowsThroughIt() throws {
+        let saved = ConfigStore.shared.config
+        defer { ConfigStore.shared.usePreview(saved) }
+        for scheme in [ColorScheme.light, .dark] {
+            let plain = try XCTUnwrap(renderCollapsed(true, background: ChatBackground.defaultID, scheme: scheme))
+            let patterned = try XCTUnwrap(renderCollapsed(true, background: "paws", scheme: scheme))
+            let scale = CGFloat(plain.pixelsWide) / IronPetPanel.minimumSize.width
+            // The blank lower part of the rail, below the icons and above Settings.
+            let rail = CGRect(x: 4 * scale, y: 340 * scale, width: 64 * scale, height: 100 * scale)
+            XCTAssertGreaterThan(differing(plain, patterned, in: rail), Int(rail.width * rail.height) / 2,
+                                 "the rail does not show the chosen background in \(scheme)")
+            // Right of the 72 pt rail the page already shows the pattern, where the 190 pt sidebar would have covered it.
+            let page = CGRect(x: 80 * scale, y: 340 * scale, width: 100 * scale, height: 100 * scale)
+            XCTAssertGreaterThan(differing(plain, patterned, in: page), 1000)
+        }
+    }
+
+    func testTheRailDrawsABadgeOnlyForSectionsWithACount() throws {
+        let none = try XCTUnwrap(renderCollapsed(true, alerts: 0))
+        let some = try XCTUnwrap(renderCollapsed(true, alerts: 3))
+        let scale = CGFloat(none.pixelsWide) / IronPetPanel.minimumSize.width
+        // Alerts is the third icon; the badge sits on its top right corner, inside the 72 pt rail.
+        let corner = CGRect(x: 40 * scale, y: 0, width: 32 * scale, height: IronPetPanel.minimumSize.height * scale)
+        XCTAssertGreaterThan(differing(none, some, in: corner), 20)
+    }
+
+    func testCollapsedAndExpandedSidebarsDrawDifferently() throws {
+        let expanded = try XCTUnwrap(renderCollapsed(false))
+        let rail = try XCTUnwrap(renderCollapsed(true))
+        let scale = CGFloat(rail.pixelsWide) / IronPetPanel.minimumSize.width
+        // Where the labels were: x 72 to 190 pt, now page.
+        let labels = CGRect(x: 80 * scale, y: 40 * scale, width: 100 * scale, height: 200 * scale)
+        XCTAssertGreaterThan(differing(expanded, rail, in: labels), 100)
     }
 }
