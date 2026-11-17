@@ -11,11 +11,16 @@ import Vision
 final class AXCaptureSource: CaptureSource {
     static let ownBundleId = Bundle.main.bundleIdentifier ?? "com.ironpet.app"
 
-    private static let notifications: [(String, CaptureEventKind)] = [
+    /// HIServices keeps the pointer it receives in `AXObserverAddNotification` and uses it again later, when it re-registers after a
+    /// remote process changes. A `String as CFString` made inside the call is freed right after it returns, so these are bridged once
+    /// and held here for the life of the process. Always pass these instances, never a fresh bridge.
+    static let notifications: [(name: CFString, kind: CaptureEventKind)] = ([
         ("AXFocusedUIElementChanged", .focusChanged), ("AXFocusedWindowChanged", .focusChanged), ("AXMainWindowChanged", .focusChanged),
         ("AXTitleChanged", .titleChanged), ("AXValueChanged", .valueChanged), ("AXSelectedChildrenChanged", .selectionChanged),
         ("AXSelectedRowsChanged", .selectionChanged), ("AXLoadComplete", .titleChanged), ("AXLiveRegionChanged", .liveRegionChanged),
-    ]
+    ] as [(String, CaptureEventKind)]).map { (name: $0.0 as NSString as CFString, kind: $0.1) }
+
+    private static let focusedElementChanged = notifications[0].name
 
     /// Passed to the C callback through `refcon`.
     private final class Context {
@@ -34,6 +39,7 @@ final class AXCaptureSource: CaptureSource {
     private var observer: AXObserver?
     private var observerSource: CFRunLoopSource?
     private var context: Unmanaged<Context>?
+    private var observerApp: pid_t?
     private var activation: NSObjectProtocol?
     private var webBundles: [String: Bool] = [:]
 
@@ -98,19 +104,20 @@ final class AXCaptureSource: CaptureSource {
         let callback: AXObserverCallback = { _, element, notification, refcon in
             guard let refcon else { return }
             let context = Unmanaged<Context>.fromOpaque(refcon).takeUnretainedValue()
-            let kind = AXCaptureSource.notifications.first { $0.0 == notification as String }?.1 ?? .focusChanged
-            let button = kind == .focusChanged && notification as String == "AXFocusedUIElementChanged" ? AXCaptureSource.buttonTitle(element) : nil
+            let kind = AXCaptureSource.notifications.first { CFEqual($0.name, notification) }?.kind ?? .focusChanged
+            let button = kind == .focusChanged && CFEqual(notification, AXCaptureSource.focusedElementChanged) ? AXCaptureSource.buttonTitle(element) : nil
             context.emit(CaptureEvent(app: context.app, kind: kind, button: button))
         }
         guard AXObserverCreate(app.pid, callback, &created) == .success, let observer = created else { return }
         let element = AXUIElementCreateApplication(app.pid)
         let context = Unmanaged.passRetained(Context(app: app, emit: emit))
-        for (name, _) in Self.notifications { AXObserverAddNotification(observer, element, name as CFString, context.toOpaque()) }
+        for entry in Self.notifications { AXObserverAddNotification(observer, element, entry.name, context.toOpaque()) }
         let source = AXObserverGetRunLoopSource(observer)
         CFRunLoopAddSource(loop, source, .defaultMode)
         CFRunLoopWakeUp(loop)
         lock.lock()
         self.observer = observer
+        observerApp = app.pid
         observerSource = source
         self.context = context
         lock.unlock()
@@ -119,12 +126,21 @@ final class AXCaptureSource: CaptureSource {
 
     private func detach() {
         lock.lock()
-        let loop = runLoop, source = observerSource, context = self.context
-        observer = nil
+        let loop = runLoop, source = observerSource, context = self.context, observer = self.observer, observerApp = self.observerApp
+        self.observer = nil
+        self.observerApp = nil
         observerSource = nil
         self.context = nil
         lock.unlock()
-        if let loop, let source { CFRunLoopRemoveSource(loop, source, .defaultMode) }
+        // Order matters: stop HIServices from calling back, then drop the refcon it was given.
+        if let observer, let app = observerApp {
+            let element = AXUIElementCreateApplication(app)
+            for entry in Self.notifications { AXObserverRemoveNotification(observer, element, entry.name) }
+        }
+        if let source {
+            CFRunLoopSourceInvalidate(source)
+            if let loop { CFRunLoopRemoveSource(loop, source, .defaultMode) }
+        }
         context?.release()
     }
 
