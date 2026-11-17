@@ -64,6 +64,35 @@ def record(name, ok, detail=""):
     print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
 
 
+def skip(name, reason):
+    """A check this Mac's setup cannot exercise. Counted as passed, so the total stays comparable between Macs."""
+    results.append((name, True, f"skipped: {reason}"))
+    print(f"SKIP  {name}  {reason}", flush=True)
+
+
+def cursor_config_dir():
+    if os.environ.get("CURSOR_CONFIG_DIR", "").strip():
+        return os.environ["CURSOR_CONFIG_DIR"]
+    if os.environ.get("XDG_CONFIG_HOME", "").strip():
+        return f"{os.environ['XDG_CONFIG_HOME']}/cursor"
+    return f"{HOME}/.cursor"
+
+
+def cursor_runs_unasked():
+    """Why `cursor-agent acp` runs any command without sending ironpet a permission request on this Mac, or None:
+    approvalMode other than allowlist, or sandbox.mode enabled, in cli-config.json (AgentPermissionSettings)."""
+    path = f"{cursor_config_dir()}/cli-config.json"
+    try:
+        config = json.load(open(path))
+    except (OSError, ValueError):
+        return None
+    if config.get("approvalMode", "allowlist") != "allowlist":
+        return f"{path} has approvalMode {config['approvalMode']!r}, so Cursor runs commands without asking"
+    if (config.get("sandbox") or {}).get("mode") == "enabled":
+        return f"{path} has sandbox.mode 'enabled', so Cursor runs commands in its sandbox without asking"
+    return None
+
+
 def relaunch(test_mode, env=None):
     subprocess.run(["pkill", "-f", f"{APP}/Contents/MacOS/IronPet"])
     time.sleep(1.5)
@@ -105,6 +134,9 @@ def fresh_workspace():
 # Scenarios -------------------------------------------------------------------------------------
 
 def approval_flow(name, backend, prompt, allow, expect_title, check_file, should_exist):
+    unasked = cursor_runs_unasked() if backend == "cursor" else None
+    if unasked:
+        return skip(name, unasked)
     fresh_workspace()
     run_chat(prompt, backend=backend)
     c = wait_approval_or_end()
@@ -445,8 +477,10 @@ def scenario_summaries():
 
 
 def scenario_notification_approval():
+    if cursor_runs_unasked():
+        return skip("Allow from the notification button", cursor_runs_unasked())
     fresh_workspace()
-    run_chat("Run exactly this shell command: touch from-notification.txt . Then reply OK.")
+    run_chat("Run exactly this shell command: touch from-notification.txt . Then reply OK.", backend="cursor")
     c = wait_approval_or_end()
     if not c or not c["approvals"]:
         return record("Allow from the notification button", False, "no approval appeared")
@@ -1381,10 +1415,12 @@ def scenario_tasks():
             added = {}
         listed = subprocess.run([f"{APP}/Contents/MacOS/IronPet", "tasks", "list"], capture_output=True, text=True, timeout=20, env=env)
         task = next((t for t in tasks_state()["tasks"] if t["title"] == "Review PR 42"), None)
-        record("Tasks: `IronPet tasks add` creates a cli task with its URL",
-               cli.returncode == 0 and added.get("source") == "cli" and bool(task) and task["source"] == "cli"
+        # The origin's kind becomes the task's source, and its ref and reason the source reference.
+        record("Tasks: `IronPet tasks add` creates a task with its origin and URL",
+               cli.returncode == 0 and added.get("source") == "pr" and bool(task) and task["source"] == "pr"
+               and task.get("source_ref", {}).get("ref") == "https://example.com/pr/42"
                and any(l["kind"] == "url" and l["ref"] == "https://example.com/pr/42" for l in task.get("links", [])),
-               f"exit={cli.returncode} out={cli.stdout.strip()[:120]!r} err={cli.stderr.strip()[:120]!r}")
+               f"exit={cli.returncode} source={task and task['source']} source_ref={task and task.get('source_ref')} err={cli.stderr.strip()[:120]!r}")
         record("Tasks: `IronPet tasks list` shows it", listed.returncode == 0 and "Review PR 42" in listed.stdout,
                f"exit={listed.returncode} err={listed.stderr.strip()[:120]!r}")
 
@@ -1442,7 +1478,12 @@ def cli_task(*args):
     try:
         return json.loads(out.stdout)
     except ValueError:
-        return {}
+        return {"error": out.stderr.strip()}
+
+
+# `tasks add` needs an origin and `tasks done` a note (TaskStore.call).
+E2E_ORIGIN = ("--origin-kind", "user", "--origin-ref", "e2e", "--reason", "Added by scripts/e2e.py")
+E2E_DONE_NOTE = ("--note", "Closed by scripts/e2e.py")
 
 
 def scenario_task_run():
@@ -1464,11 +1505,20 @@ def scenario_task_run():
     try:
         with PreservedTasks():
             call("POST", "/test/tasks/reset")
-            task = cli_task("add", "Create hello.txt containing the word hi, then commit it").get("id")
+            added = cli_task("add", "Create hello.txt containing the word hi, then commit it", *E2E_ORIGIN)
+            task = added.get("id")
             if not task or not task_runs().get("ok"):
-                return record("Task run: test endpoints answer", False, f"task={task} runs={task_runs()}")
+                return record("Task run: test endpoints answer", False, f"task={task} error={added.get('error')} runs={task_runs()}")
 
+            unasked = cursor_runs_unasked() if TASKS_AGENT == "cursor" else None
             call("POST", "/test/task-runs/start", {"task": task, "project": TASK_RUN_REPO, "agent": TASKS_AGENT})
+            if unasked:
+                refused = wait_for(lambda: task_runs().get("error"), 15) or ""
+                record("Task run: Start refuses Cursor while its own settings run commands without asking",
+                       ("approvalMode" in refused or "sandbox.mode" in refused) and not task_run(task)
+                       and git("worktree", "list").stdout.strip().count("\n") == 0,
+                       f"error={refused!r} run={task_run(task)}")
+                return skip("Task run: the agent works on the task", f"{unasked}. Run with IRONPET_E2E_AGENT=claude, or set approvalMode to allowlist")
             cards = []
 
             def settled():
@@ -1528,14 +1578,14 @@ def scenario_task_run():
                    and f"ironpet/{task}" not in git("ls-remote", "--heads", TASK_RUN_REMOTE).stdout,
                    f"commands={flat} error={task_runs().get('error')}")
 
-            cli_task("done", task)
+            cli_task("done", task, *E2E_DONE_NOTE)
             cleaned = wait_for(lambda: (lambda r: r if r and r["cleanup"] == "removed" else None)(task_run(task)), 30)
             record("Task run: closing the task removes its clean worktree and keeps the committed branch",
                    bool(cleaned) and not os.path.exists(worktree)
                    and git("show-ref", "--verify", "--quiet", f"refs/heads/ironpet/{task}").returncode == 0,
                    f"cleanup={cleaned and cleaned['cleanup']} exists={os.path.exists(worktree)}")
 
-            second = cli_task("add", "List the files in this folder, then wait for me").get("id")
+            second = cli_task("add", "List the files in this folder, then wait for me", *E2E_ORIGIN).get("id")
             call("POST", "/test/task-runs/start", {"task": second, "project": TASK_RUN_REPO, "agent": TASKS_AGENT})
             wait_for(lambda: (lambda r: r if r and r["state"] in ("running", "needs_approval") else None)(task_run(second)), 60)
             call("POST", "/test/task-runs/stop", {"task": second})
@@ -1793,8 +1843,8 @@ def scenario_brief():
         record("Brief: Today is not in the sidebar while both are off", not state.get("todayShown"), f"window={state}")
 
         yesterday = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86_400))
-        _, late = ironpet_cli("tasks", "add", "E2E overdue task", "--due", yesterday)
-        _, ask = ironpet_cli("tasks", "add", "E2E needs you task", "--status", "needs_you")
+        _, late = ironpet_cli("tasks", "add", "E2E overdue task", "--due", yesterday, *E2E_ORIGIN)
+        _, ask = ironpet_cli("tasks", "add", "E2E needs you task", "--status", "needs_you", *E2E_ORIGIN)
         late_id, ask_id = (late or {}).get("id", ""), (ask or {}).get("id", "")
         os.makedirs(meeting, exist_ok=True)
         open(f"{meeting}/summary.md", "w").write(BRIEF_SUMMARY)
@@ -1831,7 +1881,7 @@ def scenario_brief():
         opened = call("POST", "/test/today/open", {"kind": "brief", "item": f"meeting:{folder}:0"})
         record("Brief: a meeting row opens Transcripts", opened.get("ok") and opened.get("section") == "transcripts", f"window={opened}")
 
-        ironpet_cli("tasks", "done", late_id)
+        ironpet_cli("tasks", "done", late_id, *E2E_DONE_NOTE)
         recap = call("POST", "/test/digest", {"kind": "recap"})
         closed = [i["target"].get("id") for i in brief_items(recap, "closed")]
         held = [i["target"].get("id") for i in brief_items(recap, "meetings")]
