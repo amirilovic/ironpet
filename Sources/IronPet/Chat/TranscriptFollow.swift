@@ -41,3 +41,24 @@ struct TranscriptFollow {
         if !pinned && newContent { newBelow = true }
     }
 }
+
+/// Last-resort repair for a transcript viewport that shows no rows although there is content to show.
+///
+/// A lazy stack can leave the offset past the rows it has laid out, so the viewport is empty until the reader scrolls.
+/// This fires only when nothing is visible and the content is taller than the viewport, and at most once for each
+/// content height, so one layout pass cannot trigger a chain of scrolls. Any visible row re-arms it.
+struct BlankViewportGuard {
+    private var firedAtHeight: CGFloat?
+
+    mutating func rowsVisible() { firedAtHeight = nil }
+
+    mutating func shouldReanchor(visibleRows: Int, hasRows: Bool, contentHeight: CGFloat, viewportHeight: CGFloat) -> Bool {
+        if visibleRows > 0 {
+            rowsVisible()
+            return false
+        }
+        guard hasRows, viewportHeight > 0, contentHeight > viewportHeight, firedAtHeight != contentHeight else { return false }
+        firedAtHeight = contentHeight
+        return true
+    }
+}

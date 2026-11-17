@@ -217,3 +217,29 @@ final class TranscriptFollowTests: XCTestCase {
         panel.close()
     }
 }
+
+
+final class BlankViewportGuardTests: XCTestCase {
+    func testNeverFiresWhileARowIsVisible() {
+        var guardrail = BlankViewportGuard()
+        XCTAssertFalse(guardrail.shouldReanchor(visibleRows: 1, hasRows: true, contentHeight: 5000, viewportHeight: 600))
+        XCTAssertFalse(guardrail.shouldReanchor(visibleRows: 3, hasRows: true, contentHeight: 9000, viewportHeight: 600))
+    }
+
+    func testFiresOnlyWhenEmptyWithTallContent() {
+        var guardrail = BlankViewportGuard()
+        XCTAssertFalse(guardrail.shouldReanchor(visibleRows: 0, hasRows: false, contentHeight: 5000, viewportHeight: 600))
+        XCTAssertFalse(guardrail.shouldReanchor(visibleRows: 0, hasRows: true, contentHeight: 400, viewportHeight: 600))
+        XCTAssertFalse(guardrail.shouldReanchor(visibleRows: 0, hasRows: true, contentHeight: 5000, viewportHeight: 0))
+        XCTAssertTrue(guardrail.shouldReanchor(visibleRows: 0, hasRows: true, contentHeight: 5000, viewportHeight: 600))
+    }
+
+    func testFiresOncePerContentHeightAndRearmsWhenRowsReturn() {
+        var guardrail = BlankViewportGuard()
+        XCTAssertTrue(guardrail.shouldReanchor(visibleRows: 0, hasRows: true, contentHeight: 5000, viewportHeight: 600))
+        XCTAssertFalse(guardrail.shouldReanchor(visibleRows: 0, hasRows: true, contentHeight: 5000, viewportHeight: 600))
+        XCTAssertTrue(guardrail.shouldReanchor(visibleRows: 0, hasRows: true, contentHeight: 5200, viewportHeight: 600))
+        guardrail.rowsVisible()
+        XCTAssertTrue(guardrail.shouldReanchor(visibleRows: 0, hasRows: true, contentHeight: 5200, viewportHeight: 600))
+    }
+}
