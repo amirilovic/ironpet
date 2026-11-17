@@ -541,6 +541,23 @@ final class BriefModelTests: XCTestCase {
 final class BriefBubbleTests: XCTestCase {
     private typealias F = BriefFixture
 
+    private func bubble(_ id: String, expires: Bool = true) -> Bubble {
+        Bubble(id: id, symbol: "bell", tint: .accentColor, title: id, expires: expires ? Date().addingTimeInterval(600) : nil)
+    }
+
+    func testAFullStackPassesOverTheBriefWhenMakingRoom() {
+        let store = BubbleStore()
+        for id in ["digest:brief", "a", "b", "c", "d"] { store.show(bubble(id)) }
+        XCTAssertEqual(store.bubbles.map(\.id), ["digest:brief", "b", "c", "d"])
+    }
+
+    func testTheBriefGoesWhenNothingElseCanAndTheNewBubbleStays() {
+        let store = BubbleStore()
+        for id in ["digest:brief", "digest:recap", "approval-1", "approval-2"] { store.show(bubble(id, expires: id.hasPrefix("digest:"))) }
+        store.show(bubble("new"))
+        XCTAssertEqual(store.bubbles.map(\.id), ["digest:recap", "approval-1", "approval-2", "new"])
+    }
+
     func testTheBubbleShowsTheLinesAndStaysUntilTheEndOfTheDay() {
         let now = F.tuesday(hour: 9)
         let brief = Brief(kind: .brief, window: DateInterval(start: now, end: now),
