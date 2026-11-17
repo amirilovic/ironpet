@@ -9,7 +9,7 @@ enum PasteIntake {
         case field
         /// An image or image file on the pasteboard becomes a PNG attachment.
         case image
-        /// Text over the paste limits (Settings > Chat) becomes a `pasted-text.txt` attachment.
+        /// Text over the paste limits (Settings > General) becomes a `pasted-text.txt` attachment.
         case largeText(String)
     }
 

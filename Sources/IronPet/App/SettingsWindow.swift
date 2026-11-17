@@ -770,7 +770,8 @@ private struct NumberField: View {
 
     private func commit() {
         let digits = text.filter(\.isNumber)
-        let parsed = Int(digits) ?? value
+        // Digits too long for an Int still mean "too big", so clamp to the top instead of reverting.
+        let parsed = digits.isEmpty ? value : (Int(digits) ?? range.upperBound)
         let clamped = min(range.upperBound, max(range.lowerBound, parsed))
         if clamped != value { value = clamped }
         text = String(clamped)

@@ -52,7 +52,7 @@ Please use GitHub's **Report a vulnerability** button on the repository's Securi
 | `threads/` | Saved chats (agent, ACP session id, folder and the visible transcript) |
 | `runtime/` | Bun, only if you allowed the download |
 | `memory/` | Markdown notes Ghost keeps about you and your projects (you can edit them) |
-| `screenshots/` | Screen captures you attached to chats, and `attachments/` with files you attached. Text pasted into the chat input over 64 KB is saved there as `pasted-text.txt` and attached instead of staying in the input |
+| `screenshots/` | Screen captures you attached to chats, and `attachments/` with files you attached. Text pasted into the chat over 4,000 characters or 60 lines (both adjustable in Settings > General) is saved there as `pasted-text.txt` and attached instead of staying in the input. A draft over 64 KB is handled the same way |
 | `scratch/` | Working folder for chats that aren't about a project |
 | `meetings/` | One folder per meeting transcript: the recorded audio as WAV chunks, `transcript.md`, `summary.md`. Kept until you delete them |
 | `ironpet.db` | Automation state and logs, usage numbers, and your tasks: titles, notes, links, history, and suggestions from meetings and watchers. Done tasks are deleted after `tasks.keepDoneDays` (30 by default) |

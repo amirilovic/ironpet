@@ -37,7 +37,7 @@ enum DraftPolicy {
     }
 }
 
-/// When a paste becomes an attachment: over `chars` characters or over `lines` lines. Both come from Settings > Chat.
+/// When a paste becomes an attachment: over `chars` characters or over `lines` lines. Both come from Settings > General.
 struct PasteLimits: Equatable {
     var chars: Int
     var lines: Int
