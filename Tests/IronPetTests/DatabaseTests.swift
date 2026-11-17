@@ -136,7 +136,9 @@ final class DatabaseUnavailableTests: XCTestCase {
     private func makeNewerFile() throws -> Data {
         let tasks = Database.Migration(1, "t", sql: "CREATE TABLE t(x);")
         var db: Database? = try Database(path: file, migrations: [tasks])
-        try db?.write { try $0.script("INSERT INTO t VALUES(1); PRAGMA user_version = 9999") }
+        // One above the newest registered migration, so adding a migration cannot make this file look current.
+        let newer = (AppMigrations.all.map(\.version).max() ?? 0) + 1
+        try db?.write { try $0.script("INSERT INTO t VALUES(1); PRAGMA user_version = \(newer)") }
         db = nil
         // Back to a plain file with no -wal or -shm next to it.
         let out = Process()
