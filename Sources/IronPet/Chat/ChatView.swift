@@ -114,26 +114,9 @@ struct ChatView: View {
 
     // MARK: Header
 
+    /// The same header as every section: the avatar and the pet's name as the title, the chat's controls on the right.
     private var header: some View {
-        GlassGroup {
-            HStack(spacing: 10) {
-                HStack(spacing: 8) {
-                    PetAvatar(size: 30)
-                    Text(ConfigStore.shared.config.pet.name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(1)
-                }
-                .padding(.leading, 4)
-                .padding(.trailing, 16)
-                .padding(.vertical, 4)
-                .chromeGlass(in: Capsule())
-                Spacer(minLength: 8)
-                headerControls
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
+        PageHeader(title: ConfigStore.shared.config.pet.name, leading: { PetAvatar(size: 22) }, trailing: { headerControls })
     }
 
     private var headerControls: some View {
@@ -148,8 +131,6 @@ struct ChatView: View {
             }
             settingsButton
         }
-        .padding(4)
-        .chromeGlass(in: Capsule())
     }
 
     /// Project, agent, model and dictation live behind one button, so the header and composer stay clear.
