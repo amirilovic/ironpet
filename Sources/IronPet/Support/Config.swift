@@ -135,6 +135,20 @@ struct Config: Codable, Equatable {
         var enabled = true
     }
 
+    /// Start on a task hands it to an agent in its own git worktree. Nothing runs until the user clicks Start.
+    struct TaskRuns: Codable, Equatable {
+        /// Shows the Start button on open tasks.
+        var enabled = true
+        /// Runs that may work at the same time. Start is disabled past it.
+        var maxConcurrent = 2
+        /// A turn still running after this many minutes is stopped and marked failed.
+        var maxMinutes: Double = 120
+        /// Catalog id of the agent for runs. Nil follows the chat's agent.
+        var agent: String?
+        /// Model id for runs. Nil follows the chat's model.
+        var model: String?
+    }
+
     struct Integrations: Codable, Equatable {
         /// Status hooks in `~/.cursor/hooks.json`.
         var cursorHooks = false
@@ -215,6 +229,7 @@ struct Config: Codable, Equatable {
     var skills = Skills()
     var tasks = Tasks()
     var welcomeBack = WelcomeBack()
+    var taskRuns = TaskRuns()
     var voice = Voice()
     var meetings = Meetings()
     var telegram = Telegram()
@@ -271,6 +286,10 @@ struct Config: Codable, Equatable {
         c.reminders.snoozeMinutes = max(1, c.reminders.snoozeMinutes)
         c.automations.logRetentionDays = min(365, max(1, c.automations.logRetentionDays))
         c.tasks.keepDoneDays = min(365, max(1, c.tasks.keepDoneDays))
+        c.taskRuns.maxConcurrent = min(5, max(1, c.taskRuns.maxConcurrent))
+        c.taskRuns.maxMinutes = min(720, max(10, c.taskRuns.maxMinutes))
+        if c.taskRuns.agent?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.taskRuns.agent = nil }
+        if c.taskRuns.model?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.taskRuns.model = nil }
         c.voice.baseUrl = c.voice.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         c.voice.model = c.voice.model.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.meetings.summaryModel?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.meetings.summaryModel = nil }

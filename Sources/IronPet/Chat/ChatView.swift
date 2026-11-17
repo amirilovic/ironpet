@@ -129,7 +129,7 @@ struct ChatView: View {
 
     private var headerControls: some View {
         HStack(spacing: 2) {
-            if session.autoMode {
+            if session.autoMode, session.taskRunScope == nil {
                 // The switch lives in settings; this stays so it is always obvious the agent runs unattended.
                 Image(systemName: "bolt.fill")
                     .font(.system(size: 11))
@@ -158,6 +158,7 @@ struct ChatView: View {
                 if !session.models.isEmpty { SettingsRow("Model", last: true) { modelMenu } }
             }
             SettingsCard {
+                let inRun = session.taskRunScope != nil
                 SettingsRow("Auto") {
                     Toggle("", isOn: $session.autoMode)
                         .labelsHidden()
@@ -165,8 +166,10 @@ struct ChatView: View {
                         .controlSize(.small)
                         .tint(.orange)
                         .pointerCursor()
+                        .disabled(inRun)
                 }
-                .help("Let the agent edit and run commands without asking (destructive commands still ask)")
+                .help(inRun ? "This chat is a task run's copy, where the agent asks before every change. Auto does not apply here"
+                            : "Let the agent edit and run commands without asking (destructive commands still ask)")
                 SettingsRow("Send voice notes automatically", last: true) {
                     Toggle("", isOn: $session.sendAfterDictation)
                         .labelsHidden()
@@ -1226,10 +1229,15 @@ private struct UserBubble: View {
                     Image(systemName: "clock.arrow.circlepath").font(.system(size: 9))
                     Text("Automation").font(.system(size: 10))
                 }
+                if source == ChatSession.taskRunOrigin {
+                    Image(systemName: "checklist").font(.system(size: 9))
+                    Text("Task").font(.system(size: 10))
+                }
                 if let date { Text(timeFormatter.string(from: date)).font(.system(size: 10)) }
             }
             .foregroundStyle(.tertiary)
-            .help(source == ChatSession.telegramOrigin ? "Sent from Telegram" : source == ChatSession.automationOrigin ? "Sent by an automation" : "")
+            .help(source == ChatSession.telegramOrigin ? "Sent from Telegram" : source == ChatSession.automationOrigin ? "Sent by an automation"
+                  : source == ChatSession.taskRunOrigin ? "Sent when the task was handed to the agent" : "")
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 50)

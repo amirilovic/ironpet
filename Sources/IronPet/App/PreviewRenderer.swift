@@ -68,6 +68,7 @@ enum PreviewRenderer {
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks-light", scheme: .light)
         let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
         render(list(sessions, tasks: noTasks, on: .tasks), to: dir, "tasks-empty")
+        renderTaskRuns(sessions: sessions, signals: signals, chat: chat, atlas: atlas, to: dir)
 
         // Today, from the same sample stores plus a meeting on the last weekday and a few agent turns from today.
         let briefSource = BriefSource(tasks: tasks, sessions: sessions, signals: signals, meetingsRoot: sampleBriefMeetings(),
@@ -399,6 +400,75 @@ enum PreviewRenderer {
             try? WAV.encode(tone).write(to: root.appendingPathComponent(first.0).appendingPathComponent("mic-001.wav"))
         }
         return root
+    }
+
+    /// Tasks handed to agents: a row per run state, the same runs in Agents, the chat's approval strip, Start, and the
+    /// bubble a finished run shows.
+    private static func renderTaskRuns(sessions: SessionStore, signals: SignalStore, chat: ChatSession, atlas: Atlas?, to dir: URL) {
+        let (tasks, runner) = sampleTaskRuns()
+        func window(_ section: IronPetSection, store: SessionStore = sessions) -> some View {
+            let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
+            model.section = section
+            return IronPetWindowView(model: model, store: store, signals: signals, tasks: tasks, chat: chat, runs: runner, actions: .none)
+                .frame(width: 780, height: 640).panel()
+        }
+        render(window(.tasks), to: dir, "tasks-runs")
+        render(window(.tasks), to: dir, "tasks-runs-light", scheme: .light)
+        render(window(.agents), to: dir, "agents-runs")
+        // The offscreen snapshot cannot draw the chat, so the strip is captured in a real window.
+        let chatModel = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
+        chatModel.section = .chat
+        renderWindow(model: chatModel, session: chat, content: IronPetWindowView(model: chatModel, store: sessions, signals: signals,
+                                                                                 tasks: tasks, chat: chat, runs: runner, actions: .none),
+                     to: dir, "chat-task-approval", scheme: .dark)
+        if let task = tasks.tasks.first(where: { runner.run(for: $0.id) == nil && $0.status == .backlog }) {
+            render(TaskStartPopover(task: task, runner: runner, onDone: {}).panel(), to: dir, "task-run-start")
+        }
+        if let finished = runner.runs.values.first(where: { $0.state == .finished }) {
+            let bubble = Announcer.taskRunEndedBubble(finished, task: tasks.task(finished.task)?.title ?? "", openTasks: {}, openPR: {})
+            render(PetScene(atlas: atlas, row: .jumping, frame: 0, bubbles: [bubble]), to: dir, "task-run-finished")
+        }
+    }
+
+    private static func sampleTaskRuns() -> (TaskStore, TaskRunner) {
+        let tasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
+        let project = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-projects/web-app")
+        try? FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        func add(_ title: String, _ status: TaskStatus, notes: String = "", links: [TaskLink] = []) -> String {
+            (try? tasks.create(title: title, notes: notes, status: status, source: .chat, links: links, by: "agent:mcp").id) ?? title
+        }
+        let approval = add("Fix the flaky login test", .needsYou)
+        let running = add("Add dark mode to the settings page", .inProgress)
+        let finished = add("Bump the API client to v4", .needsYou)
+        let failed = add("Speed up the CI cache", .needsYou)
+        _ = add("Write the release notes for 2.4", .backlog, notes: "Cover the rate limiter and the new onboarding.",
+                links: [TaskLink(kind: .file, ref: project.path, label: "web-app")])
+        let started = Date().addingTimeInterval(-640)
+        func run(_ task: String, _ state: TaskRun.State, agent: String = "claude") -> TaskRun {
+            TaskRun(task: task, repo: URL(fileURLWithPath: "/Users/you/code/web-app"),
+                    worktree: URL(fileURLWithPath: "/Users/you/.ironpet/worktrees/web-app-3f2a91c0/\(task)"), branch: "ironpet/\(task)",
+                    base: "9c1e2d4", baseBranch: "main", agent: agent, model: nil, session: "s-\(task)", state: state,
+                    started: started, ended: nil, summary: nil, error: nil)
+        }
+        var waiting = run(approval, .needsApproval)
+        waiting.approval = .init(id: UUID(), title: "Run this command?", detail: "npm test -- login --runInBand")
+        var working = run(running, .running, agent: "cursor")
+        working.activity = "Editing src/settings/Theme.tsx"
+        var done = run(finished, .finished)
+        done.summary = "Updated the client to v4 and fixed the three call sites that used the old pagination."
+        done.commits = 2
+        var broken = run(failed, .failed, agent: "codex")
+        broken.error = "Stopped after 120 minutes, the limit in taskRuns.maxMinutes."
+        broken.commits = 1
+        broken.dirty = true
+        let runner = TaskRunner(tasks: tasks, store: TaskRunStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database))
+        runner.ironpetRoot = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-root")
+        // Room for one more, so the backlog row shows Start enabled.
+        runner.config = { var settings = Config.TaskRuns(); settings.maxConcurrent = 3; return settings }
+        runner.agents = { AgentCatalog.all.filter { ["claude", "cursor", "codex"].contains($0.id) } }
+        runner.chatAgent = { AgentCatalog.agent(id: "claude").map { ($0, nil) } }
+        runner.loadPreview([waiting, working, done, broken])
+        return (tasks, runner)
     }
 
     private static func sampleTasks() -> TaskStore {

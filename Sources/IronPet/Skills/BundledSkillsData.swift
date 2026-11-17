@@ -208,6 +208,10 @@ Call `tasks_list` first so you update an existing task instead of adding a dupli
 - `backlog`: only for work that needs a user decision before it can start. If no decision is needed, start the work and use `in_progress`.
 - `done`: finished or no longer needed. Use `tasks_close` with a note of what happened. Do not delete finished work.
 
+## Tasks handed to an agent
+
+The user can press Start on a task to hand it to an agent. That agent works in its own git worktree on a branch named `ironpet/<task id>`, and its changes to the task are by `task-run` in the history. While it runs, leave the task's status alone: ironpet moves it. When it ends, ironpet sets `needs_you` and the user reviews the branch and opens the pull request. In a review, a `needs_you` task with a thread link labelled "Agent run" waits for the user to review that branch. Do not close it until its pull request is merged or the user says so.
+
 ## Waiting on someone else
 
 `waiting_on` names the person the user is waiting on, for example a colleague who owns a meeting action item ("Ana", or "Them" when the summary had no name). Set it with `tasks_create` or `tasks_update` (`IronPet tasks add … --waiting-on Ana`). These tasks show under "Waiting on others" and never count as needing the user, whatever their status. When the other person delivers and the next step is the user's, set `waiting_on` to null and move the task to `needs_you` or close it. In a review, check whether the thing arrived (a PR, a doc, an email the user forwards) before reminding the user to chase it.
