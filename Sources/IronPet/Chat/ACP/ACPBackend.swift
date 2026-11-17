@@ -124,6 +124,9 @@ final class ACPBackend {
     /// Called when the agent asks to run something. Answer once.
     var onPermission: ((ACPToolCall, @escaping (ApprovalDecision) -> Void) -> Void)?
 
+    /// Called when the agent asks the user a question as a form (`elicitation/create`). Answer once.
+    var onElicitation: ((ElicitationForm, @escaping (ElicitationReply) -> Void) -> Void)?
+
     private var client: ACPClient?
     private var transport: ACPProcessTransport?
     private var sessionReady = false
@@ -136,6 +139,7 @@ final class ACPBackend {
     private var tools: [String: ACPToolCall] = [:]
     private var finishedTools: Set<String> = []
     private var pendingPermissions: [UUID: (Result<JSON, ACPError>) -> Void] = [:]
+    private var pendingElicitations: [UUID: (Result<JSON, ACPError>) -> Void] = [:]
     private var models: [ChatModel] = []
     private var currentModel: String?
     private var modelConfigID: String?
@@ -219,6 +223,7 @@ final class ACPBackend {
         let waiting = pendingPermissions
         pendingPermissions = [:]
         waiting.values.forEach { $0(.success(["outcome": ["outcome": "cancelled"]])) }
+        cancelElicitations()
         // With no prompt in flight there is no turn to cancel. Claude Code's adapter answers `session/cancel` with an
         // interrupt that also stops the background subagents, so an idle chat must not send one.
         guard promptInFlight else { return }
@@ -233,7 +238,15 @@ final class ACPBackend {
         }
     }
 
+    /// Answers every open form with `cancel`, which makes the agent abort the tool call that asked.
+    private func cancelElicitations() {
+        let waiting = pendingElicitations
+        pendingElicitations = [:]
+        waiting.values.forEach { $0(.success(ElicitationReply.cancel.json)) }
+    }
+
     func shutdown() {
+        cancelElicitations()
         client?.close()
         client = nil
         transport = nil
@@ -280,7 +293,9 @@ final class ACPBackend {
     /// subagent runs, unless the client says it takes subagent traffic after the response.
     nonisolated static func clientCapabilities(for agent: ACPAgent) -> JSON {
         guard agent.id == "claude" else { return JSON() }
-        return ["_meta": ["jetbrains": ["air": ["version": 1, "capabilities": ["backgroundSubagents"]]]]]
+        // Form elicitation turns on the adapter's AskUserQuestion tool. URL elicitation stays off.
+        return ["_meta": ["jetbrains": ["air": ["version": 1, "capabilities": ["backgroundSubagents"]]]],
+                "elicitation": ["form": JSON()]]
     }
 
     private func describe(_ error: Error) -> String {
@@ -575,6 +590,7 @@ final class ACPBackend {
     }
 
     private func agentRequest(_ method: String, _ params: JSON, _ respond: @escaping (Result<JSON, ACPError>) -> Void) {
+        if method == "elicitation/create" { return elicit(params, respond) }
         guard method == "session/request_permission" else {
             return respond(.failure(ACPError(code: -32601, message: "ironpet does not provide \(method)")))
         }
@@ -592,6 +608,20 @@ final class ACPBackend {
         onPermission(call) { [weak self] decision in
             guard let self, let pending = self.pendingPermissions.removeValue(forKey: token) else { return }
             pending(.success(Self.outcome(decision, options: options)))
+        }
+    }
+
+    private func elicit(_ params: JSON, _ respond: @escaping (Result<JSON, ACPError>) -> Void) {
+        guard let form = ElicitationForm.parse(params) else {
+            ChatLog.note("declined an elicitation ironpet cannot draw: mode \(params["mode"] as? String ?? "none")")
+            return respond(.success(ElicitationReply.decline.json))
+        }
+        guard let onElicitation else { return respond(.success(ElicitationReply.decline.json)) }
+        let token = UUID()
+        pendingElicitations[token] = respond
+        onElicitation(form) { [weak self] reply in
+            guard let self, let pending = self.pendingElicitations.removeValue(forKey: token) else { return }
+            pending(.success(reply.json))
         }
     }
 

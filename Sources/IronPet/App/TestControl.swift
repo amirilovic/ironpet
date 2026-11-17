@@ -582,6 +582,7 @@ final class TestControl {
             case .assistant(let text): return ["kind": "assistant", "text": text]
             case .tool(let summary, let ok): return ["kind": "tool", "text": summary, "ok": ok.map { $0 ? "yes" : "no" } ?? "running"]
             case .error(let text): return ["kind": "error", "text": text]
+            case .form(let record): return ["kind": "form", "text": record.message, "skipped": record.skipped ? "yes" : "no"]
             }
         }
         let state: String = switch chat.state {

@@ -13,6 +13,8 @@ final class ChatSession: ObservableObject {
             case assistant(String)
             case tool(String, ok: Bool?)
             case error(String)
+            /// A form the agent asked and the user answered or skipped.
+            case form(ElicitationRecord)
         }
         var id = UUID()
         var kind: Kind
@@ -94,6 +96,14 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    /// A form the agent is waiting on (`elicitation/create`), with what the user has entered so far.
+    struct PendingForm: Identifiable {
+        let id = UUID()
+        let form: ElicitationForm
+        var answers: ElicitationAnswers = [:]
+        let respond: (ElicitationReply) -> Void
+    }
+
     @Published var items: [Item] = []
     /// The Cmd-F find bar. `findFocusTick` counts presses so a second Cmd-F refocuses the field.
     @Published var findOpen = false
@@ -126,6 +136,7 @@ final class ChatSession: ObservableObject {
     }
     @Published private(set) var state: State = .idle
     @Published private(set) var approvals: [Approval] = []
+    @Published private(set) var forms: [PendingForm] = []
     @Published private(set) var history: [ChatThread] = ThreadStore.recent()
     @Published var attachments: [URL] = [] {
         didSet { if persists { UserDefaults.standard.set(attachments.map(\.path), forKey: Self.attachmentsKey) } }
@@ -203,6 +214,8 @@ final class ChatSession: ObservableObject {
     /// A new approval card while the chat is hidden; answered from a notification.
     var onApprovalNeeded: ((Approval) -> Void)?
     var onApprovalResolved: ((UUID) -> Void)?
+    /// A new form while the chat is hidden: a title and the form's message.
+    var onFormNeeded: ((String, String) -> Void)?
     var isVisible = false
     /// Reports progress of turns that came from Telegram, with the Telegram chat id.
     var onTelegram: ((Int64, TelegramEvent) -> Void)?
@@ -304,7 +317,7 @@ final class ChatSession: ObservableObject {
     }
 
     var mood: PetMood? {
-        if !approvals.isEmpty { return .needsInput }
+        if !approvals.isEmpty || !forms.isEmpty { return .needsInput }
         switch state {
         case .running: return .working
         case .done: return .done
@@ -318,7 +331,7 @@ final class ChatSession: ObservableObject {
     /// Called when the chat opens. The session and folder stay as they are. Only when no folder was ever chosen does
     /// the picker show.
     func prepareForShow() {
-        if state == .done || state == .failed, approvals.isEmpty { state = .idle }
+        if state == .done || state == .failed, approvals.isEmpty, forms.isEmpty { state = .idle }
         if workspace == nil { needsWorkspace = true }
     }
 
@@ -376,7 +389,7 @@ final class ChatSession: ObservableObject {
     }
 
     /// Sample conversations for `--render-previews`.
-    enum Preview { case done, approval, markdown }
+    enum Preview { case done, approval, markdown, form }
 
     func loadPreview(_ preview: Preview) {
         workspace = URL(fileURLWithPath: "/Users/you/code/demo-app")
@@ -436,8 +449,29 @@ final class ChatSession: ObservableObject {
             lastRunDuration = 14
         case .markdown:
             break
+        case .form:
+            state = .running
+            activity = "Waiting for you"
+            runStartedAt = Date().addingTimeInterval(-9)
+            if let form = ElicitationForm.parse(Self.sampleForm) {
+                forms = [PendingForm(form: form, answers: ["question_0": .one("Swift Testing"), "question_1": .many(["lint"])], respond: { _ in })]
+            }
         }
     }
+
+    private static let sampleForm: JSON = [
+        "mode": "form", "message": "Please answer the following questions.",
+        "requestedSchema": ["type": "object", "properties": [
+            "question_0": ["type": "string", "title": "Test runner", "description": "Which test runner should the new tests use?",
+                           "oneOf": [["const": "XCTest", "title": "XCTest", "description": "Already used by every test in this repo"],
+                                     ["const": "Swift Testing", "title": "Swift Testing", "description": "Newer macros, needs Xcode 16"]]],
+            "question_0_custom": ["type": "string", "title": "Other", "description": "Type your own answer, or add a note to the option you chose above (optional)."],
+            "question_1": ["type": "array", "title": "Checks", "description": "Which checks should run before the commit?",
+                           "items": ["anyOf": [["const": "lint", "title": "Lint"], ["const": "build", "title": "Build", "description": "swift build"],
+                                               ["const": "test", "title": "Tests", "description": "swift test, about two minutes"]]]],
+            "question_1_custom": ["type": "string", "title": "Other", "description": "Type your own answer to add to your selection above (optional)."],
+        ] as JSON],
+    ]
 
     func attach(_ screenshot: URL) {
         attachments.append(screenshot)
@@ -735,6 +769,7 @@ final class ChatSession: ObservableObject {
         let backend = ACPBackend(agent: agent)
         backend.usageFeature = .chat
         backend.onPermission = { [weak self] call, respond in self?.handlePermission(call, respond: respond) }
+        backend.onElicitation = { [weak self] form, respond in self?.handleElicitation(form, respond: respond) }
         backend.onBackground = { [weak self] event in self?.handleBackground(event) }
         acp = backend
         return backend
@@ -760,6 +795,7 @@ final class ChatSession: ObservableObject {
             if let chat = telegramChat { onTelegram?(chat, .approvalDecided(id: approval.id, outcome: .ended)) }
         }
         approvals = []
+        cancelForms()
         activity = nil
         runStartedAt = nil
         if state == .running { state = .idle }
@@ -805,6 +841,44 @@ final class ChatSession: ObservableObject {
         current.respond(allow ? .allow : .deny())
         onApprovalResolved?(id)
         if let chat = telegramChat { onTelegram?(chat, .approvalDecided(id: id, outcome: allow ? .allowed : .denied)) }
+    }
+
+    /// Shows the agent's `elicitation/create` form as a card. The reply goes out when the user submits or skips.
+    func handleElicitation(_ form: ElicitationForm, respond: @escaping (ElicitationReply) -> Void) {
+        let pending = PendingForm(form: form, respond: respond)
+        forms.append(pending)
+        if !isVisible {
+            onFormNeeded?("\(ConfigStore.shared.config.pet.name) has a question for you", String(form.message.prefix(240)))
+        }
+    }
+
+    func setAnswer(form id: UUID, field: String, _ value: ElicitationValue?) {
+        guard let index = forms.firstIndex(where: { $0.id == id }) else { return }
+        forms[index].answers[field] = value
+    }
+
+    func submitForm(_ id: UUID) {
+        guard let pending = forms.first(where: { $0.id == id }), pending.form.canSubmit(pending.answers) else { return }
+        finishForm(pending, reply: .accept(pending.form.content(pending.answers)),
+                   record: ElicitationRecord(message: pending.form.message, skipped: false, lines: pending.form.lines(pending.answers)))
+    }
+
+    func skipForm(_ id: UUID) {
+        guard let pending = forms.first(where: { $0.id == id }) else { return }
+        finishForm(pending, reply: .decline, record: ElicitationRecord(message: pending.form.message, skipped: true, lines: []))
+    }
+
+    private func finishForm(_ pending: PendingForm, reply: ElicitationReply, record: ElicitationRecord) {
+        forms.removeAll { $0.id == pending.id }
+        items.append(Item(kind: .form(record)))
+        pending.respond(reply)
+    }
+
+    /// The turn stopped or ended with forms open. The agent aborts the tool call that asked.
+    private func cancelForms() {
+        let open = forms
+        forms = []
+        open.forEach { $0.respond(.cancel) }
     }
 
     /// Answers the agent's `session/request_permission`: either straight away or through an approval card.
@@ -1012,5 +1086,6 @@ final class ChatSession: ObservableObject {
             if let chat = telegramChat { onTelegram?(chat, .approvalDecided(id: approval.id, outcome: .ended)) }
         }
         approvals = []
+        cancelForms()
     }
 }
