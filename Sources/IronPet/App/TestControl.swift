@@ -85,6 +85,7 @@ final class TestControl {
 
     func handle(_ request: HTTPRequest) -> Data {
         let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] ?? [:]
+        if request.path.hasPrefix("/test/task-runs") { return handleTaskRuns(request.method, request.path, body) }
         switch (request.method, request.path) {
         case ("GET", "/test/chat"):
             break
@@ -622,5 +623,69 @@ final class TestControl {
 
     private static func encode(_ object: [String: Any]) -> Data {
         (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
+    }
+}
+
+// MARK: - Task runs
+
+extension TestControl {
+    /// What Open PR would have run. Test mode never pushes.
+    static var openPRCommands: [[String]] = []
+    /// Why the last `/test/task-runs/start`, `open-pr` or `remove-copy` failed, or nil.
+    static var taskRunError: String?
+
+    func handleTaskRuns(_ method: String, _ path: String, _ body: [String: Any]) -> Data {
+        guard let runner = TaskRunner.shared else { return Self.encode(["ok": false, "error": "no task runner"]) }
+        let task = body["task"] as? String ?? ""
+        switch (method, path) {
+        case ("GET", "/test/task-runs"):
+            break
+        case ("POST", "/test/task-runs/start"):
+            Self.taskRunError = nil
+            let agent = AgentCatalog.agent(id: body["agent"] as? String) ?? runner.defaultAgent()?.agent
+            guard let agent else { return Self.encode(["ok": false, "error": "no agent"]) }
+            let project = (body["project"] as? String).map { URL(fileURLWithPath: $0) }
+            let model = body["model"] as? String
+            Task { Self.taskRunError = await runner.start(task: task, project: project, agent: agent, model: model) }
+        case ("POST", "/test/task-runs/approve"):
+            guard let approval = runner.run(for: task)?.approval else { return Self.encode(["ok": false, "error": "no approval"]) }
+            let allow = body["allow"] as? Bool ?? false
+            // The bubble's button when it is on screen, as a click would.
+            let pressed = actions.pressBubbleButton(Announcer.taskRunApprovalID(approval.id), allow ? "Allow" : "Deny")
+            if !pressed { runner.decide(id: approval.id, allow: allow) }
+        case ("POST", "/test/task-runs/stop"):
+            runner.stop(task: task)
+        case ("POST", "/test/task-runs/open-pr"):
+            Self.taskRunError = nil
+            Task { Self.taskRunError = await runner.openPR(task: task) }
+        case ("POST", "/test/task-runs/remove-copy"):
+            Self.taskRunError = nil
+            Task { Self.taskRunError = await runner.removeCopy(task: task) }
+        default:
+            return Self.encode(["ok": false, "error": "unknown endpoint \(path)"])
+        }
+        return taskRunsSnapshot(runner)
+    }
+
+    private func taskRunsSnapshot(_ runner: TaskRunner) -> Data {
+        let runs = runner.runs.values.sorted { $0.started < $1.started }.map { run -> [String: Any] in
+            var object: [String: Any] = [
+                "task": run.task, "state": run.state.rawValue, "repo": run.repo.path, "worktree": run.worktree.path,
+                "branch": run.branch, "base": run.base, "agent": run.agent, "commits": run.commits,
+                "dirty": run.dirty, "cleanup": run.cleanup.rawValue, "canOpenPR": run.canOpenPR,
+            ]
+            object["baseBranch"] = run.baseBranch
+            object["session"] = run.session
+            object["summary"] = run.summary
+            object["error"] = run.error
+            object["activity"] = run.activity
+            object["gitDir"] = run.gitDir?.path
+            object["pushRemote"] = run.pushRemote
+            if let approval = run.approval { object["approval"] = ["id": approval.id.uuidString, "title": approval.title, "detail": approval.detail] }
+            return object
+        }
+        var result: [String: Any] = ["ok": true, "runs": runs, "openPR": Self.openPRCommands, "live": runner.liveCount]
+        result["error"] = Self.taskRunError
+        return Self.encode(result)
     }
 }

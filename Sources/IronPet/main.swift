@@ -18,7 +18,7 @@ if ["mcp", "mcp-stdio"].contains(CommandLine.arguments.dropFirst().first ?? "") 
 }
 
 if CommandLine.arguments.contains("--uninstall") {
-    // Used by scripts/uninstall.sh: removes only ironpet's hooks and its login item, then exits.
+    // Used by scripts/uninstall.sh: removes only ironpet's hooks, its login item and the clean worktrees of task runs, then exits.
     do {
         let changed = try HookInstaller().uninstall()
         print(changed.isEmpty ? "No ironpet hooks found" : changed.map { "Removed ironpet hooks from \($0.path)" }.joined(separator: "\n"))
@@ -30,6 +30,7 @@ if CommandLine.arguments.contains("--uninstall") {
         LoginItem.set(false)
         print("Removed the login item")
     }
+    MainActor.assumeIsolated { TaskRunUninstall.run() }.forEach { print($0) } // top-level code runs on the main thread before NSApplication starts
     exit(0)
 }
 

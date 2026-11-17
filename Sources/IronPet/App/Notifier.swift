@@ -17,6 +17,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let snooze = UNNotificationAction(identifier: "snooze", title: "Snooze 10 min", options: [])
         center.setNotificationCategories([
             UNNotificationCategory(identifier: "approval", actions: [allow, deny], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "approval-deny-only", actions: [deny], intentIdentifiers: []),
             UNNotificationCategory(identifier: "automation", actions: [done, snooze], intentIdentifiers: []),
             UNNotificationCategory(identifier: "automation-plain", actions: [], intentIdentifiers: []),
         ])
@@ -42,14 +43,15 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     var onOpenChat: (() -> Void)?
     var onApprovalAction: ((UUID, Bool) -> Void)?
 
-    /// Approval request with Allow / Deny buttons, so the user can answer without switching apps.
-    func announceApproval(id: UUID, title: String, detail: String) {
+    /// Approval request with Allow / Deny buttons, so the user can answer without switching apps. Without `canAllow`
+    /// only Deny: the request is allowed where all of it shows.
+    func announceApproval(id: UUID, title: String, detail: String, canAllow: Bool = true) {
         guard let center else { return }
         let content = UNMutableNotificationContent()
         content.title = "\(Config.load().config.pet.name): \(title)"
         content.body = String(detail.prefix(240))
         content.sound = .default
-        content.categoryIdentifier = "approval"
+        content.categoryIdentifier = canAllow ? "approval" : "approval-deny-only"
         content.userInfo = ["approval": id.uuidString]
         center.add(UNNotificationRequest(identifier: "approval:\(id.uuidString)", content: content, trigger: nil))
     }

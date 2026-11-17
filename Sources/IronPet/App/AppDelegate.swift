@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Replaces the system idle time in test mode (`POST /test/presence`). Nil otherwise.
     private var testIdleSeconds: TimeInterval?
     private var brief: BriefSource?
+    private var taskRunner: TaskRunner?
     private lazy var logWindow = AutomationLogWindow(service: { [weak self] in self?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
@@ -225,6 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.tasks = tasks
         setUpDueReminders(tasks)
         setUpWelcomeBack(log, tasks: tasks)
+        setUpTaskRuns(tasks, database: database)
         pet.settings = settingsModel
         pet.onSettings = { [weak self] in self?.showSettings(tab: nil) }
         setUpScreenCapture(database)
@@ -636,6 +638,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         meeting.prepareForQuit()
         chat.persistForRelaunch()
         chat.shutdown()
+        taskRunner?.shutdown()
         try? FileManager.default.removeItem(at: Paths.portFile)
     }
 
@@ -1021,6 +1024,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .chat: showChat()
         case .url(let url), .file(let url): NSWorkspace.shared.open(url)
         }
+    }
+
+    /// Start on a task hands it to an agent in its own worktree. Its approvals and results come through Ghost.
+    private func setUpTaskRuns(_ tasks: TaskStore, database: Database) {
+        let runner = TaskRunner(tasks: tasks, store: TaskRunStore(database: database))
+        TaskRunner.shared = runner
+        taskRunner = runner
+        runner.chatAgent = { [weak self] in self.map { ($0.chat.agent, $0.chat.model) } }
+        runner.agents = { [weak self] in self?.chat.agents ?? AgentCatalog.present() }
+        runner.sessionWorkspace = { [weak self] id in self?.store.sessions[id]?.origin.workspace }
+        if TestControl.isEnabled { runner.recordOpenPR = { TestControl.openPRCommands.append($0) } }
+        let title = { [weak tasks] (run: TaskRun) in tasks?.task(run.task)?.title ?? run.task }
+        runner.onApproval = { [weak self] run, approval in
+            self?.announcer.taskRunApproval(approval, task: title(run), openTasks: { self?.showTasks() })
+        }
+        runner.onApprovalResolved = { [weak self] id in self?.announcer.clearTaskRunApproval(id: id) }
+        let ended: (TaskRun) -> Void = { [weak self, weak runner] run in
+            self?.announcer.taskRunEnded(run, task: title(run), openTasks: { self?.showTasks() },
+                                         openPR: { Task { _ = await runner?.openPR(task: run.task) } })
+        }
+        runner.onFinished = ended
+        runner.onFailed = ended
+        runner.onPushed = { [weak self] run, remote in self?.announcer.taskRunPushed(run, remote: remote) }
+        runner.onOpenPRFailed = { [weak self] run, reason in
+            self?.announcer.taskRunOpenPRFailed(run, task: title(run), reason: reason, openTasks: { self?.showTasks() })
+        }
+
+        // Allow and Deny on a bubble or notification go to whichever owns the approval.
+        let decide = announcer.decide
+        announcer.decide = { [weak runner] id, allow in
+            if let runner, runner.hasPendingApproval(id) { runner.decide(id: id, allow: allow) } else { decide(id, allow) }
+        }
+        let changed = tasks.onChange
+        tasks.onChange = { [weak runner] id in
+            changed?(id)
+            DispatchQueue.main.async { runner?.tasksChanged(id) }
+        }
+        // A live run's thread opens in Tasks, where its state and approval are, not as a second agent in the chat.
+        chat.threadInUse = { [weak runner] id in runner?.isLive(thread: id) ?? false }
+        runner.threadOpenInChat = { [weak self] id in self?.chat.threadID == id }
+        chat.onThreadInUse = { [weak self] _ in self?.showTasks() }
+        chat.taskRunRepo = { [weak runner] copy in runner?.run(inCopy: copy)?.repo }
+        let openThread = pet.onOpenThread
+        pet.onOpenThread = { [weak self, weak runner] id in
+            if runner?.isLive(thread: id) == true {
+                self?.showTasks()
+            } else {
+                openThread?(id)
+            }
+        }
+        pet.runs = runner
+        runner.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.pet.refreshMood() }
+            .store(in: &cancellables)
+        Task { await runner.restore() }
     }
 
     private func syncMeetingPanel() {

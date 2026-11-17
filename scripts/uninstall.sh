@@ -1,7 +1,7 @@
 #!/bin/bash
 # Removes ironpet: its hooks (other tools' hooks are left alone), login item, app, Keychain item and preferences.
 # Asks before deleting your chats and notes in ~/.ironpet and the local signing identity.
-#   --purge   also delete ~/.ironpet and the signing identity without asking
+#   --purge   also delete ~/.ironpet and the signing identity without asking (task copies in worktrees/ still ask)
 #   --yes     answer yes to every question (same as --purge)
 set -euo pipefail
 
@@ -19,6 +19,12 @@ ok() { printf '\033[32m✓\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m!\033[0m %s\n' "$*"; }
 ask() {
   [ "$PURGE" = 1 ] && return 0
+  [ -t 0 ] || return 1
+  read -r -p "$1 [y/N] " reply
+  [[ "$reply" =~ ^[Yy] ]]
+}
+# Asks even with --purge. Without a terminal the answer is no.
+confirm() {
   [ -t 0 ] || return 1
   read -r -p "$1 [y/N] " reply
   [[ "$reply" =~ ^[Yy] ]]
@@ -61,10 +67,27 @@ fi
 defaults delete dev.ironpet.app >/dev/null 2>&1 && ok "Deleted preferences" || true
 rm -rf "$HOME/.ironpet/bin" "$HOME/.ironpet/port"
 
+# The app removed the clean task copies above. What is left has uncommitted work, or ironpet.db did not list it.
+WORKTREES="$HOME/.ironpet/worktrees"
+COPIES=0
+if [ -d "$WORKTREES" ] && [ -n "$(ls -A "$WORKTREES" 2>/dev/null)" ]; then
+  COPIES=1
+  warn "Task copies agents worked in are still in $WORKTREES (uncommitted work may be in them)."
+fi
+
 if [ -d "$HOME/.ironpet" ]; then
-  if ask "Delete ~/.ironpet (settings, saved chats, memory notes, screenshots)?"; then
-    rm -rf "$HOME/.ironpet"
-    ok "Deleted ~/.ironpet"
+  what="settings, saved chats, memory notes, screenshots"
+  [ "$COPIES" = 1 ] && what="$what, and the task copies in worktrees/ with their uncommitted work"
+  if ask "Delete ~/.ironpet ($what)?"; then
+    if [ "$COPIES" = 1 ] && [ "$PURGE" = 1 ] && ! confirm "Also delete the task copies in $WORKTREES?"; then
+      find "$HOME/.ironpet" -mindepth 1 -maxdepth 1 ! -name worktrees -exec rm -rf {} +
+      ok "Deleted ~/.ironpet except worktrees/"
+      warn "Kept the task copies in $WORKTREES. Delete them yourself, then run 'git worktree prune' in each project."
+    else
+      rm -rf "$HOME/.ironpet"
+      ok "Deleted ~/.ironpet"
+      [ "$COPIES" = 1 ] && warn "Run 'git worktree prune' in each project an agent worked on, so git forgets the deleted copies."
+    fi
   else
     warn "Kept ~/.ironpet"
   fi
