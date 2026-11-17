@@ -70,16 +70,6 @@ struct GitWorktree {
         return result.stdout.split(whereSeparator: \.isNewline).map(String.init).filter { !$0.isEmpty }
     }
 
-    /// The same list without waiting on a task, for the chat building an agent's environment. Empty when git fails.
-    func remotesNow(_ repo: URL) -> [String] {
-        var env = LoginShell.environment()
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        let result = CommandRunner.runBlocking(executable: git, arguments: ["-C", repo.path, "remote"], timeout: 5,
-                                               environment: env, stdin: nil, maxBytes: 16 * 1024)
-        guard result.code == 0 else { return [] }
-        return result.stdout.split(whereSeparator: \.isNewline).map(String.init).filter { !$0.isEmpty }
-    }
-
     /// Remotes with their own `pushurl`. git pushes to every `pushurl` a remote has, so the push block's extra one
     /// does not stop a push to them.
     func remotesWithOwnPushURL(_ repo: URL) async -> [String] {

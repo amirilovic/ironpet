@@ -244,16 +244,23 @@ final class ChatSession: ObservableObject {
         return folder.hasPrefix(root + "/") ? RunScope(root: workspace) : nil
     }
 
-    /// The remotes of the open run thread's copy, read once per copy.
+    /// The remotes of the open run thread's copy, read once per copy before its first turn.
     private var runRemotes: (path: String, names: [String])?
+    /// The run scope the current backend's approvals were judged with.
+    private var acpScope: RunScope?
 
-    /// The push block a task run's agent gets, when the open thread is one.
+    /// The push block a task run's agent gets, when the open thread is one. Until the copy's remotes are read it has
+    /// only the URL rewrites.
     var agentEnvironment: [String: String] {
         guard let scope = taskRunScope else { return [:] }
-        if runRemotes?.path != scope.root.path {
-            runRemotes = (scope.root.path, GitWorktree.locate()?.remotesNow(scope.root) ?? [])
-        }
-        return GitWorktree.pushBlockEnvironment(remotes: runRemotes?.names ?? [])
+        return GitWorktree.pushBlockEnvironment(remotes: runRemotes?.path == scope.root.path ? runRemotes?.names ?? [] : [])
+    }
+
+    /// Reads the open run thread's remotes off the main thread, once per copy.
+    func loadRunRemotes() async {
+        guard let scope = taskRunScope, runRemotes?.path != scope.root.path else { return }
+        let names = await GitWorktree.locate()?.remotes(scope.root) ?? []
+        if taskRunScope == scope { runRemotes = (scope.root.path, names) }
     }
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
     private var decided: [String: Bool] = [:]
@@ -627,9 +634,12 @@ final class ChatSession: ObservableObject {
             return
         }
         if agent.id == "cursor", Config.load().config.integrations.shareMCPSignIns { MCPAuthSharing.prepare(workspace: turn.workspace) }
-        let backend = acp?.agent == agent && acp?.extraEnvironment == agentEnvironment ? acp! : makeBackend()
         Task { [weak self] in
-            await backend.runTurn(turn) { event in self?.handle(event, turn: id) }
+            await self?.loadRunRemotes()
+            guard let self, self.turnID == id else { return }
+            let reuse = self.acp?.agent == self.agent && self.acp?.extraEnvironment == self.agentEnvironment && self.acpScope == self.taskRunScope
+            let backend = reuse ? self.acp! : self.makeBackend()
+            await backend.runTurn(turn) { [weak self] event in self?.handle(event, turn: id) }
         }
     }
 
@@ -768,7 +778,9 @@ final class ChatSession: ObservableObject {
         let backend = ACPBackend(agent: agent)
         backend.usageFeature = .chat
         backend.extraEnvironment = agentEnvironment
-        backend.onPermission = { [weak self] call, respond in self?.handlePermission(call, respond: respond) }
+        let scope = taskRunScope
+        acpScope = scope
+        backend.onPermission = { [weak self] call, respond in self?.handlePermission(call, scope: scope, respond: respond) }
         backend.onBackground = { [weak self] event in self?.handleBackground(event) }
         acp = backend
         return backend
@@ -843,7 +855,12 @@ final class ChatSession: ObservableObject {
 
     /// Answers the agent's `session/request_permission`: either straight away or through an approval card.
     func handlePermission(_ call: ACPToolCall, respond: @escaping (ApprovalDecision) -> Void) {
-        switch ApprovalRules.policy(for: call, auto: autoMode, run: taskRunScope) {
+        handlePermission(call, scope: taskRunScope, respond: respond)
+    }
+
+    /// `scope` is the run scope of the agent process that asks, fixed when its backend was made.
+    private func handlePermission(_ call: ACPToolCall, scope: RunScope?, respond: @escaping (ApprovalDecision) -> Void) {
+        switch ApprovalRules.policy(for: call, auto: autoMode, run: scope) {
         case .allow:
             respond(.allow)
         case .ask(let title, let detail):
