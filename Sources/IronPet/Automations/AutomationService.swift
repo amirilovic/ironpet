@@ -25,6 +25,8 @@ struct AutomationNotice {
     var automationIDs: [String] = []
     /// What the bubble's Open button opens, kept so the activity log can offer it later.
     var url: URL?
+    /// A break reminder (`Automation.isBreakReminder`), which is not news after a break.
+    var isBreakReminder = false
 }
 
 struct AutomationError: Error, LocalizedError {
@@ -369,7 +371,7 @@ final class AutomationService {
                                 tint: ok ? .info : .bad, title: title,
                                 subtitle: fire.agentWorking && a.trigger.type == "interval" ? "Your agent is still working, good moment for it." : nil,
                                 body: body.isEmpty ? nil : body, buttons: list, expires: p.expiresSeconds ?? (a.trigger.type == "interval" ? 180 : 45),
-                                systemNotification: p.notification ?? false, automationIDs: [a.id]))
+                                systemNotification: p.notification ?? false, automationIDs: [a.id], isBreakReminder: a.isBreakReminder))
         nudge([mood])
     }
 
@@ -383,7 +385,8 @@ final class AutomationService {
             body: list.map { "\($0.action.title ?? $0.name): \($0.action.body ?? "")" }.joined(separator: "\n"),
             buttons: [.init(title: "Done", primary: true) { [weak self] in self?.nudge([.done]) },
                       .init(title: "Snooze \(Int(engine.timing().snoozeMinutes)) min") { [weak self] in self?.engine.snooze(ids) }],
-            expires: 180, systemNotification: list.contains { $0.presentation.notification == true }, automationIDs: ids))
+            expires: 180, systemNotification: list.contains { $0.presentation.notification == true }, automationIDs: ids,
+            isBreakReminder: list.allSatisfy(\.isBreakReminder)))
         nudge(list.map { $0.presentation.mood.flatMap(PetMood.init(rawValue:)) ?? .listening })
     }
 

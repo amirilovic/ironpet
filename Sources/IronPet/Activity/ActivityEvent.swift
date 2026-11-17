@@ -77,7 +77,8 @@ extension ActivityEvent {
         extra[SessionKey.workspace] = session.origin.workspace
         extra[SessionKey.app] = session.origin.ownerBundleID
         extra[SessionKey.iterm] = session.isInIterm ? session.origin.itermSessionID : nil
-        let detail = session.status == .needsInput ? (session.detail ?? session.prompt) : (session.summary ?? session.prompt)
+        // Never the user's prompt: only the agent's summary line, or the request it is waiting on, is kept for 30 days.
+        let detail = session.status == .needsInput ? session.detail : session.summary
         return ActivityEvent(at: at, kind: kind, ref: session.id, title: session.workspaceName,
                              detail: clamp(detail ?? "", summaryLimit), extra: extra)
     }
@@ -105,10 +106,10 @@ extension ActivityEvent {
         static let automation = "automation", tint = "tint"
     }
 
-    /// A bubble from a scheduled job, poll or script. Nil for what is not news after a break: break reminders (`isReminder`),
+    /// A bubble from a scheduled job, poll or script. Nil for what is not news after a break: break reminders,
     /// questions that wait for an answer (no expiry) and bubbles that belong to no automation.
-    static func automationNotice(_ notice: AutomationNotice, isReminder: Bool, at: Date = Date()) -> ActivityEvent? {
-        guard !isReminder, notice.expires != nil, let automation = notice.automationIDs.first else { return nil }
+    static func automationNotice(_ notice: AutomationNotice, at: Date = Date()) -> ActivityEvent? {
+        guard !notice.isBreakReminder, notice.expires != nil, let automation = notice.automationIDs.first else { return nil }
         let tint: String
         switch notice.tint {
         case .info: tint = "info"

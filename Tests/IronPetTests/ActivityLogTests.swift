@@ -108,8 +108,27 @@ final class ActivityLogTests: XCTestCase {
     func testSessionSummaryIsCappedAtOneHundredFortyCharacters() throws {
         var session = AgentSession(id: "cursor:1", source: .cursor)
         session.status = .done
-        session.prompt = String(repeating: "word ", count: 60)
+        session.lastResponse = String(repeating: "word ", count: 60)
+        session.editedFiles = ["/a.swift", "/b.swift"]
         XCTAssertEqual(try XCTUnwrap(ActivityEvent.session(session)).detail.count, ActivityEvent.summaryLimit)
+        session.status = .needsInput
+        session.detail = String(repeating: "word ", count: 60)
+        XCTAssertEqual(try XCTUnwrap(ActivityEvent.session(session)).detail.count, ActivityEvent.summaryLimit)
+    }
+
+    func testTheUsersPromptNeverLandsInTheLog() throws {
+        let log = ActivityLog(database: try Database(path: nil, migrations: AppMigrations.all), now: { self.start })
+        var session = AgentSession(id: "claude:secret", source: .claude)
+        session.prompt = "my private prompt"
+        for status in [AgentStatus.done, .failed, .needsInput] {
+            session.status = status
+            let event = try XCTUnwrap(ActivityEvent.session(session, at: start))
+            XCTAssertEqual(event.detail, "", "\(status) with no summary or request stores nothing")
+            log.record(event)
+        }
+        let stored = log.events(in: DateInterval(start: start, duration: 1))
+        XCTAssertEqual(stored.count, 3)
+        XCTAssertFalse(stored.contains { $0.title.contains("private") || $0.detail.contains("private") || $0.extra.values.contains { $0.contains("private") } })
     }
 
     func testAlertEventsKeepTitleUrlAndMood() {
@@ -129,19 +148,40 @@ final class ActivityLogTests: XCTestCase {
         let url = URL(string: "https://example.com/pr/1")!
         let news = AutomationNotice(id: "automation:github-alerts:1234", symbol: "checkmark.seal.fill", tint: .good, title: "CI passed",
                                     body: "Fix login\nirtaza/ironpet #84", expires: 15, automationIDs: ["github-alerts"], url: url)
-        let event = try XCTUnwrap(ActivityEvent.automationNotice(news, isReminder: false, at: start))
+        let event = try XCTUnwrap(ActivityEvent.automationNotice(news, at: start))
         XCTAssertEqual(event.kind, .automationBubble)
         XCTAssertEqual(event.title, "CI passed")
         XCTAssertEqual(event.url, url)
         XCTAssertEqual(event.extra, ["automation": "github-alerts", "tint": "good"])
 
-        XCTAssertNil(ActivityEvent.automationNotice(news, isReminder: true))
+        var reminder = news
+        reminder.isBreakReminder = true
+        XCTAssertNil(ActivityEvent.automationNotice(reminder))
         var question = news
         question.expires = nil
-        XCTAssertNil(ActivityEvent.automationNotice(question, isReminder: false))
+        XCTAssertNil(ActivityEvent.automationNotice(question))
         var orphan = news
         orphan.automationIDs = []
-        XCTAssertNil(ActivityEvent.automationNotice(orphan, isReminder: false))
+        XCTAssertNil(ActivityEvent.automationNotice(orphan))
+    }
+
+    func testOnlyBubblesOnKeyboardTimeAreBreakReminders() {
+        func automation(_ trigger: Automation.Trigger, _ action: String) -> Automation {
+            Automation(id: "a", name: "a", trigger: trigger, action: Automation.Action(type: action))
+        }
+        let keyboard = Automation.Trigger(type: "interval", minutes: 45)
+        var active = keyboard
+        active.clock = "active"
+        var wall = keyboard
+        wall.clock = "wall"
+        XCTAssertTrue(automation(keyboard, "bubble").isBreakReminder, "drink water")
+        XCTAssertTrue(automation(active, "bubble").isBreakReminder)
+        XCTAssertFalse(automation(wall, "bubble").isBreakReminder, "an hourly bubble on the clock is news")
+        XCTAssertFalse(automation(keyboard, "shell").isBreakReminder, "a job on keyboard time is not dropped")
+        XCTAssertFalse(automation(keyboard, "prompt").isBreakReminder)
+        XCTAssertFalse(automation(Automation.Trigger(type: "poll", minutes: 5), "bubble").isBreakReminder)
+        XCTAssertTrue(keyboard.countsKeyboardTime)
+        XCTAssertFalse(wall.countsKeyboardTime)
     }
 
     func testTaskMeetingAndChatEvents() {

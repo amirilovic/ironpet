@@ -227,11 +227,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.onSettings = { [weak self] in self?.showSettings(tab: nil) }
         setUpScreenCapture(database)
         let service = AutomationService(store: store, engine: engine, database: database)
-        service.notice = { [weak self, store] notice in
-            let reminder = notice.automationIDs.contains { id in
-                store.automations.first { $0.id == id }.map { $0.trigger.type == "interval" && $0.trigger.clock != "wall" } ?? false
-            }
-            if let event = ActivityEvent.automationNotice(notice, isReminder: reminder) { self?.activity?.record(event) }
+        service.notice = { [weak self] notice in
+            if let event = ActivityEvent.automationNotice(notice) { self?.activity?.record(event) }
             self?.announcer.automation(notice)
         }
         service.dismissNotice = { [weak self] id in self?.announcer.bubbles.dismiss(id) }
