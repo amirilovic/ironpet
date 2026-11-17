@@ -81,12 +81,21 @@ struct UsageDay: Equatable, Identifiable {
     var requests: [UsageFeature: Int]
     /// Tokens the agents or providers reported that day, input plus output (or the reported total when that is all there is).
     var tokens: [UsageFeature: Int]
+    /// Cost the agents reported in the bucket. Events without a cost add 0.
+    var cost: [UsageFeature: Double] = [:]
     var id: Date { day }
 }
 
 struct UsageSummary: Equatable {
     var rows: [UsageRow]
+    /// One entry per calendar day, or per hour of today when the summary is hourly. The name is kept for the daily case.
     var days: [UsageDay]
+    var hourly = false
+    /// Cost reported for the local day of `now`, whatever the range.
+    var todayCost = 0.0
+    /// Events in the range that reported no cost. The cost chart counts them as 0.
+    var uncostedEvents = 0
+    var rangeCost: Double { rows.reduce(0) { $0 + ($1.cost ?? 0) } }
     var hasCost: Bool { rows.contains { $0.cost != nil } }
 }
 
@@ -153,7 +162,8 @@ final class UsageStore: @unchecked Sendable {
     func flush() { queue.sync {} }
 
     /// Totals per feature and model plus one entry per calendar day, for the last `days` days including today.
-    func summary(days: Int, now: Date = Date(), calendar: Calendar = .current) -> UsageSummary {
+    /// `hourly` cuts the buckets by hour instead of by day, which only makes sense for one day.
+    func summary(days: Int, hourly: Bool = false, now: Date = Date(), calendar: Calendar = .current) -> UsageSummary {
         flush()
         let today = calendar.startOfDay(for: now)
         guard let start = calendar.date(byAdding: .day, value: -(days - 1), to: today) else { return UsageSummary(rows: [], days: []) }
@@ -162,6 +172,10 @@ final class UsageStore: @unchecked Sendable {
         var rows: [UsageRow] = []
         var requests: [Date: [UsageFeature: Int]] = [:]
         var tokens: [Date: [UsageFeature: Int]] = [:]
+        var costs: [Date: [UsageFeature: Double]] = [:]
+        var uncosted = 0
+        var todayCost = 0.0
+        let unit: Calendar.Component = hourly ? .hour : .day
         do {
             try database.read { db in
                 for row in try db.rows("""
@@ -177,10 +191,17 @@ final class UsageStore: @unchecked Sendable {
                                          cost: row[11] as? Double))
                 }
                 // Days are cut in Swift, not SQL, so they follow the same calendar as the range.
-                for row in try db.rows("SELECT at, feature, input_tokens, output_tokens, total_tokens FROM usage_events WHERE at >= ? AND at < ?",
+                if let sum = try db.rows("SELECT SUM(cost) FROM usage_events WHERE at >= ? AND at < ?",
+                                           [calendar.startOfDay(for: now).timeIntervalSince1970,
+                                            (calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now).timeIntervalSince1970]).first {
+                    todayCost = sum[0] as? Double ?? 0
+                }
+                for row in try db.rows("SELECT at, feature, input_tokens, output_tokens, total_tokens, cost FROM usage_events WHERE at >= ? AND at < ?",
                                        [from, to]) {
                     guard let at = row[0] as? Double, let feature = (row[1] as? String).flatMap(UsageFeature.init(rawValue:)) else { continue }
-                    let day = calendar.startOfDay(for: Date(timeIntervalSince1970: at))
+                    let date = Date(timeIntervalSince1970: at)
+                    let day = calendar.dateInterval(of: unit, for: date)?.start ?? calendar.startOfDay(for: date)
+                    if let cost = row[5] as? Double { costs[day, default: [:]][feature, default: 0] += cost } else { uncosted += 1 }
                     requests[day, default: [:]][feature, default: 0] += 1
                     let input = Self.int(row[2]), output = Self.int(row[3])
                     if let count = (input == nil && output == nil) ? Self.int(row[4]) : (input ?? 0) + (output ?? 0) {
@@ -191,10 +212,13 @@ final class UsageStore: @unchecked Sendable {
         } catch {
             NSLog("ironpet: could not read usage: \(error.localizedDescription)")
         }
-        let list = (0..<days).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }.map {
-            UsageDay(day: $0, requests: requests[$0] ?? [:], tokens: tokens[$0] ?? [:])
+        let buckets: [Date] = hourly
+            ? (0..<24).compactMap { calendar.date(byAdding: .hour, value: $0, to: today) }
+            : (0..<days).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+        let list = buckets.map {
+            UsageDay(day: $0, requests: requests[$0] ?? [:], tokens: tokens[$0] ?? [:], cost: costs[$0] ?? [:])
         }
-        return UsageSummary(rows: rows, days: list)
+        return UsageSummary(rows: rows, days: list, hourly: hourly, todayCost: todayCost, uncostedEvents: uncosted)
     }
 
     private static func int(_ value: Database.Value) -> Int? { (value as? Int64).map(Int.init) }

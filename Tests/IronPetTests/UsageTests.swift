@@ -63,6 +63,48 @@ final class UsageTests: XCTestCase {
         XCTAssertEqual(quarter.days.map(\.requests).flatMap(\.values).reduce(0, +), 7)
     }
 
+    // MARK: Cost and today
+
+    private func costStore() throws -> UsageStore {
+        let store = try memoryStore()
+        store.record(UsageEvent(at: daysAgo(0, hour: 8), feature: .chat, model: "opus", duration: 1, cost: 0.5, currency: "USD"))
+        store.record(UsageEvent(at: daysAgo(0, hour: 8), feature: .chat, model: "opus", duration: 1, cost: 0.25, currency: "USD"))
+        store.record(UsageEvent(at: daysAgo(0, hour: 10), feature: .automations, model: "sonnet", duration: 1, cost: 0.125, currency: "USD"))
+        store.record(UsageEvent(at: daysAgo(1, hour: 9), feature: .chat, model: "opus", duration: 1, cost: 2, currency: "USD"))
+        store.record(UsageEvent(at: daysAgo(1, hour: 9), feature: .voiceTranscription, model: "whisper-1", audioSeconds: 3))
+        return store
+    }
+
+    func testCostPerDayAndFeatureIsTheSumOfTheRecordedCosts() throws {
+        let week = try costStore().summary(days: 7, now: now, calendar: calendar)
+        XCTAssertEqual(week.days[6].cost[.chat] ?? 0, 0.75, accuracy: 1e-9)
+        XCTAssertEqual(week.days[6].cost[.automations] ?? 0, 0.125, accuracy: 1e-9)
+        XCTAssertEqual(week.days[5].cost[.chat] ?? 0, 2, accuracy: 1e-9)
+        XCTAssertNil(week.days[5].cost[.voiceTranscription], "no cost reported, nothing to chart")
+        XCTAssertEqual(week.uncostedEvents, 1)
+    }
+
+    func testTodayIsBucketedByHourAndOnlyListsTodaysRows() throws {
+        let today = try costStore().summary(days: 1, hourly: true, now: now, calendar: calendar)
+        XCTAssertEqual(today.days.count, 24)
+        XCTAssertEqual(today.days[8].day, calendar.date(byAdding: .hour, value: 8, to: calendar.startOfDay(for: now)))
+        XCTAssertEqual(today.days[8].requests[.chat], 2)
+        XCTAssertEqual(today.days[8].cost[.chat] ?? 0, 0.75, accuracy: 1e-9)
+        XCTAssertEqual(today.days[10].cost[.automations] ?? 0, 0.125, accuracy: 1e-9)
+        XCTAssertEqual(Set(today.rows.map(\.id)), ["chat|opus", "automations|sonnet"])
+        XCTAssertEqual(today.uncostedEvents, 0)
+    }
+
+    func testSummaryLineShowsTodayAndTheRangeTotals() throws {
+        let store = try costStore()
+        let week = store.summary(days: 7, now: now, calendar: calendar)
+        XCTAssertEqual(week.todayCost, 0.875, accuracy: 1e-9)
+        XCTAssertEqual(week.rangeCost, 2.875, accuracy: 1e-9)
+        XCTAssertEqual(UsageFormat.summaryLine(today: week.todayCost, range: week.rangeCost), "Today \(UsageFormat.cost(0.875, currency: nil)) · This range \(UsageFormat.cost(2.875, currency: nil))")
+        let today = store.summary(days: 1, hourly: true, now: now, calendar: calendar)
+        XCTAssertEqual(today.todayCost, today.rangeCost, accuracy: 1e-9)
+    }
+
     // MARK: Persistence (S7)
 
     func testRecordsSurviveReopeningTheDatabase() throws {

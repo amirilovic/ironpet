@@ -26,6 +26,11 @@ enum UsageFormat {
         return symbol + value.formatted(.number.precision(.fractionLength(value < 1 ? 4 : 2)))
     }
 
+    /// The line above the chart. Today is always there, whatever range is selected.
+    static func summaryLine(today: Double, range: Double) -> String {
+        "Today \(cost(today, currency: nil)) · This range \(cost(range, currency: nil))"
+    }
+
     static func time(_ seconds: Double?) -> String {
         guard let seconds else { return notReported }
         if seconds < 60 { return seconds.formatted(.number.precision(.fractionLength(seconds < 10 ? 1 : 0))) + " s" }
@@ -37,13 +42,24 @@ enum UsageFormat {
 
 /// What ironpet itself ran, by feature and model. Agents ironpet only launches or watches are not in here.
 struct UsageSettings: View {
-    private enum Metric: String, CaseIterable { case requests = "Requests", tokens = "Tokens" }
+    private enum Metric: String, CaseIterable { case requests = "Requests", tokens = "Tokens", cost = "Cost" }
 
     @State private var range: Int
     @State private var metric = Metric.requests
     @State private var summary = UsageSummary(rows: [], days: [])
 
-    init(range: Int = 30) { _range = State(initialValue: range) }
+    /// Range tag for today, charted by hour. The other tags are a number of days.
+    nonisolated static let todayRange = 1
+
+    /// `sample` fills the view without reading the store, for `--render-previews`.
+    private let sample: UsageSummary?
+
+    init(range: Int = 30, sample: UsageSummary? = nil, showCost: Bool = false) {
+        _range = State(initialValue: range)
+        _metric = State(initialValue: showCost ? .cost : .requests)
+        _summary = State(initialValue: sample ?? UsageSummary(rows: [], days: []))
+        self.sample = sample
+    }
 
     var body: some View {
         Form {
@@ -52,6 +68,7 @@ struct UsageSettings: View {
             }
             Section {
                 Picker("Range", selection: $range) {
+                    Text("Today").tag(Self.todayRange)
                     Text("7 days").tag(7)
                     Text("30 days").tag(30)
                     Text("90 days").tag(90)
@@ -61,8 +78,13 @@ struct UsageSettings: View {
                     ForEach(Metric.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                Text(UsageFormat.summaryLine(today: summary.todayCost, range: summary.rangeCost)).monospacedDigit()
                 chart
             } footer: {
+                if metric == .cost, summary.uncostedEvents > 0 {
+                    Text("\(summary.uncostedEvents) \(summary.uncostedEvents == 1 ? "request" : "requests") in this range reported no cost and count as 0.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text("Only what ironpet runs itself: chat (Telegram included), automation prompts, meeting summaries and transcription. Band agents and Claude Code or Codex sessions started elsewhere are not counted. Numbers come from the agent or provider, never estimated, and stay on this Mac.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -80,11 +102,11 @@ struct UsageSettings: View {
     }
 
     private func reload() {
-        guard let store = UsageStore.shared else { return }
+        guard sample == nil, let store = UsageStore.shared else { return }
         let days = range
         // The read waits for queued writes, so it stays off the main thread.
         Task.detached {
-            let result = store.summary(days: days)
+            let result = store.summary(days: days, hourly: days == Self.todayRange)
             await MainActor.run { if days == range { summary = result } }
         }
     }
@@ -92,24 +114,59 @@ struct UsageSettings: View {
     private struct Point: Identifiable {
         let day: Date
         let feature: UsageFeature
-        let value: Int
+        let value: Double
         var id: String { "\(day.timeIntervalSince1970)|\(feature.rawValue)" }
     }
 
     private var points: [Point] {
         summary.days.flatMap { day in
-            (metric == .requests ? day.requests : day.tokens).map { Point(day: day.day, feature: $0.key, value: $0.value) }
+            switch metric {
+            case .requests: return day.requests.map { Point(day: day.day, feature: $0.key, value: Double($0.value)) }
+            case .tokens: return day.tokens.map { Point(day: day.day, feature: $0.key, value: Double($0.value)) }
+            case .cost: return day.cost.map { Point(day: day.day, feature: $0.key, value: $0.value) }
+            }
         }
     }
 
+    /// One label per bucket where they fit, else every few days, so no date prints twice.
+    private var xAxisStride: (component: Calendar.Component, count: Int) {
+        if summary.hourly { return (.hour, 3) }
+        switch summary.days.count {
+        case ...7: return (.day, 1)
+        case ...30: return (.day, 5)
+        default: return (.day, 15)
+        }
+    }
+
+    /// Today spans all 24 hours, so a bar's place on the axis shows the time of day.
+    private var xDomain: ClosedRange<Date> {
+        guard let first = summary.days.first?.day, let last = summary.days.last?.day else { return Date()...Date().addingTimeInterval(1) }
+        return first...Calendar.current.date(byAdding: summary.hourly ? .hour : .day, value: 1, to: last)!
+    }
+
     private var chart: some View {
-        Chart(points) { point in
-            BarMark(x: .value("Day", point.day, unit: .day), y: .value(metric.rawValue, point.value))
+        let unit: Calendar.Component = summary.hourly ? .hour : .day
+        return Chart(points) { point in
+            BarMark(x: .value(summary.hourly ? "Hour" : "Day", point.day, unit: unit), y: .value(metric.rawValue, point.value))
                 .foregroundStyle(by: .value("Feature", point.feature.title))
         }
         // A fixed scale keeps each feature's colour the same in every range.
         .chartForegroundStyleScale(domain: UsageFeature.allCases.map(\.title))
-        .chartXAxis { AxisMarks(values: .automatic(desiredCount: 6)) { _ in AxisGridLine(); AxisTick(); AxisValueLabel(format: .dateTime.month().day()) } }
+        .chartXAxis {
+            AxisMarks(values: .stride(by: xAxisStride.component, count: xAxisStride.count)) { _ in
+                AxisGridLine(); AxisTick()
+                if summary.hourly { AxisValueLabel(format: .dateTime.hour(), centered: true) }
+                else { AxisValueLabel(format: .dateTime.month().day(), centered: true) }
+            }
+        }
+        .chartYAxis {
+            AxisMarks { value in
+                AxisGridLine(); AxisTick()
+                if metric == .cost, let amount = value.as(Double.self) { AxisValueLabel(amount == 0 ? "$0" : UsageFormat.cost(amount, currency: nil)) }
+                else { AxisValueLabel() }
+            }
+        }
+        .chartXScale(domain: xDomain)
         .frame(height: 150)
         .overlay {
             if points.isEmpty { Text("No data").font(.caption).foregroundStyle(.secondary) }
