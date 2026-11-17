@@ -85,7 +85,10 @@ private struct AutomationList: View {
     }
 
     private func row(_ a: Automation) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        // The next run, last run and approval state live in the service, not in observed state, so `tick` redraws the
+        // row every 5 s. It must not become the row's id: that rebuilds the time picker and drops its focus mid-edit.
+        let _ = tick
+        return HStack(alignment: .top, spacing: 10) {
             Toggle(a.name, isOn: Binding(get: { a.enabled }, set: { on in try? store.update(a.id) { $0.enabled = on } }))
                 .labelsHidden().toggleStyle(.switch)
             VStack(alignment: .leading, spacing: 2) {
@@ -121,7 +124,6 @@ private struct AutomationList: View {
             } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize()
         }
-        .id("\(a.id)-\(tick)")
     }
 
     /// The time of a daily automation with one time, and Weekdays only when its days are every day or Monday to Friday.
