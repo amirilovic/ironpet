@@ -467,9 +467,18 @@ final class TaskRunnerTests: XCTestCase {
         XCTAssertEqual(steered, "In the task's copy, git pushes origin to https://evil.example/app.git instead of git@github.com:you/app.git, so ironpet did not push. Check the copy's git config and push \(run.branch) yourself.")
         _ = try git("config", "--unset", "includeIf.onbranch:\(run.branch).path")
 
+        let ssh = dir.appendingPathComponent("ssh.gitconfig")
+        try "[core]\n\tsshCommand = ssh -i /tmp/evil-key\n".write(to: ssh, atomically: true, encoding: .utf8)
+        _ = try git("config", "includeIf.onbranch:\(run.branch).path", ssh.path)
+        let configured = await runner.openPR(task: id)
+        XCTAssertEqual(configured, "The copy's git config for URL rewrites, includes, the SSH command or credentials changed since the task started, so ironpet did not push. Check it and push \(run.branch) yourself.",
+                       "the push URL is unchanged everywhere, so only the snapshot catches the copy's SSH command")
+        _ = try git("config", "--unset", "includeIf.onbranch:\(run.branch).path")
+
         _ = try git("config", "url.https://evil.example/.pushInsteadOf", "git@github.com:")
         let rewritten = await runner.openPR(task: id)
-        XCTAssertEqual(rewritten, "The copy's git config for URL rewrites, includes, the SSH command or credentials changed since the task started, so ironpet did not push. Check it and push \(run.branch) yourself.")
+        XCTAssertEqual(rewritten.map { $0.hasPrefix("The push URL of origin changed since the task started") }, true,
+                       "a rewrite in the shared config also changes the main repo's push URL, which is checked first: \(rewritten ?? "nil")")
         XCTAssertTrue(commands.isEmpty, "nothing is pushed")
         _ = try git("config", "--unset", "url.https://evil.example/.pushInsteadOf")
 

@@ -501,6 +501,7 @@ final class ACPBackendTests: XCTestCase {
         XCTAssertFalse(logged().contains { $0["method"] as? String == "session/prompt" }, "no prompt is sent")
         missing.shutdown()
 
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("log"))
         setenv("FAKE_MODE", "setmodefail", 1)
         let refused = ACPBackend(agent: agent)
         refused.requiresAskingMode = true
