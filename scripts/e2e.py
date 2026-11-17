@@ -1574,6 +1574,145 @@ def scenario_welcome_back():
         call("POST", "/test/presence", {"idle": None})
 
 
+# MARK: daily brief
+
+AUTOMATIONS_FILE = f"{ROOT}/automations.json"
+BRIEF_SUMMARY = """# Planning
+
+## Summary
+Release planning.
+
+## Action items
+- [ ] Send the e2e brief notes (owner: Me)
+- [ ] Book the e2e review room (owner: Priya)
+"""
+
+
+class PreservedAutomations:
+    """Puts automations.json back on exit, which also restores whether the brief and recap were on, and removes the
+    scenario's meeting folder."""
+
+    def __init__(self, meeting):
+        self.meeting = meeting
+
+    def __enter__(self):
+        self.saved = open(AUTOMATIONS_FILE).read() if os.path.exists(AUTOMATIONS_FILE) else None
+        return self
+
+    def __exit__(self, *exc):
+        if self.saved is None:
+            if os.path.exists(AUTOMATIONS_FILE):
+                os.remove(AUTOMATIONS_FILE)
+        else:
+            open(AUTOMATIONS_FILE, "w").write(self.saved)
+        shutil.rmtree(self.meeting, ignore_errors=True)
+        time.sleep(2)
+        return False
+
+
+def ironpet_cli(*args):
+    env = {**os.environ, "IRONPET_ROOT": ROOT}
+    out = subprocess.run([f"{APP}/Contents/MacOS/IronPet", *args], capture_output=True, text=True, timeout=30, env=env)
+    try:
+        return out.returncode, json.loads(out.stdout)
+    except ValueError:
+        return out.returncode, None
+
+
+def brief_bubble(kind):
+    return next((b for b in call("GET", "/test/automations")["bubbles"] if b["id"] == f"digest:{kind}"), None)
+
+
+def brief_items(brief, section):
+    return next((s["items"] for s in brief.get("sections", []) if s["id"] == section), [])
+
+
+def fired_count(automation):
+    _, history = ironpet_cli("automations", "history", automation, "--limit", "50")
+    return sum(1 for run in history or [] if run.get("outcome") == "fired")
+
+
+def scenario_brief():
+    """Daily brief: built from local data only (no agent), Run now shows the bubble, Open shows Today, rows open their task
+    or meeting, the recap lists a closed task, and a scheduled slot fires once."""
+    # A fresh launch, so the automation test clock starts at the real time.
+    relaunch(test_mode=True)
+    stamp = time.strftime("%Y-%m-%d-%H%M", time.localtime(time.time() - 120))
+    meeting = f"{ROOT}/meetings/{stamp}-97"
+    with PreservedTasks(), PreservedAutomations(meeting):
+        call("POST", "/test/tasks/reset")
+        for automation in ("morning-brief", "day-recap"):
+            code, detail = ironpet_cli("automations", "get", automation)
+            detail = detail or {}
+            record(f"Brief: the built-in {automation} is a digest that needs no approval",
+                   code == 0 and detail.get("action", {}).get("type") == "digest" and "approval" not in detail,
+                   f"exit={code} action={detail.get('action')} approval={detail.get('approval')}")
+            ironpet_cli("automations", "pause", automation)
+        state = wait_for(lambda: (lambda w: w if not w.get("todayShown") else None)(call("GET", "/test/window")), 5) or call("GET", "/test/window")
+        record("Brief: Today is not in the sidebar while both are off", not state.get("todayShown"), f"window={state}")
+
+        yesterday = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86_400))
+        _, late = ironpet_cli("tasks", "add", "E2E overdue task", "--due", yesterday)
+        _, ask = ironpet_cli("tasks", "add", "E2E needs you task", "--status", "needs_you")
+        late_id, ask_id = (late or {}).get("id", ""), (ask or {}).get("id", "")
+        os.makedirs(meeting, exist_ok=True)
+        open(f"{meeting}/summary.md", "w").write(BRIEF_SUMMARY)
+        folder = os.path.basename(meeting)
+
+        brief = call("POST", "/test/digest", {"kind": "brief"})
+        due = [i["target"].get("id") for i in brief_items(brief, "due")]
+        needs = [i["target"].get("id") for i in brief_items(brief, "needs")]
+        meeting_items = [i for i in brief_items(brief, "meetings") if i["target"].get("id") == folder]
+        record("Brief: it lists the overdue task, the task that needs you and only my open action item",
+               late_id in due and ask_id in needs and [i["title"] for i in meeting_items] == ["Send the e2e brief notes"],
+               f"due={due} needs={needs} meeting={[i['title'] for i in meeting_items]} lines={brief.get('lines')}")
+
+        ironpet_cli("automations", "resume", "morning-brief")
+        state = wait_for(lambda: (lambda w: w if w.get("todayShown") else None)(call("GET", "/test/window")), 5) or {}
+        record("Brief: turning it on adds Today to the sidebar", bool(state.get("todayShown")), f"window={state}")
+
+        code, _ = ironpet_cli("automations", "run", "morning-brief")
+        bubble = wait_for(lambda: brief_bubble("brief"), 5)
+        record("Brief: Run now shows the brief bubble with an Open button and the overdue line",
+               code == 0 and bool(bubble) and bubble["buttons"] == ["Open"] and "overdue" in bubble["body"],
+               f"exit={code} bubble={bubble}")
+        shot("brief-bubble")
+
+        call("POST", "/test/automations/bubble", {"id": "digest:brief", "button": "Open"})
+        state = wait_for(lambda: (lambda w: w if w.get("visible") and w.get("section") == "today" else None)(call("GET", "/test/window")), 5) or {}
+        record("Brief: Open shows the Today page on the brief and closes the bubble",
+               state.get("section") == "today" and state.get("briefKind") == "brief" and not brief_bubble("brief"), f"window={state}")
+        shot("brief-today")
+
+        opened = call("POST", "/test/today/open", {"kind": "brief", "item": f"due:{late_id}"})
+        record("Brief: a task row opens the Tasks page on that task",
+               opened.get("ok") and opened.get("section") == "tasks" and opened.get("focusTask") in (late_id, ""), f"window={opened}")
+        opened = call("POST", "/test/today/open", {"kind": "brief", "item": f"meeting:{folder}:0"})
+        record("Brief: a meeting row opens Transcripts", opened.get("ok") and opened.get("section") == "transcripts", f"window={opened}")
+
+        ironpet_cli("tasks", "done", late_id)
+        recap = call("POST", "/test/digest", {"kind": "recap"})
+        closed = [i["target"].get("id") for i in brief_items(recap, "closed")]
+        held = [i["target"].get("id") for i in brief_items(recap, "meetings")]
+        record("Recap: it lists the task closed today and today's meeting, and ends with what is still open",
+               late_id in closed and folder in held and (recap.get("lines") or [""])[-1].startswith("Still open"),
+               f"closed={closed} meetings={held} lines={recap.get('lines')}")
+
+        # A slot one minute ahead, reached by moving the automation clock: it fires once, and not again on the next tick.
+        if time.localtime().tm_hour == 23 and time.localtime().tm_min >= 55:
+            record("Brief: a scheduled slot fires once", True, "skipped: too close to midnight")
+        else:
+            before = fired_count("morning-brief")
+            slot = time.strftime("%H:%M", time.localtime(time.time() + 60))
+            ironpet_cli("automations", "update", "morning-brief", "--json", json.dumps({"trigger": {"times": [slot], "weekdays": None}}))
+            time.sleep(1)
+            call("POST", "/test/automations/advance", {"seconds": 120})
+            call("POST", "/test/automations/advance", {"seconds": 30})
+            record("Brief: a scheduled slot fires once", fired_count("morning-brief") == before + 1,
+                   f"slot={slot} fired_before={before} fired_after={fired_count('morning-brief')}")
+        call("POST", "/test/tasks/reset")
+
+
 SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_session, "claude": scenario_claude, "codex": scenario_codex, "agents": scenario_agents,
              "asks": scenario_asks, "runtime": scenario_runtime, "auto": scenario_auto, "picker": scenario_picker,
              "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
@@ -1581,7 +1720,7 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
              "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
              "voice": scenario_voice, "voice-key": scenario_voice_key, "meeting": scenario_meeting,
              "meeting-system": scenario_meeting_system_audio, "tasks": scenario_tasks, "screen": scenario_screen,
-             "welcome-back": scenario_welcome_back}
+             "welcome-back": scenario_welcome_back, "brief": scenario_brief}
 
 # Need MCP servers signed in with cursor-agent: "mcp" a Langfuse MCP (its write is denied, so nothing is created),
 # "sentry" a Sentry MCP. Run them by name, e.g. `python3 scripts/e2e.py mcp sentry`.
@@ -1593,6 +1732,7 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # config.json back afterwards.
 # "tasks" runs two short turns on $IRONPET_E2E_AGENT (default cursor) and puts ironpet.db back afterwards.
 # "welcome-back" posts synthetic Claude hook events and a stand-in idle time, so it runs no agent; it puts config.json and ironpet.db back.
+# "brief" starts no agent; it puts ironpet.db and automations.json back afterwards.
 OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks", "meeting", "meeting-system"}
 
 if __name__ == "__main__":
