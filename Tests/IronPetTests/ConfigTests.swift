@@ -165,6 +165,20 @@ final class ConfigTests: XCTestCase {
         XCTAssertTrue(config.tasks.meetingSuggestions)
     }
 
+    func testWelcomeBackIsOnByDefaultAndForOldFiles() throws {
+        XCTAssertTrue(Config().welcomeBack.enabled)
+        try write(#"{"tasks":{"dueReminders":false}}"#)
+        XCTAssertTrue(Config.load(from: file).config.welcomeBack.enabled)
+    }
+
+    func testWelcomeBackCanBeTurnedOff() throws {
+        try write(#"{"welcomeBack":{"enabled":false}}"#)
+        let (config, error) = Config.load(from: file)
+        XCTAssertNil(error)
+        XCTAssertFalse(config.welcomeBack.enabled)
+        XCTAssertEqual(config.reminders, Config.Reminders())
+    }
+
     func testKeepDoneDaysIsClamped() throws {
         try write(#"{"tasks":{"keepDoneDays":0}}"#)
         XCTAssertEqual(Config.load(from: file).config.tasks.keepDoneDays, 1)

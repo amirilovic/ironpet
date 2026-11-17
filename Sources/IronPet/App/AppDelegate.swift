@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dueReminders: TaskDueReminders?
     /// Nil until the database is open, a moment after launch.
     private var activity: ActivityLog?
+    private var welcomeBack: WelcomeBack?
+    /// Replaces the system idle time in test mode (`POST /test/presence`). Nil otherwise.
+    private var testIdleSeconds: TimeInterval?
     private lazy var logWindow = AutomationLogWindow(service: { [weak self] in self?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
@@ -213,11 +216,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The app's one database. Features add their migrations to this list, in version order.
         let database = Database.open(path: Paths.root.appendingPathComponent("ironpet.db"), migrations: AppMigrations.all).database
         UsageStore.shared = UsageStore(database: database)
-        activity = ActivityLog(database: database)
+        let log = ActivityLog(database: database)
+        activity = log
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
         pet.tasks = tasks
         setUpDueReminders(tasks)
+        setUpWelcomeBack(log, tasks: tasks)
         pet.settings = settingsModel
         pet.onSettings = { [weak self] in self?.showSettings(tab: nil) }
         setUpScreenCapture(database)
@@ -700,7 +705,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 advanceClock: { [weak self] seconds in self?.testClockOffset += seconds },
                 bubbles: { [weak self] in
                     (self?.announcer.bubbles.bubbles ?? []).map {
-                        ["id": $0.id, "title": $0.title, "body": $0.body ?? "", "buttons": $0.actions.map(\.title)]
+                        ["id": $0.id, "title": $0.title, "body": $0.body ?? "", "buttons": $0.actions.map(\.title), "lines": $0.lines.map(\.text)]
                     }
                 },
                 pressBubbleButton: { [weak self] id, title in
@@ -711,6 +716,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ))
             control.onMeetingSummaryText = { [weak self] text, meeting in self?.suggestTasks(fromSummary: text, meeting: meeting) }
             control.screen = capture
+            control.welcomeBack = welcomeBack
+            control.setIdleSeconds = { [weak self] seconds in self?.testIdleSeconds = seconds }
             control.showInspector = { [weak self] in
                 self?.captureInspector.show()
                 return self?.captureInspector.windowNumber ?? 0
@@ -934,6 +941,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { reminders?.check() }
         })
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak reminders] in reminders?.check() }
+    }
+
+    /// Sums up what happened when the user comes back after being away. Samples the idle time every 2 s, because the
+    /// automation clock's 30 s tick would leave the user waiting for the summary.
+    private func setUpWelcomeBack(_ log: ActivityLog, tasks: TaskStore) {
+        var env = WelcomeBack.Environment()
+        let systemIdle = env.idleSeconds
+        env.idleSeconds = { [weak self] in self?.testIdleSeconds ?? systemIdle() }
+        env.isPresent = { [weak self] in
+            guard let self else { return false }
+            return [.recording, .finishing, .summarizing].contains(meeting.phase) || !(callMonitor?.detector.activeApps.isEmpty ?? true)
+        }
+        env.isEnabled = { ConfigStore.shared.config.welcomeBack.enabled }
+        env.threshold = { ConfigStore.shared.config.reminders.idleResetMinutes * 60 }
+        let welcome = WelcomeBack(log: log, bubbles: announcer.bubbles, env: env)
+        welcome.live = { [weak self, tasks] in
+            guard let self else { return .init() }
+            return WelcomeBack.liveState(sessions: Array(store.sessions.values), signals: signals.signals, tasks: tasks.tasks,
+                                         suggestions: tasks.suggestions, now: Date())
+        }
+        welcome.show = { [weak self] digest, away in
+            self?.announcer.welcomeBack(digest, away: away, open: { self?.open($0) }, showAll: { self?.pet.showWindow(nil) })
+        }
+        welcomeBack = welcome
+        timers.append(Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak welcome] _ in
+            MainActor.assumeIsolated { welcome?.tick() }
+        })
+    }
+
+    /// A line of a summary bubble. A session that has ended since is opened from what the activity log kept about it.
+    private func open(_ target: ActivityDigest.Target) {
+        switch target {
+        case .session(let id, let workspace, let app, let iterm):
+            if store.sessions[id] != nil { return openSession(id) }
+            guard let source = AgentSource(rawValue: String(id.prefix { $0 != ":" })) else { return pet.showWindow(.agents) }
+            var session = AgentSession(id: id, source: source)
+            session.origin = SessionOrigin(workspace: workspace, itermSessionID: iterm, ownerBundleID: app)
+            SourceJumper.jump(to: session)
+        case .agents: pet.showWindow(.agents)
+        case .alerts: pet.showWindow(.alerts)
+        case .tasks: showTasks()
+        case .automations: pet.showWindow(.automations)
+        case .chat: showChat()
+        case .url(let url), .file(let url): NSWorkspace.shared.open(url)
+        }
     }
 
     private func syncMeetingPanel() {

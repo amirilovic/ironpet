@@ -217,6 +217,93 @@ final class Announcer {
                       onTap: open)
     }
 
+    /// What happened while the user was away, one clickable line per kind of news.
+    func welcomeBack(_ digest: ActivityDigest, away: TimeInterval, open: @escaping (ActivityDigest.Target) -> Void,
+                     showAll: @escaping () -> Void) {
+        bubbles.show(Self.digestBubble(digest, id: WelcomeBack.bubbleID, title: "Welcome back", subtitle: Self.awayText(away),
+                                       petName: ConfigStore.shared.config.pet.name, open: open, showAll: showAll))
+        if digest.items.contains(where: \.isUrgent) { chime() }
+    }
+
+    static let digestLineLimit = 5
+
+    /// A summary bubble for any digest: up to five lines, the last one "and N more" when it does not fit.
+    static func digestBubble(_ digest: ActivityDigest, id: String, title: String, subtitle: String?, petName: String,
+                             open: @escaping (ActivityDigest.Target) -> Void, showAll: @escaping () -> Void,
+                             expires: TimeInterval = 180, now: Date = Date()) -> Bubble {
+        let fits = digest.items.count <= digestLineLimit
+        let shown = fits ? digest.items : Array(digest.items.prefix(digestLineLimit - 1))
+        var lines = shown.map { item in
+            let line = digestLine(item, petName: petName)
+            let target = item.target
+            return Bubble.Line(symbol: line.symbol, tint: line.tint, text: line.text) { if let target { open(target) } else { showAll() } }
+        }
+        if !fits {
+            let rest = digest.items.dropFirst(shown.count).reduce(0) { $0 + $1.count }
+            lines.append(Bubble.Line(symbol: "ellipsis.circle", tint: .secondary, text: "and \(rest) more", run: showAll))
+        }
+        let urgent = digest.items.contains(where: \.isUrgent)
+        return Bubble(id: id, symbol: urgent ? "exclamationmark.bubble.fill" : "sun.max.fill", tint: urgent ? .orange : .accentColor,
+                      title: title, subtitle: subtitle, lines: lines, actions: [.init(title: "Show all", run: showAll)],
+                      expires: now.addingTimeInterval(expires))
+    }
+
+    /// "While you were away (42 min)", or "(1 h 5 min)".
+    static func awayText(_ seconds: TimeInterval) -> String {
+        let minutes = max(1, Int((seconds / 60).rounded()))
+        let span = minutes < 60 ? "\(minutes) min" : minutes % 60 == 0 ? "\(minutes / 60) h" : "\(minutes / 60) h \(minutes % 60) min"
+        return "While you were away (\(span))"
+    }
+
+    /// One line of a summary: the thing itself when there is one, a count when there are several.
+    static func digestLine(_ item: ActivityDigest.Item, petName: String) -> (symbol: String, tint: Color, text: String) {
+        let n = item.count
+        let first = item.events.first
+        let name = first?.title ?? ""
+        switch item.kind {
+        case .sessionNeedsInput:
+            return ("hand.raised.fill", .orange, n == 1 ? "\(name) is waiting for you" : "\(n) agents are waiting for you")
+        case .sessionFailed:
+            return ("xmark.octagon.fill", .red, n == 1 ? "\(name) failed" : "\(n) agents failed")
+        case .sessionDone:
+            return ("checkmark.circle.fill", .green, n == 1 ? "\(name) finished" : "\(n) agents finished")
+        case .alertOpened:
+            let failing = item.isUrgent
+            let symbol = n == 1 ? (first?.extra[ActivityEvent.AlertKey.symbol] ?? "bell.fill") : "bell.badge.fill"
+            return (symbol, failing ? .red : .orange, n == 1 ? alertText(first) : "\(n) new alerts")
+        case .alertResolved:
+            return ("checkmark.seal.fill", .green, n == 1 ? "Cleared: " + alertText(first) : "\(n) alerts cleared")
+        case .taskDue:
+            return ("calendar", .accentColor, n == 1 ? "Task due: \(name)" : "\(n) tasks due")
+        case .taskSuggested:
+            return ("checklist", .accentColor, n == 1 ? "Suggested task: \(name)" : "\(n) suggested tasks")
+        case .meetingSummary:
+            return ("doc.text.fill", .green, n == 1 ? "Meeting summary ready: \(name)" : "\(n) meeting summaries ready")
+        case .chatFinished:
+            return ("bubble.left.fill", .accentColor, name.isEmpty ? "\(petName) finished your task" : name)
+        case .automationBubble:
+            let tint: Color
+            switch first?.extra[ActivityEvent.AutomationKey.tint] {
+            case "good": tint = .green
+            case "bad": tint = .red
+            case "warn": tint = .orange
+            default: tint = .cyan
+            }
+            guard n == 1, let first else { return ("bell.fill", .cyan, "\(n) updates from automations") }
+            let detail = first.detail.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            return ("bell.fill", tint, detail.isEmpty || detail == first.title ? first.title : "\(first.title): \(detail)")
+        default:
+            return ("sparkle", .secondary, n == 1 ? name : "\(n) more updates")
+        }
+    }
+
+    /// "CI failed: irtaza/ironpet #84", from the alert's label and what it is about.
+    private static func alertText(_ event: ActivityEvent?) -> String {
+        guard let event else { return "" }
+        let about = event.detail.isEmpty ? event.title : event.detail
+        return event.extra[ActivityEvent.AlertKey.label].map { "\($0): \(about)" } ?? about
+    }
+
     /// Small talk from the Actions menu.
     func say(_ text: String) {
         bubbles.show(Bubble(id: "say", symbol: "pawprint.fill", tint: .accentColor, title: ConfigStore.shared.config.pet.name, body: text,
