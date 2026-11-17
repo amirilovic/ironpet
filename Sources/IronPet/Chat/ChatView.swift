@@ -2,10 +2,24 @@ import AppKit
 import ImageIO
 import SwiftUI
 
+extension View {
+    /// A column of at most `maxWidth` points, centered in the width it is given. Below that it fills the width.
+    /// The padding sits inside the cap when `includesPadding` is set, and outside it otherwise.
+    func chatColumn(maxWidth: CGFloat, padding: CGFloat, includesPadding: Bool = false) -> some View {
+        SwiftUI.Group {
+            if includesPadding {
+                self.padding(.horizontal, padding).frame(maxWidth: maxWidth)
+            } else {
+                self.frame(maxWidth: maxWidth).padding(padding)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
 struct ChatView: View {
     @ObservedObject var session: ChatSession
     @ObservedObject private var config = ConfigStore.shared
-    let close: () -> Void
     @FocusState private var inputFocused: Bool
     @State private var showSettings = false
     @State private var follow = TranscriptFollow()
@@ -44,6 +58,10 @@ struct ChatView: View {
     /// `--render-previews` only: draw the settings popover's content on its own, since a popover can't render offscreen.
     var settingsOnly = false
     static let minimumSize = CGSize(width: 360, height: 320)
+    /// The message column (assistant text, tool rows, user bubbles) stops growing here and stays centered, so lines
+    /// stay readable in a wide window. The composer is the column plus its own side padding.
+    static let columnWidth: CGFloat = 768
+    static let composerWidth: CGFloat = 840
     /// The row SwiftUI reports at the top of the transcript. Tests compare it before and after content arrives, because
     /// the scroll offset in points moves when SwiftUI re-estimates the heights of rows that are not on screen.
     nonisolated(unsafe) static var topRowForTesting: UUID?
@@ -63,18 +81,19 @@ struct ChatView: View {
             }
         }
         .glassBar(.top) {
-            VStack(spacing: 0) {
-                header
-                if session.findOpen {
-                    FindBar(query: $findQuery, label: findLabel, hasMatches: !findMatches.isEmpty,
-                            focusTick: session.findFocusTick, step: stepFind, close: closeFind)
+            GlassPanel {
+                VStack(spacing: 0) {
+                    header
+                    if session.findOpen {
+                        FindBar(query: $findQuery, label: findLabel, hasMatches: !findMatches.isEmpty,
+                                focusTick: session.findFocusTick, step: stepFind, close: closeFind)
+                    }
                 }
             }
         }
         .glassBar(.bottom) { composer }
         .frame(minWidth: Self.minimumSize.width, maxWidth: .infinity,
                minHeight: Self.minimumSize.height, maxHeight: .infinity)
-        .background { ChatBackdrop() }
         // The window has a hidden, transparent title bar; without this its 28pt safe area sits empty above the header.
         .ignoresSafeArea(.container, edges: .top)
         .onAppear { inputFocused = true }
@@ -97,12 +116,7 @@ struct ChatView: View {
 
     private var header: some View {
         GlassGroup {
-            ZStack {
-                HStack(spacing: 10) {
-                    closeButtonPill
-                    Spacer()
-                    headerControls
-                }
+            HStack(spacing: 10) {
                 HStack(spacing: 8) {
                     PetAvatar(size: 30)
                     Text(ConfigStore.shared.config.pet.name)
@@ -113,8 +127,8 @@ struct ChatView: View {
                 .padding(.trailing, 16)
                 .padding(.vertical, 4)
                 .chromeGlass(in: Capsule())
-                // Equal insets keep the pill centered and a long name clear of the side pills.
-                .padding(.horizontal, 96)
+                Spacer(minLength: 8)
+                headerControls
             }
         }
         .padding(.horizontal, 12)
@@ -136,12 +150,6 @@ struct ChatView: View {
         }
         .padding(4)
         .chromeGlass(in: Capsule())
-    }
-
-    private var closeButtonPill: some View {
-        iconButton("xmark", help: "Close (Esc)", action: close)
-            .padding(4)
-            .chromeGlass(in: Capsule())
     }
 
     /// Project, agent, model and dictation live behind one button, so the header and composer stay clear.
@@ -343,7 +351,7 @@ struct ChatView: View {
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .scrollTargetLayout()
-                .padding(14)
+                .chatColumn(maxWidth: Self.columnWidth, padding: 14)
                 .background(ScrollObserver(activity: scrollActivity) { metrics, userDriven in
                     scrollMetricsChanged(metrics, userDriven: userDriven, proxy: proxy)
                 })
@@ -825,7 +833,7 @@ struct ChatView: View {
             queueRows
             composerBar
         }
-        .padding(.horizontal, 12)
+        .chatColumn(maxWidth: Self.composerWidth, padding: 12, includesPadding: true)
         .padding(.top, 6)
         .padding(.bottom, 12)
         .onChange(of: session.voice.phase) { _, phase in

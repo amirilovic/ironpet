@@ -26,14 +26,6 @@ struct TranscriptsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: IronPetSection.transcripts.title) {
-                if let progress = regenerator.progress {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text(progress.label).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
             if library.meetings.isEmpty {
                 EmptyState(symbol: "waveform", title: "No meetings yet",
                            detail: "Start one from \(ConfigStore.shared.config.pet.name)'s right-click menu; its transcript and summary show up here.")
@@ -42,6 +34,14 @@ struct TranscriptsView: View {
                     list
                     Divider()
                     detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        }
+        .pageHeader(IronPetSection.transcripts.title) {
+            if let progress = regenerator.progress {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(progress.label).font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
@@ -84,6 +84,9 @@ struct TranscriptsView: View {
             }
         }
         .listStyle(.inset)
+        .scrollContentBackground(.hidden)
+        // Rows sit on a light material so their text stays readable over a patterned background.
+        .background(.thinMaterial)
         .frame(width: 230)
     }
 

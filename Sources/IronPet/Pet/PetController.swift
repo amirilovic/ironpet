@@ -228,7 +228,6 @@ final class PetController: NSObject {
             },
             onAskMeeting: { [weak self] files in self?.onAskMeeting?(files) },
             meetingInProgress: { [weak self] in self?.meetingInProgress() },
-            onClose: { [weak self] in self?.builtWindow?.close() },
             onSettings: { [weak self] in
                 guard let self else { return }
                 // The Settings window is a normal window, so it would open behind this floating one.

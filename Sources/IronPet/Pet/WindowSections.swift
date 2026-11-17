@@ -7,7 +7,6 @@ struct ActionsSection: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: IronPetSection.actions.title) { EmptyView() }
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Make \(ConfigStore.shared.config.pet.name) do something")
@@ -24,6 +23,7 @@ struct ActionsSection: View {
             }
             .frame(maxHeight: .infinity)
         }
+        .pageHeader(IronPetSection.actions.title)
     }
 }
 
@@ -34,15 +34,15 @@ struct AgentsSection: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: IronPetSection.agents.title) {
-                HStack(spacing: 4) {
-                    ForEach([AgentStatus.needsInput, .running, .failed, .done], id: \.self) { status in
-                        let count = store.ordered.filter { $0.status == status }.count
-                        if count > 0 { CountChip(count: count, color: status.tint) }
-                    }
+            agents
+        }
+        .pageHeader(IronPetSection.agents.title) {
+            HStack(spacing: 4) {
+                ForEach([AgentStatus.needsInput, .running, .failed, .done], id: \.self) { status in
+                    let count = store.ordered.filter { $0.status == status }.count
+                    if count > 0 { CountChip(count: count, color: status.tint) }
                 }
             }
-            agents
         }
     }
 
@@ -92,14 +92,14 @@ struct AlertsSection: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: IronPetSection.alerts.title) {
-                if !signals.signals.isEmpty {
-                    Button("Clear all") { signals.dismissAll() }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                }
-            }
             alerts
+        }
+        .pageHeader(IronPetSection.alerts.title) {
+            if !signals.signals.isEmpty {
+                Button("Clear all") { signals.dismissAll() }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+            }
         }
     }
 
