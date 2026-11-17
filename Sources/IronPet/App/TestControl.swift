@@ -320,13 +320,9 @@ final class TestControl {
             return suggestTasks(body)
         case ("POST", "/test/tasks/accept-all"):
             guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
-            // The suggestions bubble's Add all when it is on screen, as a click would.
-            let bubble = actions.bubbles().first { ($0["buttons"] as? [String])?.contains("Add all") == true }
-            let pressed = (bubble?["id"] as? String).map { actions.pressBubbleButton($0, "Add all") } ?? false
-            if !pressed { store.acceptAll() }
-            var result = (try? JSONSerialization.jsonObject(with: tasksSnapshot())) as? [String: Any] ?? [:]
-            result["pressedBubble"] = pressed
-            return Self.encode(result)
+            // The Tasks tab's Add all. The suggestions bubble has no buttons.
+            store.acceptAll()
+            return tasksSnapshot()
         case ("GET", "/test/screen"):
             return screenSnapshot()
         case ("POST", "/test/screen/ingest"), ("POST", "/test/screen/filter"), ("POST", "/test/screen/send"), ("POST", "/test/screen/propose"), ("POST", "/test/screen/inspector"), ("POST", "/test/screen/stub"), ("POST", "/test/screen/reset"):

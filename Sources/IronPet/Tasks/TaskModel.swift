@@ -19,7 +19,7 @@ enum TaskStatus: String, CaseIterable, Codable {
 
 /// What created a task. Shown as a symbol in the list.
 enum TaskSource: String, CaseIterable, Codable {
-    case chat, telegram, meeting, automation, cli, agent, user, capture
+    case chat, telegram, meeting, automation, cli, agent, user, capture, email, pr
 
     var symbol: String {
         switch self {
@@ -31,8 +31,13 @@ enum TaskSource: String, CaseIterable, Codable {
         case .agent: return "sparkles"
         case .user: return "person"
         case .capture: return "text.viewfinder"
+        case .email: return "envelope"
+        case .pr: return "arrow.triangle.pull"
         }
     }
+
+    /// The kinds an agent may name in a task's `origin`. Telegram and the CLI are ways in, not origins.
+    static let originKinds: [TaskSource] = [.chat, .agent, .meeting, .capture, .automation, .email, .pr, .user]
 }
 
 /// Something a task points at: a chat thread, a watched agent session, a URL or a file.
@@ -56,6 +61,8 @@ struct TaskItem: Identifiable, Equatable {
     var closed: Date?
     /// Who the user is waiting on (`Ana`, `Them`). Nil for the user's own work.
     var waitingOn: String? = nil
+    /// Where the task came from, for diagnostics: a JSON object such as `{"meeting": "/path"}`. Nil when unknown.
+    var sourceRef: String? = nil
 
     /// Only the user can take the next step. A task waiting on someone else never counts, whatever its status.
     var needsUser: Bool { status == .needsYou && waitingOn == nil }
@@ -79,7 +86,12 @@ struct TaskSuggestion: Identifiable, Equatable {
         /// The meeting folder.
         case meeting(URL)
         case automation(id: String, name: String)
+        /// Screen capture's analysis. The value is the proposal's fingerprint, which a rejection remembers.
+        case capture(fingerprint: String)
     }
+
+    /// What a capture suggestion does. Meeting and automation suggestions are always `newTask`.
+    enum Kind: String { case newTask = "new_task", followUp = "follow_up", calendar, update }
 
     /// One suggestion before it is stored: a meeting action item, or what a watcher returned in a `suggest_task` action
     /// (cleaned by `init?(action:)`).
@@ -104,6 +116,24 @@ struct TaskSuggestion: Identifiable, Equatable {
     var created: Date
     /// The owner when it is not the user, so the task becomes one they wait on.
     var waitingOn: String? = nil
+    var kind: Kind = .newTask
+    /// For an update: the task it changes.
+    var target: String? = nil
+    /// For an update: the proposed new values, keyed `title`, `notes`, `due` and `status`.
+    var changes: [String: String] = [:]
+    /// For an update: the same changes as lines of "field: old -> new".
+    var diff: [String] = []
+    /// The sentence on screen that justifies the suggestion.
+    var quote = ""
+    /// The screen capture items the suggestion rests on.
+    var evidence: [Int64] = []
+    /// Where the suggestion came from, for diagnostics: a JSON object. Copied to the task on accept.
+    var sourceRef: String? = nil
+
+    var fingerprint: String? {
+        if case .capture(let fingerprint) = origin { return fingerprint }
+        return nil
+    }
 
     var meeting: URL? {
         if case .meeting(let url) = origin { return url }
@@ -112,8 +142,11 @@ struct TaskSuggestion: Identifiable, Equatable {
 
     /// The source of the task it becomes.
     var source: TaskSource {
-        if case .meeting = origin { return .meeting }
-        return .automation
+        switch origin {
+        case .meeting: return .meeting
+        case .capture: return .capture
+        case .automation: return .automation
+        }
     }
 
     /// "Meeting", or "From" and the automation's name.
@@ -121,6 +154,7 @@ struct TaskSuggestion: Identifiable, Equatable {
         switch origin {
         case .meeting: return "Meeting"
         case .automation(_, let name): return "From \(name)"
+        case .capture: return "From your screen"
         }
     }
 }

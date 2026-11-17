@@ -325,10 +325,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let service = CaptureService(store: captureStore, config: { ConfigStore.shared.config.screenCapture },
                                      rules: CaptureRules(folder: CaptureService.rulesFolder), dependencies: dependencies)
-        service.onProposals = { [weak self, weak service] proposals in
-            guard let self, let service else { return }
-            for proposal in proposals { self.showProposal(proposal, service: service) }
+        // Proposals wait in the task list as suggestions, for the Tasks tab or a reviewing agent. One info bubble tells the user how many (see offerSuggestions).
+        service.onProposals = { [weak self] proposals in
+            self?.offerSuggestions(TaskStore.shared?.suggest(capture: proposals) ?? [])
+            for proposal in proposals { self?.testControl?.recordProposal(proposal) }
         }
+        TaskStore.shared?.ignoreCapture = { [weak captureStore] fingerprint, kind in captureStore?.ignore(fingerprint: fingerprint, kind: kind) }
         service.model.$sending
             .removeDuplicates()
             .sink { [weak self] sending in self?.captureSendingChanged(sending) }
@@ -338,52 +340,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.showCaptures = { [weak self] in self?.captureInspector.show() }
         service.refreshModel()
         service.apply()
-    }
-
-    /// Shows what the agent suggested as a bubble. Add makes the task, Edit lets the user change it first, Ignore remembers not to ask again.
-    private func showProposal(_ proposal: CaptureProposal, service: CaptureService) {
-        let id = "capture-proposal:\(proposal.id)"
-        let dismiss = { [weak self] in self?.announcer.bubbles.dismiss(id) }
-        var body = proposal.title
-        if !proposal.diff.isEmpty { body += "\n" + proposal.diff.joined(separator: "\n") }
-        else if let due = proposal.due { body += "\nDue \(due)" }
-        if !proposal.quote.isEmpty { body += "\n\u{201C}\(proposal.quote)\u{201D}" }
-        announcer.bubbles.show(Bubble(
-            id: id, symbol: "checklist", tint: .blue, title: proposal.bubbleTitle, subtitle: "From your screen", body: body,
-            actions: [
-                .init(title: proposal.kind == .update ? "Update" : "Add", style: .primary) { Task { await service.accept(proposal) }; dismiss() },
-                .init(title: "Edit") { [weak self] in
-                    guard let edited = self?.editProposal(proposal) else { return }
-                    Task { await service.accept(proposal, title: edited.title, due: edited.due) }
-                    dismiss()
-                },
-                .init(title: "Ignore", style: .destructive) { service.ignore(proposal); dismiss() },
-            ]))
-        testControl?.recordProposal(proposal)
-    }
-
-    /// Asks for a new title and due date. Nil when the user cancels.
-    private func editProposal(_ proposal: CaptureProposal) -> (title: String, due: String?)? {
-        let alert = NSAlert()
-        alert.messageText = proposal.kind == .update ? "Update task" : "Add task"
-        alert.addButton(withTitle: proposal.kind == .update ? "Update" : "Add")
-        alert.addButton(withTitle: "Cancel")
-        let title = NSTextField(string: proposal.title)
-        let due = NSTextField(string: proposal.due ?? "")
-        due.placeholderString = "Due, such as 2026-11-20 (optional)"
-        let stack = NSStackView(views: [title, due])
-        stack.orientation = .vertical
-        stack.spacing = 8
-        stack.frame = NSRect(x: 0, y: 0, width: 320, height: 56)
-        title.widthAnchor.constraint(equalToConstant: 320).isActive = true
-        due.widthAnchor.constraint(equalToConstant: 320).isActive = true
-        alert.accessoryView = stack
-        NSApp.activate()
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        let text = title.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        let date = due.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (text, date.isEmpty ? nil : date)
     }
 
     /// A bubble stays up while captures are being sent to the agent, so the user always sees when anything leaves the Mac.
@@ -751,9 +707,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.captureInspector.show()
                 return self?.captureInspector.windowNumber ?? 0
             }
-            control.showProposal = { [weak self] proposal in
-                guard let self, let capture = self.capture else { return }
-                self.showProposal(proposal, service: capture)
+            control.showProposal = { proposal in
+                TaskStore.shared?.suggest(capture: [proposal])
             }
             control.buildBrief = { [weak self] kind in
                 let weekdays = self?.automations.store.automations.first { $0.action.digest == kind.rawValue }?.trigger.weekdays
@@ -944,14 +899,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         offerSuggestions(tasks.suggest(items, meeting: meeting))
     }
 
-    /// One bubble for suggestions that just arrived. Add all adds the ones it lists that are still waiting.
+    /// One info bubble for suggestions that just arrived, from a meeting, a watcher or screen capture. They wait until the Tasks tab
+    /// or a reviewing agent adds or rejects them.
     private func offerSuggestions(_ added: [TaskSuggestion]) {
-        guard !added.isEmpty, let tasks = TaskStore.shared else { return }
+        guard !added.isEmpty else { return }
         for suggestion in added { activity?.record(.taskSuggested(suggestion)) }
-        announcer.taskSuggestions(added, addAll: { [weak self] in
-            let accepted = added.filter { s in tasks.suggestions.contains(s) && (try? tasks.accept(s.id)) != nil }.count
-            self?.announcer.tasksAdded(accepted)
-        }, review: { [weak self] in self?.showTasks() })
+        announcer.taskSuggestions(added, review: { [weak self] in self?.showTasks() })
     }
 
     private func showTasks() {

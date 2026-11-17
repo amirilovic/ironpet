@@ -36,6 +36,8 @@ final class TaskCLIParsingTests: XCTestCase {
                                    "links": [["kind": "url", "ref": "https://example.com/pr/2"]]])
         XCTAssertEqual(try request(["add", "Send", "the", "deck", "--waiting-on", "Ana"]).args,
                        ["title": "Send the deck", "waiting_on": "Ana"])
+        XCTAssertEqual(try request(["add", "Ship", "it", "--origin-kind", "pr", "--origin-ref", "u", "--reason", "r"]).args as NSDictionary,
+                       ["title": "Ship it", "origin": ["kind": "pr", "ref": "u", "reason": "r"]] as NSDictionary)
         XCTAssertEqual(error(["add"]), "add needs a title")
         XCTAssertEqual(error(["add", "x", "--notes"]), "--notes needs a value")
         XCTAssertEqual(error(["add", "x", "--colour", "red"]), "unknown option --colour")
@@ -109,11 +111,16 @@ final class TaskCLIServerTests: XCTestCase {
     }
 
     func testAddStatusDoneAndDeleteReachTheStore() async throws {
-        let add = await cli(["add", "Renew", "the", "domain", "--due", "2026-12-01", "--url", "https://example.com/domains"])
+        let incomplete = await cli(["add", "Renew", "the", "domain", "--origin-kind", "chat", "--origin-ref", "chat-1"])
+        XCTAssertNotEqual(incomplete.code, 0)
+        XCTAssertTrue(incomplete.err.contains("origin.reason"), incomplete.err)
+        XCTAssertNil(store?.task("renew-the-domain"), "nothing is created without a full origin")
+        let add = await cli(["add", "Renew", "the", "domain", "--due", "2026-12-01", "--url", "https://example.com/domains",
+                             "--origin-kind", "agent", "--origin-ref", "cli-test", "--reason", "The domain expires soon"])
         XCTAssertEqual(add.code, 0, add.err)
         XCTAssertTrue(add.out.contains("\"id\" : \"renew-the-domain\""), add.out)
         let item = try XCTUnwrap(store?.task("renew-the-domain"))
-        XCTAssertEqual(item.source, .cli)
+        XCTAssertEqual(item.source, .agent)
         XCTAssertEqual(item.links.map(\.kind), [.url])
         XCTAssertEqual(store?.history(item.id).first?.by, "agent:cli")
 
@@ -126,7 +133,10 @@ final class TaskCLIServerTests: XCTestCase {
         XCTAssertEqual(list.code, 0, list.err)
         XCTAssertTrue(list.out.contains("renew-the-domain"))
 
-        let done = await cli(["done", "renew-the-domain"])
+        let noEvidence = await cli(["done", "renew-the-domain"])
+        XCTAssertNotEqual(noEvidence.code, 0)
+        XCTAssertNotEqual(store?.task("renew-the-domain")?.status, .done)
+        let done = await cli(["done", "renew-the-domain", "--note", "Renewed until 2027"])
         XCTAssertEqual(done.code, 0, done.err)
         XCTAssertEqual(store?.task("renew-the-domain")?.status, .done)
         let open = await cli(["list"])
@@ -143,7 +153,7 @@ final class TaskCLIServerTests: XCTestCase {
     }
 
     func testValidationErrorsArePrinted() async {
-        let bad = await cli(["add", "Bad", "--status", "someday"])
+        let bad = await cli(["add", "Bad", "--status", "someday", "--origin-kind", "chat", "--origin-ref", "c", "--reason", "r"])
         XCTAssertEqual(bad.code, 1)
         XCTAssertTrue(bad.err.contains("status must be one of"), bad.err)
     }

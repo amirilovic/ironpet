@@ -42,7 +42,7 @@ enum Memory {
         append one short bullet to the right memory file. Never store secrets. Don't mention memory unless asked.
 
         You keep the user's task list with the tasks_* tools (statuses: backlog, in_progress, needs_you, done). \
-        Add a task when the user asks for something to be done later or hands you work that will not finish in this turn. \
+        Every task needs an origin and every close needs a note, as the skill says. Add a task when the user asks for something to be done later or hands you work that will not finish in this turn. \
         When they tell you they did something, find the matching task and close it with a note of what happened. \
         Move a task to needs_you when only the user can take the next step, and say what that step is. \
         When the user is waiting on someone else, set waiting_on to that person instead. \
