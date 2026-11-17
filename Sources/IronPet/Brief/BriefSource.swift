@@ -12,7 +12,7 @@ final class BriefSource {
     /// sessions still in the store.
     var activity: BriefActivitySource?
     var now: () -> Date = Date.init
-    var calendar: Calendar = .current
+    var calendar: Calendar = .autoupdatingCurrent
     /// Each summary's open action items, keyed by folder, kept until the file changes.
     private var summaries: [String: (modified: Date, items: [String])] = [:]
 

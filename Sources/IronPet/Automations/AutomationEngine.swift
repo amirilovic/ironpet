@@ -19,7 +19,7 @@ final class AutomationEngine {
         var isAgentWorking: () -> Bool = { false }
         /// The user is mid-conversation with Ghost or an agent is waiting on them.
         var isBusy: () -> Bool = { false }
-        var calendar: Calendar = .current
+        var calendar: Calendar = .autoupdatingCurrent
     }
 
     struct Timing {
