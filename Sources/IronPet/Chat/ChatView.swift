@@ -37,6 +37,8 @@ struct ChatView: View {
     @State private var resizeEnd: DispatchWorkItem?
     /// How many of the newest items the transcript renders. A resumed session can hold thousands.
     @State private var shownItems = TranscriptGroup.pageSize
+    /// Long user messages the reader expanded. View state only, not saved with the thread.
+    @State private var expandedMessages: Set<UUID> = []
     @State private var findQuery = ""
     /// The query after a 150 ms pause, so typing does not search and re-render on every keystroke.
     @State private var activeQuery = ""
@@ -689,7 +691,9 @@ struct ChatView: View {
                 UserBubble(text: text, date: item.date, reply: item.reply, highlighted: highlightedID == item.id,
                            onReply: { session.reply(to: item) }, onQuoteTap: { if let reply = item.reply { jumpTick = JumpRequest(target: reply.itemID) } },
                            onAsk: { askAbout(item) }, onCopy: { copyText(item, text) }, onHoverChange: { hoverChanged(item.id, $0) },
-                           source: item.origin, find: highlights[item.id])
+                           source: item.origin, find: highlights[item.id],
+                           expanded: expandedMessages.contains(item.id),
+                           onToggleExpand: { if !expandedMessages.insert(item.id).inserted { expandedMessages.remove(item.id) } })
             case .screenshot(let path):
                 HStack {
                     Spacer(minLength: 60)
@@ -1099,7 +1103,8 @@ private struct ReplyQuote: View {
             RoundedRectangle(cornerRadius: 1.5).fill(onUser ? Color.white.opacity(0.8) : Color.accentColor).frame(width: 3)
             VStack(alignment: .leading, spacing: 1) {
                 Text(reply.sender).font(.system(size: 11, weight: .semibold))
-                Text(reply.text).font(.system(size: 11.5)).lineLimit(2).truncationMode(.tail)
+                // Only the start fits in two lines, and a quoted 60 KB paste should not be laid out in full.
+                Text(reply.text.prefix(300)).font(.system(size: 11.5)).lineLimit(2).truncationMode(.tail)
             }
             .foregroundStyle(onUser ? Color.white : Color.primary)
             Spacer(minLength: 0)
@@ -1130,12 +1135,19 @@ private struct UserBubble: View {
     var source: String?
     var find: ChatFind.RowHighlight?
     @ObservedObject private var paths = PathCache.shared
+    /// Whether the user expanded this message. ChatView owns it, because a lazy row scrolled out of view
+    /// loses its own @State and would collapse again. It is not persisted.
+    var expanded = false
+    var onToggleExpand: () -> Void = {}
 
     var body: some View {
+        let preview = MessageCollapse.preview(of: text)
+        // A row with find matches shows the whole text, so the highlighted occurrences exist on screen.
+        let showsAll = expanded || find != nil
         VStack(alignment: .trailing, spacing: 3) {
             VStack(alignment: .leading, spacing: 6) {
                 if let reply { ReplyQuote(reply: reply, onUser: true, tap: onQuoteTap) }
-                let linked = FilePathLinks.link(AttributedString(text), underline: true)
+                let linked = FilePathLinks.link(AttributedString(showsAll ? text : (preview?.text ?? text)), underline: true)
                 ChatFind.text(linked, segment: 0, find: find)
                     .font(.system(size: 13.5))
                     .linkCursor(linked, size: 13.5)
@@ -1147,6 +1159,17 @@ private struct UserBubble: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.accentColor, in: UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 5, topTrailingRadius: 16))
+            // While find matches this row it shows the whole text, so there is nothing to toggle.
+            if let preview, find == nil {
+                Button {
+                    onToggleExpand()
+                } label: {
+                    Text(expanded ? "Show less" : "Show more · \(preview.hiddenCharacters.formatted()) characters")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
             HStack(spacing: 4) {
                 ReplyButton(visible: hovering, action: onReply)
                 if source == ChatSession.telegramOrigin {
