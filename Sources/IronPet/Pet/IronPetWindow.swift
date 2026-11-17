@@ -520,28 +520,73 @@ struct SessionActions {
                                      onOpenThread: { _ in }, onOpenSession: { _ in })
 }
 
-/// The title of a section, with the actions that apply to all of it on the right.
-struct PageHeader<Trailing: View>: View {
+/// Size of every section header and where its title sits. The height puts the title's vertical center level with the
+/// traffic lights, which sit about 15 pt below the top of the window.
+enum PageHeaderMetrics {
+    static let height: CGFloat = 30
+}
+
+/// The title of a section, with the actions that apply to all of it on the right. Every section, and the chat, uses it,
+/// so the height and the title's position are the same everywhere. `leading` goes just before the title (the chat's avatar).
+struct PageHeader<Leading: View, Trailing: View>: View {
     let title: String
+    @ViewBuilder let leading: () -> Leading
     @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(title).font(.system(size: 15, weight: .semibold))
-            Spacer()
+        HStack(spacing: 8) {
+            leading()
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .lineLimit(1)
+                .background(FrameReader(role: .title))
+            Spacer(minLength: 8)
             trailing()
         }
         .padding(.horizontal, 16)
-        .frame(height: 32)
+        .frame(height: PageHeaderMetrics.height)
+        .background(FrameReader(role: .header))
+    }
+}
+
+/// Reports where a header and its title were laid out, in window coordinates, so a test can compare sections.
+struct PageHeaderFrames: PreferenceKey, Equatable {
+    var header: CGRect?
+    var title: CGRect?
+    static let defaultValue = PageHeaderFrames()
+    static func reduce(value: inout PageHeaderFrames, nextValue: () -> PageHeaderFrames) {
+        let next = nextValue()
+        value.header = value.header ?? next.header
+        value.title = value.title ?? next.title
+    }
+}
+
+private struct FrameReader: View {
+    enum Role { case header, title }
+    let role: Role
+
+    var body: some View {
+        GeometryReader { proxy in
+            let frame = proxy.frame(in: .global)
+            Color.clear.preference(key: PageHeaderFrames.self,
+                                   value: role == .header ? PageHeaderFrames(header: frame) : PageHeaderFrames(title: frame))
+        }
+    }
+}
+
+extension PageHeader where Leading == EmptyView {
+    init(title: String, @ViewBuilder trailing: @escaping () -> Trailing) {
+        self.init(title: title, leading: { EmptyView() }, trailing: trailing)
     }
 }
 
 extension View {
     /// Puts a glass panel at the top of a section, the width of the section, with the window background showing
-    /// through it. The section scrolls under the panel. The top padding covers the transparent title bar.
+    /// through it. The section scrolls under the panel. The panel starts at the top of the window, under the
+    /// transparent title bar, and is `PageHeaderMetrics.height` tall.
     func pageHeader<Trailing: View>(_ title: String, @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) -> some View {
         safeAreaInset(edge: .top, spacing: 0) {
-            GlassPanel { PageHeader(title: title, trailing: trailing).padding(.top, 10) }
+            GlassPanel { PageHeader(title: title, trailing: trailing) }
         }
     }
 }

@@ -65,8 +65,8 @@ final class ChatColumnTests: XCTestCase {
         host.frame = CGRect(x: 0, y: 0, width: 600, height: 300)
         host.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
-        // 10 pt under the title bar plus the 32 pt row; the strip spans the whole width.
-        XCTAssertEqual(result.minY, 42, accuracy: 0.5)
+        // The content starts below the one shared header height; the strip spans the whole width.
+        XCTAssertEqual(result.minY, PageHeaderMetrics.height, accuracy: 0.5)
         XCTAssertEqual(result.width, 600, accuracy: 0.5)
     }
 }
