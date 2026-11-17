@@ -163,6 +163,12 @@ struct RunScope: Equatable {
     /// The worktree. A card for a change outside it says so.
     let root: URL
 
+    /// A folder URL made while the folder exists ends in a slash, one made before it does not: the root is kept without
+    /// one so two scopes for the same folder are equal.
+    init(root: URL) {
+        self.root = URL(fileURLWithPath: root.standardizedFileURL.path, isDirectory: false)
+    }
+
     /// Compares real locations, so a symlink in the worktree that points outside it counts as outside. `~` and `$HOME`
     /// mean the home folder, as in a shell, not a folder of that name in the worktree.
     /// A path a shell would expand differently (`~user`, `$VAR`) or a URL counts as outside.
