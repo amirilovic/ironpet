@@ -141,6 +141,25 @@ final class UsageTests: XCTestCase {
         XCTAssertEqual(try costs(migrated), after)
     }
 
+    func testCorrectionRunsOnADatabaseThatIsAlreadyPastTheOldVersions() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-usage-\(UUID().uuidString)/ironpet.db")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        // An install from before the correction existed: every migration up to TaskStore's 422 has run.
+        let before = AppMigrations.all.filter { $0.version <= 422 }
+        let old = try Database(path: url, migrations: before)
+        XCTAssertEqual(old.schemaVersion, 422)
+        let store = UsageStore(database: old)
+        store.record(UsageEvent(at: daysAgo(0, hour: 1), feature: .chat, model: "claude-opus-5-5", inputTokens: 8, outputTokens: 3829,
+                                cacheReadTokens: 970_626, cacheWriteTokens: 6025, cost: 207.65, currency: "USD"))
+        store.flush()
+
+        let migrated = try Database(path: url, migrations: AppMigrations.all)
+        let cost = try migrated.read { try $0.rows("SELECT cost FROM usage_events").first?.first as? Double }
+        XCTAssertEqual(try XCTUnwrap(cost), (3829 * 20 + 970_626 * 0.2) / 1_000_000, accuracy: 1e-9)
+        XCTAssertEqual(migrated.schemaVersion, AppMigrations.all.map(\.version).max())
+        XCTAssertGreaterThan(migrated.schemaVersion, 422)
+    }
+
     // MARK: Persistence (S7)
 
     func testRecordsSurviveReopeningTheDatabase() throws {
