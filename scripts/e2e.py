@@ -1445,8 +1445,9 @@ def cli_task(*args):
 
 
 def scenario_task_run():
-    """Start on a task: the agent works in its own worktree and commits, approvals go through Ghost, it cannot push,
-    Open PR is recorded instead of run, Stop sends the task back, and closing the task removes the clean worktree."""
+    """Start on a task: the agent works in its own worktree and commits, every edit and command asks through Ghost (task
+    runs have no Auto), it cannot push, Open PR pushes to the remote URL recorded at Start through the recorded git dir
+    (recorded instead of run), Stop sends the task back, and closing the task removes the clean worktree."""
     shutil.rmtree(os.path.dirname(TASK_RUN_REPO), ignore_errors=True)
     os.makedirs(TASK_RUN_REPO)
     git("init", "-q", "--bare", TASK_RUN_REMOTE, cwd="/tmp")
@@ -1466,7 +1467,7 @@ def scenario_task_run():
             if not task or not task_runs().get("ok"):
                 return record("Task run: test endpoints answer", False, f"task={task} runs={task_runs()}")
 
-            call("POST", "/test/task-runs/start", {"task": task, "project": TASK_RUN_REPO, "agent": TASKS_AGENT, "auto": False})
+            call("POST", "/test/task-runs/start", {"task": task, "project": TASK_RUN_REPO, "agent": TASKS_AGENT})
             cards = []
 
             def settled():
@@ -1493,6 +1494,10 @@ def scenario_task_run():
             record("Task run: the worktree is under ~/.ironpet/worktrees on its own branch",
                    worktree.startswith(f"{ROOT}/worktrees/") and run["branch"] == f"ironpet/{task}" and run["baseBranch"] == "main",
                    f"worktree={worktree} branch={run['branch']}")
+            git_dir = os.path.realpath(f"{TASK_RUN_REPO}/.git/worktrees/{os.path.basename(worktree)}")
+            record("Task run: Start recorded the copy's git dir and the push remote from the main repo",
+                   run.get("gitDir") == git_dir and run.get("pushRemote") == "origin",
+                   f"gitDir={run.get('gitDir')} expected={git_dir} pushRemote={run.get('pushRemote')}")
             record("Task run: the agent committed hello.txt on its branch",
                    os.path.exists(f"{worktree}/hello.txt") and run["commits"] >= 1 and not run["dirty"],
                    f"commits={run['commits']} dirty={run['dirty']}")
@@ -1513,8 +1518,11 @@ def scenario_task_run():
             call("POST", "/test/task-runs/open-pr", {"task": task})
             opened = wait_for(lambda: task_runs()["openPR"] or None, 30) or []
             flat = [" ".join(c) for c in opened]
-            record("Task run: Open PR pushes the branch and opens gh (recorded in test mode)",
-                   any(c.endswith(f"-c core.hooksPath=/dev/null push --no-verify origin ironpet/{task}") for c in flat)
+            branch_ref = f"refs/heads/ironpet/{task}"
+            record("Task run: Open PR pushes the branch to the recorded URL with hooks and fsmonitor off, and opens gh (recorded in test mode)",
+                   any(f"--git-dir={run.get('gitDir')} --work-tree=" in c
+                       and c.endswith(f"-c core.fsmonitor=false -c core.hooksPath=/dev/null push --no-verify {TASK_RUN_REMOTE} {branch_ref}:{branch_ref}")
+                       for c in flat)
                    and any(f"pr create --web --head ironpet/{task} --base main" in c for c in flat)
                    and f"ironpet/{task}" not in git("ls-remote", "--heads", TASK_RUN_REMOTE).stdout,
                    f"commands={flat} error={task_runs().get('error')}")
@@ -1527,7 +1535,7 @@ def scenario_task_run():
                    f"cleanup={cleaned and cleaned['cleanup']} exists={os.path.exists(worktree)}")
 
             second = cli_task("add", "List the files in this folder, then wait for me").get("id")
-            call("POST", "/test/task-runs/start", {"task": second, "project": TASK_RUN_REPO, "agent": TASKS_AGENT, "auto": False})
+            call("POST", "/test/task-runs/start", {"task": second, "project": TASK_RUN_REPO, "agent": TASKS_AGENT})
             wait_for(lambda: (lambda r: r if r and r["state"] in ("running", "needs_approval") else None)(task_run(second)), 60)
             call("POST", "/test/task-runs/stop", {"task": second})
             stopped = task_run(second)
