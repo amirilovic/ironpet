@@ -228,6 +228,13 @@ private struct GeneralSettings: View {
     @ObservedObject private var store = ConfigStore.shared
     @State private var name = ConfigStore.shared.config.pet.name
 
+    private var welcomeBackFooter: String {
+        let minutes = Int(store.config.reminders.idleResetMinutes)
+        return "When you come back after \(minutes) minute\(minutes == 1 ? "" : "s") away, \(store.config.pet.name) sums up what happened in one "
+            + "bubble instead of the ones you missed. Built from what ironpet already knows on this Mac; nothing is sent anywhere. "
+            + "The away time is set under Automations → Timing."
+    }
+
     var body: some View {
         Form {
             Section("Pet") {
@@ -248,6 +255,13 @@ private struct GeneralSettings: View {
                 Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
                 Toggle("Also show macOS notifications", isOn: Binding(get: { model.alsoSystemNotifications },
                                                                       set: { model.alsoSystemNotifications = $0 }))
+            }
+            Section {
+                Toggle("Welcome back summary", isOn: Binding(
+                    get: { store.config.welcomeBack.enabled }, set: { on in store.update { $0.welcomeBack.enabled = on } }))
+            } footer: {
+                Text(welcomeBackFooter)
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section {
                 Toggle("Remind me when a task is due", isOn: Binding(

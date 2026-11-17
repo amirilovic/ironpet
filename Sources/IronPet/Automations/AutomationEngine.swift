@@ -148,7 +148,7 @@ final class AutomationEngine {
             if away {
                 for key in activeElapsed.keys { activeElapsed[key] = 0 }
             } else {
-                tickActive(enabled.filter { $0.trigger.type == "interval" && $0.trigger.clock != "wall" }, elapsed: elapsed, working: working)
+                tickActive(enabled.filter(\.trigger.countsKeyboardTime), elapsed: elapsed, working: working)
             }
             for a in enabled {
                 switch a.trigger.type {

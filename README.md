@@ -18,6 +18,7 @@ A desktop pet for macOS that keeps an eye on your coding agents and does small t
 - **Remembers.** Chats are saved and can be reopened. Ghost keeps editable markdown notes about you and each project and reads them at the start of every chat.
 - **Break reminders and automations.** Drink water (45 min), stretch (60 min) and rest your eyes (20 min), counted only while you're at the keyboard; stepping away for 5 minutes resets them. While an agent is working they can come a little early, so you take the break while you'd be waiting anyway. Ghost drinks or stretches along with you. His bubble has **Done** and **Snooze 10 min**. These are ordinary [automations](#automations), so an agent can add, change, pause and delete reminders, scheduled jobs and watchers for you. Toggle or pause them under right-click → Automations.
 - **Tasks.** Ghost keeps your task list. Ask for something to be done later, tell him when you did it, and the agent adds, updates and closes the task, with every change kept in its history. After a meeting summary, Ghost offers the action items that are yours, and the ones someone else owns as tasks you're waiting on. Watcher automations can suggest tasks too. The Tasks section of the ironpet window shows what needs you, what is in progress, the backlog and what you're waiting on from others. See [Tasks](#tasks).
+- **Welcome back.** When you come back after being away (5 minutes by default, the same idle time as the break reminders, or after the Mac slept), Ghost sums up what happened meanwhile in one bubble instead of the ones you missed: "demo-app is waiting for you", "CI failed: irtaza/ironpet #84", "2 agents finished", "Task due: Renew the domain". Each line opens what it names. It is built from what ironpet already recorded on your Mac, so no agent runs and nothing is sent anywhere. A call (any app using the microphone, even with meeting transcripts off) or a meeting recording doesn't count as away. Turn it off in Settings → General (`welcomeBack.enabled`).
 - **Model and agent picker** (the models come from the agent), per-project folder detection, a resizable window that stays open on Chat when you switch apps, launch at login.
 - **One window.** A sidebar switches between Chat, Agents, Alerts, Tasks, Transcripts (past meetings, with their summary and transcript, Ask Ghost, Regenerate and Move to Trash), Actions and Automations. Settings opens its own window from the Settings row at the bottom.
 
@@ -194,6 +195,7 @@ Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rena
   "reminders": { "paused": false, "idleResetMinutes": 5, "snoozeMinutes": 10 },
   "automations": { "logRetentionDays": 14 },
   "tasks": { "meetingSuggestions": true, "dueReminders": true, "keepDoneDays": 30 },
+  "welcomeBack": { "enabled": true },
   "integrations": { "shareMCPSignIns": false },
   "voice": { "enabled": false, "baseUrl": "http://localhost:8000/v1", "model": "mlx-community/parakeet-tdt-0.6b-v3" },
   "meetings": { "enabled": false, "lastApp": "", "summaryAgent": "claude", "summaryModel": "sonnet", "autoSummary": true, "offerToRecordCalls": true, "recogniseSpeakers": false },
@@ -208,6 +210,7 @@ Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rena
 - **Open sessions in** (`openIn`) is `"auto"`, which opens the app that started the agent (found by walking the agent's parent processes), or the bundle id of a fixed app such as `"dev.zed.Zed"`. The picker offers Cursor, VS Code, Zed, Band, Windsurf, Xcode and Finder when installed, plus your `editors` entries. In `urlTemplate`, `{cwd}` becomes the percent-encoded session folder; without a template the folder is opened with the app.
 - **Reminders and alerts** moved to `automations.json` (see [Automations](#automations)). Older `reminders.water`, `stretch`, `eyes` and `integrations.githubAlerts` keys still load. They are only read once, on the first launch with automations.
 - **Tasks** (`tasks`): `meetingSuggestions` offers a meeting's action items, `dueReminders` says when a task is due, and `keepDoneDays` is how long done tasks are kept. See [Tasks](#tasks).
+- **Welcome back** (`welcomeBack.enabled`) shows the summary bubble when you return. How long counts as away is `reminders.idleResetMinutes`.
 - **Telegram** (`telegram`) is covered in [Telegram](#telegram). The bot token is not in this file; it is stored in the Keychain.
 - **Voice** (`voice`) is covered in [Voice notes](#voice-notes). The API key is not in this file; it is stored in the Keychain.
 - **Meetings** (`meetings`, `hotkeys.meeting`) are covered in [Meeting transcripts](#meeting-transcripts).
@@ -268,7 +271,7 @@ All in `~/.ironpet/`:
 | `threads/` | Saved chats |
 | `screenshots/` | Last 30 captures |
 | `config.json` | Your settings |
-| `ironpet.db` | Tasks, automation state and logs, usage |
+| `ironpet.db` | Tasks, automation state and logs, usage, and the activity log behind the welcome back summary (`activity_events`, 30 days, kept whether or not the summary is on): what ironpet announced, with an agent's one-line summary or waiting request but never your prompt. See [SECURITY.md](SECURITY.md) for the exact fields |
 | `pets/` | Your pet library: every valid sprite sheet here shows in Settings → Pet |
 | `pet/spritesheet.png` | Optional custom pet art (overrides the bundled Ghost) |
 | `bin/ironpet-hook`, `port`, `token` | Hook bridge |

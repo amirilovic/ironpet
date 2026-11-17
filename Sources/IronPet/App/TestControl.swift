@@ -59,6 +59,9 @@ final class TestControl {
     var showProposal: ((CaptureProposal) -> Void)?
     /// Opens the capture viewer and returns its window number.
     var showInspector: (() -> Int)?
+    /// The welcome back summary, and the stand-in for the system idle time it samples (nil gives the real one back).
+    var welcomeBack: WelcomeBack?
+    var setIdleSeconds: ((TimeInterval?) -> Void)?
 
     func recordProposal(_ proposal: CaptureProposal) {
         proposals.append(proposal)
@@ -273,6 +276,14 @@ final class TestControl {
             let id = body["id"] as? String ?? "", title = body["button"] as? String ?? ""
             let pressed = actions.pressBubbleButton(id, title)
             return Self.encode(["ok": pressed])
+        case ("POST", "/test/presence"):
+            // Sets how long the user has been idle, then samples at once when asked, through the same tick as the timer.
+            setIdleSeconds?((body["idle"] as? NSNumber)?.doubleValue)
+            for id in body["dismiss"] as? [String] ?? [] { welcomeBack?.bubbles.dismiss(id) }
+            if body["tick"] as? Bool == true { welcomeBack?.tick() }
+            return welcomeBackSnapshot()
+        case ("GET", "/test/welcome-back"):
+            return welcomeBackSnapshot()
         case ("GET", "/test/tasks"):
             return tasksSnapshot()
         case ("POST", "/test/tasks/reset"):
@@ -433,6 +444,18 @@ final class TestControl {
         let service = actions.automations
         let list = service.store.automations.map { service.detail($0) }
         return Self.encode(["automations": list, "bubbles": actions.bubbles(), "error": service.store.error ?? ""])
+    }
+
+    private func welcomeBackSnapshot() -> Data {
+        guard let welcomeBack else { return Self.encode(["ok": false, "error": "welcome back is not set up"]) }
+        let digest = welcomeBack.lastDigest
+        return Self.encode([
+            "ok": true,
+            "away": welcomeBack.tracker.awaySince != nil,
+            "pending": welcomeBack.pendingSince != nil,
+            "digest": (digest?.items ?? []).map { ["kind": $0.kind.rawValue, "count": $0.count, "refs": $0.events.map(\.ref)] as [String: Any] },
+            "bubbles": actions.bubbles(),
+        ])
     }
 
     private func tasksSnapshot() -> Data {

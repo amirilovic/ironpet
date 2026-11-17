@@ -12,6 +12,15 @@ struct Bubble: Identifiable {
         let run: () -> Void
     }
 
+    /// A clickable line in a summary bubble, each opening its own thing.
+    struct Line: Identifiable {
+        let id = UUID()
+        var symbol: String
+        var tint: Color
+        var text: String
+        let run: () -> Void
+    }
+
     /// Showing a bubble with the same id replaces the old one.
     let id: String
     var symbol: String
@@ -19,6 +28,8 @@ struct Bubble: Identifiable {
     var title: String
     var subtitle: String?
     var body: String?
+    /// Shown instead of `body` when set.
+    var lines: [Line] = []
     var actions: [Action] = []
     var onTap: (() -> Void)?
     /// nil stays until answered or closed.
@@ -36,14 +47,26 @@ final class BubbleStore: ObservableObject {
     static let limit = 4
     /// Called when a bubble goes away through `dismiss`, whether the user closed it or code did.
     var onDismissed: ((String) -> Void)?
+    /// When each id was last shown, for the past hour, so a summary can tell what came up while the user was away.
+    private(set) var shownAt: [String: Date] = [:]
+    var now: () -> Date = Date.init
 
     func show(_ bubble: Bubble) {
+        let now = now()
+        let onScreen = Set(bubbles.map(\.id))
+        shownAt = shownAt.filter { onScreen.contains($0.key) || now.timeIntervalSince($0.value) < 3600 }
+        shownAt[bubble.id] = now
         var next = bubbles.filter { $0.id != bubble.id }
         next.append(bubble)
         while next.count > Self.limit {
             next.remove(at: next.firstIndex { $0.expires != nil } ?? next.firstIndex { $0.content == nil } ?? 0)
         }
         bubbles = next
+    }
+
+    /// The last time a bubble whose id starts with `prefix` was shown, within the past hour.
+    func lastShown(prefix: String) -> Date? {
+        shownAt.filter { $0.key.hasPrefix(prefix) }.values.max()
     }
 
     func dismiss(_ id: String) {
@@ -228,7 +251,12 @@ private struct BubbleView: View {
                 if let subtitle = bubble.subtitle {
                     Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                if let text = bubble.body, !text.isEmpty {
+                if !bubble.lines.isEmpty {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(bubble.lines) { line in lineButton(line) }
+                    }
+                    .padding(.top, 3)
+                } else if let text = bubble.body, !text.isEmpty {
                     Text(text)
                         .font(.system(size: 12))
                         .foregroundStyle(.primary.opacity(0.85))
@@ -244,6 +272,34 @@ private struct BubbleView: View {
                 }
             }
         }
+    }
+
+    private func lineButton(_ line: Bubble.Line) -> some View {
+        Button {
+            line.run()
+            dismiss()
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: line.symbol)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(line.tint)
+                    .frame(width: 14)
+                Text(line.text)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(line.text)
+        .help(line.text)
     }
 
     @ViewBuilder private func button(_ action: Bubble.Action) -> some View {

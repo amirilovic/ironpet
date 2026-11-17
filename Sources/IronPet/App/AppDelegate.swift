@@ -17,6 +17,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var capture: CaptureService?
     private lazy var captureInspector = CaptureInspectorWindow(service: { [weak self] in self?.capture })
     private var dueReminders: TaskDueReminders?
+    /// Nil until the database is open, a moment after launch.
+    private var activity: ActivityLog?
+    private var welcomeBack: WelcomeBack?
+    /// Replaces the system idle time in test mode (`POST /test/presence`). Nil otherwise.
+    private var testIdleSeconds: TimeInterval?
     private lazy var logWindow = AutomationLogWindow(service: { [weak self] in self?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
@@ -68,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Resolving the login-shell PATH runs the user's shell, so do it before the first chat needs it.
         Task.detached { _ = LoginShell.path }
         store.onAttention = { [weak self] session in
+            if let event = ActivityEvent.session(session) { self?.activity?.record(event) }
             self?.announcer.session(session)
             self?.testControl?.recordAttention(session)
         }
@@ -111,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         announcer.bubbles.onDismissed = { [weak self] id in self?.meetingBubbleClosed(id) }
         pet.onRecordingClick = { [weak self] in self?.showMeetingBubble() }
         meeting.onSummaryReady = { [weak self] url in
+            self?.activity?.record(.meetingSummary(url))
             self?.announcer.meetingSummary(url)
             self?.meetings.reload()
             self?.testControl?.recordMeetingNotified(url)
@@ -133,7 +140,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             meeting.confirmConsent = { true }
         }
         startCallMonitor()
-        chat.onAttention = { [weak self] title in self?.announcer.chat(title) }
+        chat.onAttention = { [weak self] title in
+            self?.activity?.record(.chatFinished(title))
+            self?.announcer.chat(title)
+        }
         telegram.onPairingRequest = { [weak self] request in
             self?.announcer.telegramPairing(request, allow: { self?.telegram.allow(request.id) },
                                             deny: { self?.telegram.deny(request.id) })
@@ -206,18 +216,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The app's one database. Features add their migrations to this list, in version order.
         let database = Database.open(path: Paths.root.appendingPathComponent("ironpet.db"), migrations: AppMigrations.all).database
         UsageStore.shared = UsageStore(database: database)
+        let log = ActivityLog(database: database)
+        activity = log
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
         pet.tasks = tasks
         setUpDueReminders(tasks)
+        setUpWelcomeBack(log, tasks: tasks)
         pet.settings = settingsModel
         pet.onSettings = { [weak self] in self?.showSettings(tab: nil) }
         setUpScreenCapture(database)
         let service = AutomationService(store: store, engine: engine, database: database)
-        service.notice = { [weak self] notice in self?.announcer.automation(notice) }
+        service.notice = { [weak self] notice in
+            if let event = ActivityEvent.automationNotice(notice) { self?.activity?.record(event) }
+            self?.announcer.automation(notice)
+        }
         service.dismissNotice = { [weak self] id in self?.announcer.bubbles.dismiss(id) }
-        service.alert = { [weak self] signal, notify in self?.signals.add(signal, notify: notify) }
-        service.resolveAlert = { [weak self] id in self?.signals.dismiss(id) }
+        service.alert = { [weak self] signal, notify in
+            if notify { self?.activity?.record(.alertOpened(signal)) }
+            self?.signals.add(signal, notify: notify)
+        }
+        service.resolveAlert = { [weak self] id in
+            guard let self else { return }
+            if let signal = signals.signals.first(where: { $0.id == id }) { activity?.record(.alertResolved(signal)) }
+            signals.dismiss(id)
+        }
         // Alerts the user has not dismissed come back after a restart, quietly. Dismissing one clears its stored payload.
         signals.restore(service.engine.state.openAlerts())
         signals.onDismiss = { [state = service.engine.state] id in state.closeAlert(signalID: id) }
@@ -679,7 +702,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 advanceClock: { [weak self] seconds in self?.testClockOffset += seconds },
                 bubbles: { [weak self] in
                     (self?.announcer.bubbles.bubbles ?? []).map {
-                        ["id": $0.id, "title": $0.title, "body": $0.body ?? "", "buttons": $0.actions.map(\.title)]
+                        ["id": $0.id, "title": $0.title, "body": $0.body ?? "", "buttons": $0.actions.map(\.title), "lines": $0.lines.map(\.text)]
                     }
                 },
                 pressBubbleButton: { [weak self] id, title in
@@ -690,6 +713,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ))
             control.onMeetingSummaryText = { [weak self] text, meeting in self?.suggestTasks(fromSummary: text, meeting: meeting) }
             control.screen = capture
+            control.welcomeBack = welcomeBack
+            control.setIdleSeconds = { [weak self] seconds in self?.testIdleSeconds = seconds }
             control.showInspector = { [weak self] in
                 self?.captureInspector.show()
                 return self?.captureInspector.windowNumber ?? 0
@@ -884,6 +909,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// One bubble for suggestions that just arrived. Add all adds the ones it lists that are still waiting.
     private func offerSuggestions(_ added: [TaskSuggestion]) {
         guard !added.isEmpty, let tasks = TaskStore.shared else { return }
+        for suggestion in added { activity?.record(.taskSuggested(suggestion)) }
         announcer.taskSuggestions(added, addAll: { [weak self] in
             let accepted = added.filter { s in tasks.suggestions.contains(s) && (try? tasks.accept(s.id)) != nil }.count
             self?.announcer.tasksAdded(accepted)
@@ -900,6 +926,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reminders.isShowing = { bubbles.bubbles.contains { $0.id == Announcer.tasksDueID } }
         reminders.hide = { bubbles.dismiss(Announcer.tasksDueID) }
         reminders.show = { [weak self, weak reminders] list, isNew in
+            if isNew { for task in list { self?.activity?.record(.taskDue(task)) } }
             let ids = list.map(\.id)
             self?.announcer.tasksDue(list, chime: isNew, done: { reminders?.done(ids) }, snooze: { reminders?.snooze(ids) },
                                      open: { self?.showTasks() })
@@ -911,6 +938,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { reminders?.check() }
         })
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak reminders] in reminders?.check() }
+    }
+
+    /// Sums up what happened when the user comes back after being away. Samples the idle time every 2 s, because the
+    /// automation clock's 30 s tick would leave the user waiting for the summary.
+    private func setUpWelcomeBack(_ log: ActivityLog, tasks: TaskStore) {
+        var env = WelcomeBack.Environment()
+        let systemIdle = env.idleSeconds
+        env.idleSeconds = { [weak self] in self?.testIdleSeconds ?? systemIdle() }
+        let micWatch = MicWatch()
+        let presence = Presence(
+            meetingActive: { [weak self] in self.map { [.recording, .finishing, .summarizing].contains($0.meeting.phase) } ?? false },
+            detectedCalls: { [weak self] in self?.callMonitor.flatMap { $0.isRunning ? $0.detector.activeApps : nil } },
+            micCalls: micWatch.calls)
+        env.isPresent = presence.isPresent
+        env.presenceNotNeeded = micWatch.stop
+        env.isEnabled = { ConfigStore.shared.config.welcomeBack.enabled }
+        env.threshold = { ConfigStore.shared.config.reminders.idleResetMinutes * 60 }
+        let welcome = WelcomeBack(log: log, bubbles: announcer.bubbles, env: env)
+        welcome.live = { [weak self, tasks] in
+            guard let self else { return .init() }
+            return WelcomeBack.liveState(sessions: Array(store.sessions.values), signals: signals.signals, tasks: tasks.tasks,
+                                         suggestions: tasks.suggestions, now: Date())
+        }
+        welcome.show = { [weak self] digest, away in
+            self?.announcer.welcomeBack(digest, away: away, open: { self?.open($0) }, showAll: { self?.pet.showWindow(nil) })
+        }
+        welcomeBack = welcome
+        timers.append(Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak welcome] _ in
+            MainActor.assumeIsolated { welcome?.tick() }
+        })
+    }
+
+    /// A line of a summary bubble. A session that has ended since is opened from what the activity log kept about it.
+    private func open(_ target: ActivityDigest.Target) {
+        switch target {
+        case .session(let id, let workspace, let app, let iterm):
+            if store.sessions[id] != nil { return openSession(id) }
+            guard let source = AgentSource(rawValue: String(id.prefix { $0 != ":" })) else { return pet.showWindow(.agents) }
+            var session = AgentSession(id: id, source: source)
+            session.origin = SessionOrigin(workspace: workspace, itermSessionID: iterm, ownerBundleID: app)
+            SourceJumper.jump(to: session)
+        case .agents: pet.showWindow(.agents)
+        case .alerts: pet.showWindow(.alerts)
+        case .tasks: showTasks()
+        case .automations: pet.showWindow(.automations)
+        case .chat: showChat()
+        case .url(let url), .file(let url): NSWorkspace.shared.open(url)
+        }
     }
 
     private func syncMeetingPanel() {

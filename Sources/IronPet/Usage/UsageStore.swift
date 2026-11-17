@@ -201,7 +201,7 @@ final class UsageStore: @unchecked Sendable {
 
 /// Every feature's migrations, in the order the database applies them.
 enum AppMigrations {
-    static let all = AutomationState.migrations + UsageStore.migrations + TaskStore.migrations + CaptureStore.migrations
+    static let all = AutomationState.migrations + UsageStore.migrations + TaskStore.migrations + CaptureStore.migrations + ActivityLog.migrations
 }
 
 // MARK: Agent usage

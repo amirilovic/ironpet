@@ -116,6 +116,34 @@ enum PreviewRenderer {
                         bubbles: [Announcer.tasksDueBubble(due, now: Date(), done: {}, snooze: {}, open: {})]),
                to: dir, "task-due-several")
 
+        let left = Date().addingTimeInterval(-62 * 60)
+        let window = DateInterval(start: left, end: Date())
+        func event(_ kind: ActivityEvent.Kind, _ ref: String, _ title: String, detail: String = "", minutes: Double,
+                   extra: [String: String] = [:]) -> ActivityEvent {
+            ActivityEvent(at: left.addingTimeInterval(minutes * 60), kind: kind, ref: ref, title: title, detail: detail,
+                          url: kind == .alertOpened ? URL(string: "https://github.com") : nil, extra: extra)
+        }
+        let away = [
+            event(.sessionNeedsInput, "claude:1", "demo-app", minutes: 40),
+            event(.alertOpened, "automation:gh:84", "Fix the login redirect", detail: "irtaza/ironpet #84", minutes: 22,
+                  extra: ["label": "CI failed"]),
+            event(.sessionDone, "codex:2", "api", minutes: 10),
+            event(.sessionDone, "claude:3", "website", minutes: 30),
+            event(.taskDue, "renew", "Renew the domain before it lapses on Friday", minutes: 1),
+            event(.meetingSummary, "/m/summary.md", "2026-11-17 10-00 Standup", minutes: 50),
+        ]
+        func welcome(_ events: [ActivityEvent]) -> Bubble {
+            Announcer.digestBubble(ActivityDigest.build(events: events, window: window), id: WelcomeBack.bubbleID,
+                                   title: "Welcome back", subtitle: Announcer.awayText(window.duration), petName: "Ghost",
+                                   open: { _ in }, showAll: {})
+        }
+        for scheme in [ColorScheme.dark, .light] {
+            let suffix = scheme == .dark ? "" : "-light"
+            render(PetScene(atlas: atlas, row: .waving, frame: 2, bubbles: [welcome(away)]), to: dir, "welcome-back\(suffix)", scheme: scheme)
+            render(PetScene(atlas: atlas, row: .idle, frame: 0, bubbles: [welcome([away[2], away[3]])]),
+                   to: dir, "welcome-back-single\(suffix)", scheme: scheme)
+        }
+
         // Ghost works, finishes, asks before running a command, then takes a water break; then it loops.
         var shots: [(row: AtlasRow, frame: Int, bubbles: [Bubble], delay: Double)] = []
         func play(_ row: AtlasRow, loops: Int = 1, _ bubbles: [Bubble], holdLast: Double = 0) {

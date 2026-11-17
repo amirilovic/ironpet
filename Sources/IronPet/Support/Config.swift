@@ -129,6 +129,12 @@ struct Config: Codable, Equatable {
         var keepDoneDays = 30
     }
 
+    /// After the user has been away for `reminders.idleResetMinutes`, one bubble sums up what happened meanwhile. Built from
+    /// ironpet's own activity log and stores; nothing is sent anywhere, so it is on by default.
+    struct WelcomeBack: Codable, Equatable {
+        var enabled = true
+    }
+
     struct Integrations: Codable, Equatable {
         /// Status hooks in `~/.cursor/hooks.json`.
         var cursorHooks = false
@@ -208,6 +214,7 @@ struct Config: Codable, Equatable {
     var automations = Automations()
     var skills = Skills()
     var tasks = Tasks()
+    var welcomeBack = WelcomeBack()
     var voice = Voice()
     var meetings = Meetings()
     var telegram = Telegram()

@@ -34,6 +34,9 @@ struct Automation: Codable, Equatable, Identifiable {
         var script: String?
         /// `poll`: after a run fires, this many minutes pass before the next one can.
         var cooldownMinutes: Double?
+
+        /// An `interval` on the `active` clock (the default): time counts only while the user is at the keyboard.
+        var countsKeyboardTime: Bool { type == "interval" && clock != "wall" }
     }
 
     struct PollSource: Codable, Equatable {
@@ -84,6 +87,9 @@ struct Automation: Codable, Equatable, Identifiable {
     var note: String?
 
     var isByUser: Bool { createdBy == "user" }
+
+    /// A break reminder such as drink water: a bubble on keyboard time. A watcher, shell job or prompt on keyboard time is not one.
+    var isBreakReminder: Bool { trigger.countsKeyboardTime && action.type == "bubble" }
 
     init(id: String, name: String, enabled: Bool = true, trigger: Trigger, action: Action, presentation: Presentation = Presentation(),
          createdBy: String = "user", note: String? = nil) {

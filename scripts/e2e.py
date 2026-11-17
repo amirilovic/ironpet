@@ -1520,13 +1520,68 @@ def scenario_screen():
         call("POST", "/test/screen/reset")
 
 
+def post_hook(source, name, payload, cwd=WS):
+    """Posts a hook event the way ironpet-hook does, without running an agent."""
+    port = open(f"{ROOT}/port").read().strip()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/event", data=json.dumps(payload).encode(), method="POST",
+                                 headers={"X-Ironpet-Token": token(), "X-Ironpet-Source": source, "X-Ironpet-Event": name,
+                                          "X-Ironpet-Cwd": cwd, "Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=10).read()
+
+
+def scenario_welcome_back():
+    """Welcome back: two agents finish while the user is away (a stand-in idle time, no real waiting), one summary
+    bubble replaces their bubbles on return; switched off, nothing is summarized. Runs no agent; puts config.json and
+    ironpet.db back, so the fake sessions leave no rows in the activity log."""
+    with PreservedUserState(), PreservedTasks():
+        relaunch(test_mode=True)
+        state = call("POST", "/test/presence", {"idle": None, "tick": True})
+        if not state.get("ok"):
+            return record("Welcome back: test endpoints answer", False, state.get("error", ""))
+        away = int(read_config().get("reminders", {}).get("idleResetMinutes", 5) * 60) + 600
+
+        def round_trip(tag):
+            call("POST", "/test/presence", {"idle": away, "tick": True})
+            left = call("GET", "/test/welcome-back")
+            for n in (1, 2):
+                session = f"e2e-welcome-{tag}-{n}"
+                post_hook("claude", "UserPromptSubmit", {"session_id": session, "prompt": "Rename the helper", "cwd": WS})
+                post_hook("claude", "Stop", {"session_id": session, "cwd": WS, "last_assistant_message": "Renamed it."})
+            time.sleep(1)
+            back = call("POST", "/test/presence", {"idle": 0, "tick": True})
+            return left, back
+
+        left, back = round_trip("on")
+        bubbles = back.get("bubbles", [])
+        summary = next((b for b in bubbles if b["id"] == "welcome-back"), None)
+        sessions = [b["id"] for b in bubbles if b["id"].startswith("session:claude:e2e-welcome-on-")]
+        record("Welcome back: away is noticed from the idle time", left.get("away") is True, f"state={left}")
+        record("Welcome back: one summary on return, the session bubbles folded into it",
+               bool(summary) and not sessions and any("2 agents finished" in line for line in summary.get("lines", [])),
+               f"summary={summary} sessions={sessions} digest={back.get('digest')}")
+
+        call("POST", "/test/presence", {"idle": None, "dismiss": ["welcome-back"]})
+        config = read_config()
+        config["welcomeBack"] = {"enabled": False}
+        json.dump(config, open(CONFIG, "w"), indent=2)
+        time.sleep(2.6)
+        _, back = round_trip("off")
+        bubbles = back.get("bubbles", [])
+        record("Welcome back: switched off, no summary and the bubbles stay",
+               not any(b["id"] == "welcome-back" for b in bubbles)
+               and any(b["id"].startswith("session:claude:e2e-welcome-off-") for b in bubbles),
+               f"bubbles={[b['id'] for b in bubbles]}")
+        call("POST", "/test/presence", {"idle": None})
+
+
 SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_session, "claude": scenario_claude, "codex": scenario_codex, "agents": scenario_agents,
              "asks": scenario_asks, "runtime": scenario_runtime, "auto": scenario_auto, "picker": scenario_picker,
              "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
              "notification": scenario_notification_approval, "mcp": scenario_mcp,
              "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
              "voice": scenario_voice, "voice-key": scenario_voice_key, "meeting": scenario_meeting,
-             "meeting-system": scenario_meeting_system_audio, "tasks": scenario_tasks, "screen": scenario_screen}
+             "meeting-system": scenario_meeting_system_audio, "tasks": scenario_tasks, "screen": scenario_screen,
+             "welcome-back": scenario_welcome_back}
 
 # Need MCP servers signed in with cursor-agent: "mcp" a Langfuse MCP (its write is denied, so nothing is created),
 # "sentry" a Sentry MCP. Run them by name, e.g. `python3 scripts/e2e.py mcp sentry`.
@@ -1537,6 +1592,7 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # "screen" feeds synthetic captures in and stubs the model and the agent, so it reads no screen and starts no agent; it puts ironpet.db and
 # config.json back afterwards.
 # "tasks" runs two short turns on $IRONPET_E2E_AGENT (default cursor) and puts ironpet.db back afterwards.
+# "welcome-back" posts synthetic Claude hook events and a stand-in idle time, so it runs no agent; it puts config.json and ironpet.db back.
 OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks", "meeting", "meeting-system"}
 
 if __name__ == "__main__":

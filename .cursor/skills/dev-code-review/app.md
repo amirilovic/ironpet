@@ -18,6 +18,7 @@ The design is `SPEC.md`. Swift 5.10 tools (Swift 5 language mode), macOS 14 mini
 | `Voice/` | Voice notes: hold-to-talk key, microphone capture and conversion, WAV encoding, the transcription client, the level buffer and waveform bar, the Keychain key |
 | `Meeting/` | Meeting transcripts: call detection, track sources (mic and ScreenCaptureKit), recorder and chunker, transcript assembly, summary, panel |
 | `Reminders/` | Break reminders scheduler |
+| `Activity/` | The local activity log in `ironpet.db` (`ActivityEvent`, `ActivityLog`), the digest built from it (`ActivityDigest`), away detection and the welcome back summary (`AwayTracker`, `WelcomeBack`) |
 | `Support/` | `Config` and `ConfigStore`, `Paths` (everything under `~/.ironpet`) |
 | `Tests/IronPetTests/` | XCTest, one file per area (`ApprovalRulesTests`, `HookInstallerTests`, `ConfigTests`, `ACPClientTests`, `MeetingTests`, …) |
 
@@ -91,6 +92,7 @@ Installed-app and e2e checks change the user's machine (see Ground rules in `SKI
 | `Voice/` | `voice`, `voice-key` (opt-in, need a local mlx-audio server) |
 | `Meeting/` | `meeting`, `meeting-system` (opt-in) |
 | `Tasks/`, task tools, `IronPet tasks` | `tasks` |
+| `Activity/`, digest bubbles | `welcome-back` |
 
 Summary rows for the **App** table:
 
