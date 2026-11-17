@@ -234,6 +234,8 @@ struct TaskStartPopover: View {
     @State private var error: String?
     /// The repository and branch the chosen folder is in, and its remotes the push block does not cover.
     @State private var target: (repo: URL, branch: String?, unblockedRemotes: [String])?
+    /// Why the picked agent's own settings would let it run commands unasked, read when the agent changes.
+    @State private var settingsRefusal: String?
 
     private var continuing: TaskRun? {
         runner.run(for: task.id).flatMap { run in
@@ -286,11 +288,18 @@ struct TaskStartPopover: View {
                 Text("This task's text came from \(origin). Read it before you start.")
                     .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
-            Label("The agent asks you before every edit, command and tool that could change something. Auto does not apply to task runs.",
+            Label("The agent asks you before every edit, command and tool that could change something. Auto does not apply to task runs, "
+                  + "and Start refuses an agent whose own settings let it run commands without asking.",
                   systemImage: "hand.raised")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if let settingsRefusal {
+                Label(settingsRefusal, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !Self.excluded(runner.agents(), by: runner).isEmpty {
                 Text(Self.excludedText(Self.excluded(runner.agents(), by: runner)))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -342,6 +351,9 @@ struct TaskStartPopover: View {
             target = nil
             guard let folder = continuing?.repo ?? project else { return }
             target = await runner.target(of: folder)
+        }
+        .task(id: agentID) {
+            settingsRefusal = agents.first { $0.id == agentID }.flatMap { runner.settingsRefusal($0, in: continuing?.worktree) }
         }
     }
 

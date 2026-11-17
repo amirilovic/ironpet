@@ -126,6 +126,14 @@ final class TaskRunner: ObservableObject {
 
     func canRun(_ agent: ACPAgent) -> Bool { allowedAgents.contains(agent.id) }
 
+    /// Where the agents' own permission settings are read. A test points it at its own files.
+    var permissionSettings: () -> AgentPermissionSettings = AgentPermissionSettings.live
+
+    /// Why the agent's own settings would let it work unasked in `folder` (nil: only the user's settings), or nil.
+    func settingsRefusal(_ agent: ACPAgent, in folder: URL? = nil) -> String? {
+        permissionSettings().refusal(agent: agent.id, name: agent.name, folder: folder, stop: worktreeRoot)
+    }
+
     static func cannotRun(_ agent: ACPAgent) -> String {
         "\(agent.name) is not one of the agents known to ask ironpet before each change (\(askingAgentNames)), so it cannot work on a task."
     }
@@ -183,6 +191,7 @@ final class TaskRunner: ObservableObject {
     func start(task id: String, project: URL?, agent: ACPAgent, model: String?) async -> String? {
         guard config().enabled else { return "Task runs are turned off in taskRuns.enabled." }
         guard canRun(agent) else { return Self.cannotRun(agent) }
+        if let refusal = settingsRefusal(agent) { return refusal }
         guard let task = tasks.task(id), task.status != .done else { return "That task is closed." }
         if let existing = runs[id], existing.state.isLive { return "An agent is already working on this task." }
         guard !starting.contains(id) else { return "An agent is already starting on this task." }
@@ -234,12 +243,14 @@ final class TaskRunner: ObservableObject {
             run.pushRemote = remote
             run.pushURL = await git.pushURL(run.repo, remote: remote)
         }
-        if cancelledStarts.contains(id) {
+        // The copy's own `.cursor/cli.json` or `.claude/settings*.json`, committed in the repo or written by an earlier turn, apply too.
+        let refusal = cancelledStarts.contains(id) ? "Stopped before the agent started." : settingsRefusal(agent, in: run.worktree)
+        if let refusal {
             if fresh {
                 try? await git.removeWorktree(repo: run.repo, folder: run.worktree, force: false)
                 await git.deleteBranchIfEmpty(repo: run.repo, branch: run.branch, base: run.base)
             }
-            return "Stopped before the agent started."
+            return refusal
         }
         // No await from here until the run is in `live`, so a second Start or a Stop sees one consistent state.
         // A run started again after the task changed hands is live again; one that was cleaned up starts a new session.
