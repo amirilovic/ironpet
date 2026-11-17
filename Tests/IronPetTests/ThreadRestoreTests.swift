@@ -114,10 +114,15 @@ final class ThreadRestoreTests: XCTestCase {
         try GitFixture.sh(["git", "worktree", "add", "-q", "-b", "ironpet/fix-login-2", worktree.path], in: copy)
         session.open(ChatThread(id: "t-run3", title: "Task: Fix login", workspace: worktree.path, updatedAt: Date(), items: [], agent: "none", task: "fix-login"))
         XCTAssertEqual(session.agentEnvironment["GIT_CONFIG_COUNT"], "6", "reading the environment never runs git")
+        var asked: [String] = []
+        session.taskRunRepo = { folder in asked.append(folder.path); return copy }
         await session.loadRunRemotes()
-        XCTAssertEqual(session.agentEnvironment["GIT_CONFIG_KEY_0"], "remote.origin.pushurl", "the copy's real remotes are blocked too")
+        XCTAssertEqual(asked, [worktree.path], "the run is found by its copy's folder")
+        XCTAssertEqual(session.agentEnvironment["GIT_CONFIG_KEY_0"], "remote.origin.pushurl", "the main repo's real remotes are blocked too")
         XCTAssertEqual(session.agentEnvironment["GIT_CONFIG_COUNT"], "7")
         session.stop()
+        session.newChat()
+        XCTAssertEqual(session.agentEnvironment["GIT_CONFIG_COUNT"], "7", "a new chat left in the copy keeps the same push block")
 
         session.open(ChatThread(id: "t-moved", title: "Task: Fix login", workspace: base.path, updatedAt: Date(), items: [], agent: "none", task: "fix-login"))
         XCTAssertNil(session.taskRunScope, "after the copy is removed the thread points at the user's own folder")

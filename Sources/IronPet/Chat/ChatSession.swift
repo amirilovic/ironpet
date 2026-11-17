@@ -239,11 +239,17 @@ final class ChatSession: ObservableObject {
     /// A chat in a task run's copy, its thread or a new chat left in that folder: the run's rules hold here too (every
     /// change asks, Auto or not, push and PR commands are refused, and only `taskRunAgents` get a turn). Nil elsewhere.
     var taskRunScope: RunScope? {
-        guard let workspace else { return nil }
-        let root = RunScope.resolve(taskWorktrees.path)
-        let folder = RunScope.resolve(workspace.path)
-        return folder.hasPrefix(root + "/") ? RunScope(root: workspace) : nil
+        if let cached = scopeCache, cached.workspace == workspace, cached.worktrees == taskWorktrees { return cached.scope }
+        let scope = workspace.flatMap { workspace -> RunScope? in
+            let root = RunScope.resolve(taskWorktrees.path)
+            return RunScope.resolve(workspace.path).hasPrefix(root + "/") ? RunScope(root: workspace) : nil
+        }
+        scopeCache = (workspace, taskWorktrees, scope)
+        return scope
     }
+
+    /// `taskRunScope` for one folder: views read it on every render, and working it out follows symlinks on disk.
+    private var scopeCache: (workspace: URL?, worktrees: URL, scope: RunScope?)?
 
     /// The agents that may work in a task run's copy, as for Start. A test adds its scripted agent.
     var taskRunAgents = TaskRunner.agentsThatAsk
@@ -259,26 +265,26 @@ final class ChatSession: ObservableObject {
         return true
     }
 
-    /// The remotes of the open run thread's copy, read once per copy before its first turn.
+    /// The remotes of the open chat's copy, read once per copy before its first turn.
     private var runRemotes: (path: String, names: [String])?
     /// The run scope the current backend's approvals were judged with.
     private var acpScope: RunScope?
 
-    /// The push block a task run's agent gets, when the open thread is one. Until the copy's remotes are read it has
-    /// only the URL rewrites.
+    /// The push block an agent in a task run's copy gets. Until the copy's remotes are read it has only the URL rewrites.
     var agentEnvironment: [String: String] {
         guard let scope = taskRunScope else { return [:] }
         return GitWorktree.pushBlockEnvironment(remotes: runRemotes?.path == scope.root.path ? runRemotes?.names ?? [] : [])
     }
 
-    /// The main working copy of a task's run, so its remotes are read there and not through the copy's `.git`.
-    var taskRunRepo: (String) -> URL? = { _ in nil }
+    /// The main working copy of the run whose copy a folder is, so its remotes are read there and not through the
+    /// copy's `.git`. Found by folder, so a new chat left in a copy gets them too.
+    var taskRunRepo: (URL) -> URL? = { _ in nil }
 
-    /// Reads the open run thread's remotes off the main thread, once per copy.
+    /// Reads the open copy's remotes off the main thread, once per copy.
     func loadRunRemotes() async {
         guard let scope = taskRunScope, runRemotes?.path != scope.root.path else { return }
         var names: [String] = []
-        if let repo = threadTask.flatMap(taskRunRepo), let git = GitWorktree.locate() { names = await git.remotes(repo) }
+        if let repo = taskRunRepo(scope.root), let git = GitWorktree.locate() { names = await git.remotes(repo) }
         if taskRunScope == scope { runRemotes = (scope.root.path, names) }
     }
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.

@@ -74,6 +74,12 @@ final class TaskRunner: ObservableObject {
 
     func run(for task: String) -> TaskRun? { runs[task] }
 
+    /// The run whose copy is `folder`, compared with symlinks resolved.
+    func run(inCopy folder: URL) -> TaskRun? {
+        let path = RunScope.resolve(folder.path)
+        return runs.values.first { RunScope.resolve($0.worktree.path) == path }
+    }
+
     func row(for task: TaskItem) -> TaskRunRow {
         TaskRunRow.state(task: task, run: runs[task.id], enabled: config().enabled, running: liveCount, limit: limit,
                          starting: starting.contains(task.id))

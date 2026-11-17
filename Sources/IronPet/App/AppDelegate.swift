@@ -1064,7 +1064,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chat.threadInUse = { [weak runner] id in runner?.isLive(thread: id) ?? false }
         runner.threadOpenInChat = { [weak self] id in self?.chat.threadID == id }
         chat.onThreadInUse = { [weak self] _ in self?.showTasks() }
-        chat.taskRunRepo = { [weak runner] task in runner?.run(for: task)?.repo }
+        chat.taskRunRepo = { [weak runner] copy in runner?.run(inCopy: copy)?.repo }
         let openThread = pet.onOpenThread
         pet.onOpenThread = { [weak self, weak runner] id in
             if runner?.isLive(thread: id) == true {
