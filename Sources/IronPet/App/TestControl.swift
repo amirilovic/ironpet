@@ -521,7 +521,8 @@ final class TestControl {
         func target(_ t: Brief.Target) -> [String: Any] {
             switch t {
             case .task(let id): return ["type": "task", "id": id]
-            case .session(let id, let workspace, let bundleID): return ["type": "session", "id": id, "workspace": workspace ?? "", "bundleID": bundleID ?? ""]
+            case .session(let id, let workspace, let bundleID, let iterm):
+                return ["type": "session", "id": id, "workspace": workspace ?? "", "bundleID": bundleID ?? "", "iterm": iterm ?? ""]
             case .alert(let id, let url): return ["type": "alert", "id": id, "url": url?.absoluteString ?? ""]
             case .meeting(let id): return ["type": "meeting", "id": id]
             }

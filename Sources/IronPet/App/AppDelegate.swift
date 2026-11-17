@@ -287,7 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The morning brief and the recap: built from the stores for `digest` automations and the Today page. The Today row is
     /// listed while one of those automations is on.
     private func setUpBrief(_ service: AutomationService, tasks: TaskStore) {
-        let source = BriefSource(tasks: tasks, sessions: store, signals: signals)
+        let source = BriefSource(tasks: tasks, sessions: store, signals: signals, activity: activity)
         source.now = { [weak self] in Date().addingTimeInterval(self?.testClockOffset ?? 0) }
         let model = BriefModel(source: source)
         let automations = service.store

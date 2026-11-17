@@ -15,8 +15,8 @@ struct Brief: Equatable {
     /// What a row opens.
     enum Target: Equatable {
         case task(String)
-        /// A watched agent session. `workspace` and `bundleID` open its folder once the session has ended.
-        case session(id: String, workspace: String?, bundleID: String?)
+        /// A watched agent session. `workspace`, `bundleID` and `iterm` reopen it once the session has ended.
+        case session(id: String, workspace: String?, bundleID: String?, iterm: String? = nil)
         case alert(id: String, url: URL?)
         /// A meeting folder name under `~/.ironpet/meetings`.
         case meeting(String)
@@ -60,16 +60,12 @@ struct BriefActivity: Equatable {
     var agent: String?
     var workspace: String?
     var bundleID: String?
+    var iterm: String? = nil
 }
 
 /// Where the recap reads what happened. The activity log implements it; tests and previews pass a list.
 protocol BriefActivitySource {
     func briefActivity(in window: DateInterval) -> [BriefActivity]
-}
-
-/// Used until the activity log is wired in, so the recap lists only what the other stores hold.
-struct NoBriefActivity: BriefActivitySource {
-    func briefActivity(in window: DateInterval) -> [BriefActivity] { [] }
 }
 
 struct FixedBriefActivity: BriefActivitySource {
@@ -186,7 +182,7 @@ enum BriefBuilder {
             Brief.Item(id: "turn:\(event.ref):\(index)", symbol: event.kind == .sessionFailed ? "xmark.octagon.fill" : "checkmark.circle.fill",
                        title: event.title, subtitle: [event.kind == .sessionFailed ? "Failed" : nil, event.agent, event.detail]
                         .compactMap { $0 }.joined(separator: " · "),
-                       target: .session(id: event.ref, workspace: event.workspace, bundleID: event.bundleID))
+                       target: .session(id: event.ref, workspace: event.workspace, bundleID: event.bundleID, iterm: event.iterm))
         }
 
         let closed = input.tasks.filter { task in task.status == .done && task.closed.map(window.contains) == true }.sorted { $0.closed! > $1.closed! }
@@ -294,7 +290,8 @@ enum BriefBuilder {
         let state = s.status == .needsInput ? "\(s.source.displayName) needs input" : "\(s.source.displayName) failed"
         return Brief.Item(id: "session:\(s.id)", symbol: s.status == .needsInput ? "hand.raised.fill" : "xmark.octagon.fill",
                           title: s.workspaceName, subtitle: [state, s.summary].compactMap { $0 }.joined(separator: " · "),
-                          target: .session(id: s.id, workspace: s.origin.workspace, bundleID: s.origin.ownerBundleID))
+                          target: .session(id: s.id, workspace: s.origin.workspace, bundleID: s.origin.ownerBundleID,
+                                           iterm: s.isInIterm ? s.origin.itermSessionID : nil))
     }
 
     /// "Meeting Fri 14:00", or "Meeting today 14:00".

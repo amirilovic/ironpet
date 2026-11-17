@@ -114,7 +114,31 @@ final class BriefBuilderTests: XCTestCase {
                                                F.signal("4", "Sentry")]), "1 review requested, 1 CI failed +2 more")
     }
 
-    func testFinishedSessionsBecomeRecapActivityUntilTheActivityLogLands() {
+    func testTheActivityLogFeedsTheRecap() throws {
+        let log = ActivityLog(database: try Database(path: nil, migrations: AppMigrations.all), now: { F.tuesday(hour: 18) })
+        var session = F.session("claude:1", .done, at: F.tuesday(hour: 10))
+        session.origin.ownerBundleID = "com.example.app"
+        log.record(try XCTUnwrap(ActivityEvent.session(session, at: F.tuesday(hour: 10))))
+        log.record(try XCTUnwrap(ActivityEvent.session(F.session("claude:2", .failed), at: F.tuesday(hour: 11))))
+        log.record(try XCTUnwrap(ActivityEvent.session(F.session("claude:3", .needsInput), at: F.tuesday(hour: 12))))
+        log.record(.alertResolved(F.signal("7", "CI failed"), at: F.tuesday(hour: 13)))
+        log.record(.alertOpened(F.signal("8", "CI failed"), at: F.tuesday(hour: 13)))
+        log.record(try XCTUnwrap(ActivityEvent.session(F.session("claude:4", .done), at: F.tuesday(hour: -2))))
+
+        let today = DateInterval(start: F.startOfTuesday, end: F.tuesday(hour: 18))
+        let events = log.briefActivity(in: today)
+        XCTAssertEqual(events.map(\.kind), [.sessionDone, .sessionFailed, .alertResolved])
+        XCTAssertEqual(events[0], BriefActivity(kind: .sessionDone, at: F.tuesday(hour: 10), ref: "claude:1", title: "claude:1",
+                                                detail: "Summary claude:1.", agent: "Claude Code", workspace: "/Users/you/code/claude:1",
+                                                bundleID: "com.example.app"))
+        XCTAssertEqual(events[2].detail, "CI failed")
+
+        let recap = BriefBuilder.recap(BriefInput(now: F.tuesday(hour: 18), calendar: F.calendar, activity: events))
+        XCTAssertEqual(recap.lines.first, "Agents finished 1 turn, 1 failed")
+        XCTAssertEqual(section(recap, "resolved").map(\.target), [.alert(id: "7", url: nil)])
+    }
+
+    func testFinishedSessionsBecomeRecapActivityWithoutTheLog() {
         let window = DateInterval(start: F.startOfTuesday, end: F.tuesday(hour: 18))
         let events = BriefSource.finishedSessions([F.session("ok", .done, at: F.tuesday(hour: 9)), F.session("bad", .failed, at: F.tuesday(hour: 10)),
                                                    F.session("y", .done, at: F.tuesday(hour: -2)), F.session("wait", .needsInput)], in: window)

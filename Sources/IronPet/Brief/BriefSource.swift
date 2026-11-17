@@ -8,7 +8,8 @@ final class BriefSource {
     private let sessions: SessionStore
     private let signals: SignalStore
     private let meetingsRoot: URL
-    /// What happened today. Without it the recap's agent turns come from the sessions still in the store.
+    /// What happened today: the activity log. Without it (no database yet, previews) the recap's agent turns come from the
+    /// sessions still in the store.
     var activity: BriefActivitySource?
     var now: () -> Date = Date.init
     var calendar: Calendar = .current
@@ -68,6 +69,32 @@ final class BriefSource {
         let items = ActionItems.openItems(text).map(\.title)
         summaries[record.id] = (modified, items)
         return items
+    }
+}
+
+/// The recap's turns and resolved alerts, from the shared activity log, which outlives the sessions in memory and a restart.
+extension ActivityLog: BriefActivitySource {
+    func briefActivity(in window: DateInterval) -> [BriefActivity] {
+        events(in: window, kinds: [.sessionDone, .sessionFailed, .alertResolved]).compactMap(BriefActivity.init)
+    }
+}
+
+extension BriefActivity {
+    init?(_ event: ActivityEvent) {
+        typealias Session = ActivityEvent.SessionKey
+        switch event.kind {
+        case .sessionDone, .sessionFailed:
+            let agent = event.extra[Session.agent]
+            self.init(kind: event.kind == .sessionFailed ? .sessionFailed : .sessionDone, at: event.at, ref: event.ref,
+                      title: event.title, detail: event.detail.isEmpty ? nil : event.detail,
+                      agent: agent.map { AgentSource(rawValue: $0)?.displayName ?? $0 },
+                      workspace: event.extra[Session.workspace], bundleID: event.extra[Session.app], iterm: event.extra[Session.iterm])
+        case .alertResolved:
+            self.init(kind: .alertResolved, at: event.at, ref: event.ref, title: event.title,
+                      detail: event.extra[ActivityEvent.AlertKey.label], agent: nil, workspace: nil, bundleID: nil)
+        default:
+            return nil
+        }
     }
 }
 

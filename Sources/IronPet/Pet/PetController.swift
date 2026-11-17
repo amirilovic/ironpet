@@ -157,11 +157,13 @@ final class PetController: NSObject {
             NSWorkspace.shared.open(url)
         case .alert:
             windowModel.section = .alerts
-        case .session(let id, let workspace, let bundleID):
+        case .session(let id, let workspace, let bundleID, let iterm):
             if let session = store.sessions[id] { return jump(to: session) }
             builtWindow?.close()
-            // The session has ended: open its folder with the app it ran in.
-            if let bundleID {
+            // The session has ended: open its folder with the app it ran in, or its iTerm tab.
+            if let iterm {
+                SourceJumper.open(OpenTarget(name: "iTerm", bundleID: Editors.itermID), folder: workspace, itermSession: iterm)
+            } else if let bundleID {
                 SourceJumper.open(OpenTarget(name: "", bundleID: bundleID), folder: workspace)
             } else if let workspace {
                 NSWorkspace.shared.open(URL(fileURLWithPath: workspace))
