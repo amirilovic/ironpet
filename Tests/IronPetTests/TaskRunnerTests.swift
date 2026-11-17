@@ -102,6 +102,7 @@ final class TaskRunnerTests: XCTestCase {
         runner.worktreeRoot = dir.appendingPathComponent("worktrees")
         runner.ironpetRoot = dir.appendingPathComponent("ironpet")
         runner.shareMCPSignIns = { false }
+        runner.allowedAgents.insert("fake")
         runner.onApproval = { [unowned self] _, approval in approvals.append(approval) }
         runner.onFinished = { [unowned self] in finished.append($0.task) }
         runner.onFailed = { [unowned self] in failed.append($0.task) }
@@ -367,23 +368,40 @@ final class TaskRunnerTests: XCTestCase {
         XCTAssertEqual(logged().filter { $0["asked"] as? String == "touch y" }.map { $0["allowed"] as? Bool }, [true, false])
     }
 
-    func testAgentsThatDoNotAskCannotStart() async throws {
-        let pi = try XCTUnwrap(AgentCatalog.agent(id: "pi"))
-        let id = try newTask("COMMIT with pi")
-        let refused = await runner.start(task: id, project: repo, agent: pi, model: nil)
-        XCTAssertEqual(refused, TaskRunner.cannotRun(pi))
-        XCTAssertNil(runner.run(for: id))
+    func testOnlyAgentsKnownToAskCanStart() async throws {
+        XCTAssertEqual(TaskRunner.agentsThatAsk, ["claude", "codex", "cursor", "gemini"])
+        let catalog = ["claude", "codex", "cursor", "gemini", "pi", "opencode", "goose"].compactMap { AgentCatalog.agent(id: $0) }
+        XCTAssertEqual(catalog.count, 7)
+        for other in catalog where !TaskRunner.agentsThatAsk.contains(other.id) {
+            let id = try newTask("COMMIT with \(other.id)")
+            let refused = await runner.start(task: id, project: repo, agent: other, model: nil)
+            XCTAssertEqual(refused, TaskRunner.cannotRun(other))
+            XCTAssertNil(runner.run(for: id))
+        }
         XCTAssertEqual(try git("worktree", "list").split(separator: "\n").count, 1, "no copy is made")
-        runner.agents = { [pi, self.agent] }
-        XCTAssertEqual(runner.runnableAgents.map(\.id), ["fake"])
+        XCTAssertEqual(TaskRunner.cannotRun(catalog[4]),
+                       "Pi is not one of the agents known to ask ironpet before each change (Claude Code, Codex, Cursor and Gemini CLI), so it cannot work on a task.")
+
+        runner.agents = { catalog + [self.agent] }
+        XCTAssertEqual(runner.runnableAgents.map(\.id), ["claude", "codex", "cursor", "gemini", "fake"])
+        let pi = catalog[4]
         runner.chatAgent = { (pi, nil) }
         XCTAssertNil(runner.defaultAgent(), "the chat's Pi is not offered as the run's agent")
         settings.agent = "claude"
         XCTAssertEqual(runner.defaultAgent()?.agent.id, "claude")
-        settings.agent = "pi"
-        XCTAssertNil(runner.defaultAgent())
-        XCTAssertEqual(TaskStartPopover.excluded([pi, agent]).map(\.id), ["pi"])
-        XCTAssertEqual(TaskStartPopover.excludedText([pi]), "Pi is not offered: it runs tools without asking ironpet first.")
+        settings.agent = "opencode"
+        XCTAssertNil(runner.defaultAgent(), "an unverified agent in taskRuns.agent is not used")
+        settings.agent = nil
+
+        let excluded = TaskStartPopover.excluded(catalog + [agent], by: runner)
+        XCTAssertEqual(excluded.map(\.id), ["pi", "opencode", "goose"])
+        XCTAssertEqual(TaskStartPopover.excludedText([pi]),
+                       "Pi is not offered: only Claude Code, Codex, Cursor and Gemini CLI are known to ask before each change.")
+        XCTAssertEqual(TaskStartPopover.excludedText(Array(excluded.prefix(2))),
+                       "Pi and OpenCode are not offered: only Claude Code, Codex, Cursor and Gemini CLI are known to ask before each change.")
+
+        let fresh = TaskRunner(tasks: tasks, store: TaskRunStore(database: database))
+        XCTAssertFalse(fresh.canRun(agent), "without the test's opt-in, an agent outside the list cannot run")
     }
 
     func testOpenPRRefusesWhenTheCopysGitFileWasRewritten() async throws {

@@ -282,8 +282,8 @@ struct TaskStartPopover: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if !Self.excluded(runner.agents()).isEmpty {
-                Text(Self.excludedText(Self.excluded(runner.agents())))
+            if !Self.excluded(runner.agents(), by: runner).isEmpty {
+                Text(Self.excludedText(Self.excluded(runner.agents(), by: runner)))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Label(continuing == nil
@@ -349,12 +349,12 @@ struct TaskStartPopover: View {
         return "\(names) \(verb), which the extra push block does not cover. Commands still ask before they run."
     }
 
-    static func excluded(_ installed: [ACPAgent]) -> [ACPAgent] { installed.filter { !TaskRunner.canRun($0) } }
+    static func excluded(_ installed: [ACPAgent], by runner: TaskRunner) -> [ACPAgent] { installed.filter { !runner.canRun($0) } }
 
-    /// "Pi is not offered: it runs tools without asking ironpet first."
+    /// "Pi is not offered: only Claude Code, Codex, Cursor and Gemini CLI are known to ask before each change."
     static func excludedText(_ agents: [ACPAgent]) -> String {
-        let names = agents.map(\.name).joined(separator: ", ")
-        return "\(names) \(agents.count == 1 ? "is" : "are") not offered: \(agents.count == 1 ? "it runs" : "they run") tools without asking ironpet first."
+        let names = TaskRunner.sentenceList(agents.map(\.name))
+        return "\(names) \(agents.count == 1 ? "is" : "are") not offered: only \(TaskRunner.askingAgentNames) are known to ask before each change."
     }
 
     /// "web-app — ~/code": the folder first, so a long parent path never hides which project it is.

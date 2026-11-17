@@ -109,18 +109,31 @@ final class TaskRunner: ObservableObject {
     /// The installed agents. Start offers those that `canRun`.
     var agents: () -> [ACPAgent] = { AgentCatalog.present() }
 
-    /// Agents that run tools without sending ironpet a permission request (pi-acp never sends one), so a run could not
-    /// ask before each change.
-    static let agentsWithoutApprovals: Set<String> = ["pi"]
+    /// The agents known to send ironpet a permission request before each change and to offer a mode that asks
+    /// (`ACPBackend.runMode`). Any other agent may run tools without asking (pi-acp never asks), so it cannot run a task.
+    static let agentsThatAsk: Set<String> = ["claude", "codex", "cursor", "gemini"]
 
-    static func canRun(_ agent: ACPAgent) -> Bool { !agentsWithoutApprovals.contains(agent.id) }
+    /// `agentsThatAsk`. A test adds its scripted agent.
+    var allowedAgents = TaskRunner.agentsThatAsk
+
+    func canRun(_ agent: ACPAgent) -> Bool { allowedAgents.contains(agent.id) }
 
     static func cannotRun(_ agent: ACPAgent) -> String {
-        "\(agent.name) runs tools without asking ironpet first, so it cannot work on a task. Pick another agent."
+        "\(agent.name) is not one of the agents known to ask ironpet before each change (\(askingAgentNames)), so it cannot work on a task."
+    }
+
+    /// "Claude Code, Codex, Cursor and Gemini CLI".
+    static var askingAgentNames: String {
+        sentenceList(agentsThatAsk.sorted().map { id in AgentCatalog.agent(id: id)?.name ?? id })
+    }
+
+    /// "A", "A and B", "A, B and C".
+    static func sentenceList(_ names: [String]) -> String {
+        names.dropLast().joined(separator: ", ") + (names.count > 1 ? " and " : "") + (names.last ?? "")
     }
 
     /// The agents the Start popover offers.
-    var runnableAgents: [ACPAgent] { agents().filter(Self.canRun) }
+    var runnableAgents: [ACPAgent] { agents().filter(canRun) }
 
     /// The folders a task's Start popover offers, best first.
     func candidates(for task: TaskItem) -> [URL] {
@@ -139,8 +152,8 @@ final class TaskRunner: ObservableObject {
     /// The agent a run uses unless the popover picked another. Nil when that agent cannot run tasks.
     func defaultAgent() -> (agent: ACPAgent, model: String?)? {
         let settings = config()
-        if let id = settings.agent, let agent = AgentCatalog.agent(id: id) { return Self.canRun(agent) ? (agent, settings.model) : nil }
-        guard let chat = chatAgent(), Self.canRun(chat.agent) else { return nil }
+        if let id = settings.agent, let agent = AgentCatalog.agent(id: id) { return canRun(agent) ? (agent, settings.model) : nil }
+        guard let chat = chatAgent(), canRun(chat.agent) else { return nil }
         return (chat.agent, settings.model ?? chat.model)
     }
 
@@ -151,7 +164,7 @@ final class TaskRunner: ObservableObject {
     @discardableResult
     func start(task id: String, project: URL?, agent: ACPAgent, model: String?) async -> String? {
         guard config().enabled else { return "Task runs are turned off in taskRuns.enabled." }
-        guard Self.canRun(agent) else { return Self.cannotRun(agent) }
+        guard canRun(agent) else { return Self.cannotRun(agent) }
         guard let task = tasks.task(id), task.status != .done else { return "That task is closed." }
         if let existing = runs[id], existing.state.isLive { return "An agent is already working on this task." }
         guard !starting.contains(id) else { return "An agent is already starting on this task." }
