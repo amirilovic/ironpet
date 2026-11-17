@@ -13,10 +13,6 @@ protocol CaptureEngine: AnyObject {
     func stop()
 }
 
-extension CaptureEngine {
-    func reset() {}
-}
-
 /// Time for `MicrophoneSource`'s debounce and watchdog. Work runs on one serial queue, so restarts never overlap.
 protocol CaptureClock: AnyObject {
     var now: TimeInterval { get }

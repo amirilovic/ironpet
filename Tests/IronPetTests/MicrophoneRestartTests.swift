@@ -47,6 +47,8 @@ private final class FakeEngine: CaptureEngine, @unchecked Sendable {
         }
     }
     func stop() {}
+    private(set) var resets = 0
+    func reset() { resets += 1 }
 
     /// Delivers half a second of audio in the current input format.
     func deliver() {
@@ -218,5 +220,24 @@ final class MicrophoneRestartTests: XCTestCase {
         clock.advance(by: 0.3)
         engine.deliver()
         XCTAssertEqual(engine.starts, before + 1)
+    }
+
+    func testRestartResetsTheEngineBeforeReinstallingTheTap() throws {
+        let (source, engine, clock) = makeSource()
+        try source.start { _ in }
+        engine.onConfigurationChange?()
+        clock.advance(by: 0.3)
+        XCTAssertEqual(engine.resets, 1)
+    }
+
+    func testContinuousNotificationsStillRestartWithinOneSecond() throws {
+        let (source, engine, clock) = makeSource()
+        try source.start { _ in }
+        let before = engine.starts
+        for _ in 0..<12 {
+            engine.onConfigurationChange?()
+            clock.advance(by: 0.15)
+        }
+        XCTAssertGreaterThan(engine.starts, before)
     }
 }
