@@ -7,6 +7,8 @@ import Foundation
 final class TaskRunner: ObservableObject {
     /// The author of every task change a run makes, in the task's history.
     static let author = "task-run"
+    /// The app's runner, for the test endpoints.
+    static var shared: TaskRunner?
 
     @Published private(set) var runs: [String: TaskRun] = [:]
 
@@ -68,6 +70,25 @@ final class TaskRunner: ObservableObject {
 
     /// Runs that need the user, oldest first.
     var waiting: [TaskRun] { runs.values.filter { $0.state == .needsApproval }.sorted { $0.started < $1.started } }
+
+    /// Waiting on an approval wins over working.
+    var mood: PetMood? {
+        if runs.values.contains(where: { $0.state == .needsApproval }) { return .needsInput }
+        return runs.values.contains(where: \.state.isLive) ? .working : nil
+    }
+
+    /// What the Agents section lists: live runs, and ended ones whose task still waits on the user.
+    func shown(in tasks: TaskStore) -> [(run: TaskRun, task: TaskItem)] {
+        runs.values.compactMap { run -> (run: TaskRun, task: TaskItem)? in
+            guard run.cleanup != .removed, let task = tasks.task(run.task) else { return nil }
+            let ended = [.finished, .failed, .interrupted].contains(run.state) && task.status == .needsYou
+            return run.state.isLive || ended ? (run, task) : nil
+        }
+        .sorted { $0.run.started > $1.run.started }
+    }
+
+    /// The agents the Start popover offers.
+    var agents: () -> [ACPAgent] = { AgentCatalog.present() }
 
     /// The folders a task's Start popover offers, best first.
     func candidates(for task: TaskItem) -> [URL] {
