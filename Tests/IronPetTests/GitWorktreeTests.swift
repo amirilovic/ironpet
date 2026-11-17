@@ -131,6 +131,29 @@ final class GitWorktreeTests: XCTestCase {
         XCTAssertTrue(try GitFixture.sh(["git", "branch", "--list"], in: bare).contains("ironpet/push"))
     }
 
+    func testOpenPRPushSkipsHooksAndWritesNoUpstream() async throws {
+        let bare = dir.appendingPathComponent("remote.git")
+        try GitFixture.sh(["git", "init", "-q", "--bare", bare.path], in: dir)
+        try GitFixture.sh(["git", "remote", "add", "origin", bare.path], in: repo)
+        let marker = dir.appendingPathComponent("hook-ran")
+        for hooks in [repo.appendingPathComponent(".git/hooks"), dir.appendingPathComponent("custom-hooks")] {
+            try FileManager.default.createDirectory(at: hooks, withIntermediateDirectories: true)
+            let hook = hooks.appendingPathComponent("pre-push")
+            try "#!/bin/sh\ntouch '\(marker.path)'\n".write(to: hook, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+        }
+        let (folder, branch, _) = try await addWorktree("hooks")
+        try await git.push(worktree: folder, remote: "origin", branch: branch)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "the repository's pre-push hook must not run")
+        try GitFixture.sh(["git", "config", "core.hooksPath", dir.appendingPathComponent("custom-hooks").path], in: repo)
+        try GitFixture.sh(["git", "-C", folder.path, "commit", "-q", "--allow-empty", "-m", "more"], in: dir)
+        try await git.push(worktree: folder, remote: "origin", branch: branch)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "a hooks path the agent set must not run either")
+        XCTAssertTrue(try GitFixture.sh(["git", "branch", "--list"], in: bare).contains(branch))
+        let upstream = await git.run(["config", "--get", "branch.\(branch).remote"], in: repo)
+        XCTAssertNotEqual(upstream.code, 0, "no upstream is written into the shared config")
+    }
+
     func testPushBlockEnvironmentRewritesPushesToURLsAndRemotesAddedLater() async throws {
         let env = GitWorktree.pushBlockEnvironment(remotes: [])
         XCTAssertEqual(env["GIT_CONFIG_COUNT"], "6")

@@ -411,7 +411,7 @@ final class TaskRunner: ObservableObject {
         let gh = LoginShell.find("gh")
         let prArguments = ["pr", "create", "--web", "--head", run.branch] + (run.baseBranch.map { ["--base", $0] } ?? [])
         if let record = recordOpenPR {
-            record([git.git, "push", "-u", remote, run.branch])
+            record([git.git] + GitWorktree.pushArguments(remote: remote, branch: run.branch))
             record([gh?.path ?? "gh"] + prArguments)
             onPushed?(run, remote)
             return nil

@@ -1514,7 +1514,7 @@ def scenario_task_run():
             opened = wait_for(lambda: task_runs()["openPR"] or None, 30) or []
             flat = [" ".join(c) for c in opened]
             record("Task run: Open PR pushes the branch and opens gh (recorded in test mode)",
-                   any(c.endswith(f"push -u origin ironpet/{task}") for c in flat)
+                   any(c.endswith(f"-c core.hooksPath=/dev/null push --no-verify origin ironpet/{task}") for c in flat)
                    and any(f"pr create --web --head ironpet/{task} --base main" in c for c in flat)
                    and f"ironpet/{task}" not in git("ls-remote", "--heads", TASK_RUN_REMOTE).stdout,
                    f"commands={flat} error={task_runs().get('error')}")

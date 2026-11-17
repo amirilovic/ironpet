@@ -294,7 +294,7 @@ final class TaskRunnerTests: XCTestCase {
         await wait("finish") { finished == [id] }
         let prError = await runner.openPR(task: id)
         XCTAssertNil(prError)
-        XCTAssertEqual(commands.first?.suffix(4), ["push", "-u", "origin", "ironpet/\(id)"])
+        XCTAssertEqual(commands.first?.dropFirst().map { $0 }, ["-c", "core.hooksPath=/dev/null", "push", "--no-verify", "origin", "ironpet/\(id)"])
         XCTAssertEqual(commands.last?.suffix(7), ["pr", "create", "--web", "--head", "ironpet/\(id)", "--base", "main"])
     }
 

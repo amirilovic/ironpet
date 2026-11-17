@@ -179,11 +179,17 @@ struct GitWorktree {
     }
 
     func push(worktree: URL, remote: String, branch: String) async throws {
-        let result = await run(["push", "-u", remote, branch], in: worktree, timeout: 180)
+        let result = await run(Self.pushArguments(remote: remote, branch: branch), in: worktree, timeout: 180)
         guard result.code == 0, !result.timedOut else { throw GitError(message: Self.describe(result)) }
     }
 
     // MARK: Pure helpers
+
+    /// Open PR's push. Hooks are off, since the agent could have written them into the shared repository, and no upstream
+    /// is set, since that would write the task's branch into the shared config.
+    static func pushArguments(remote: String, branch: String) -> [String] {
+        ["-c", "core.hooksPath=/dev/null", "push", "--no-verify", remote, branch]
+    }
 
     /// `~/.ironpet/worktrees/<repo>-<hash>`: one folder per repository, so two repos with the same name never share one.
     static func parent(for repo: URL, root: URL = Paths.worktrees) -> URL {
