@@ -202,7 +202,8 @@ enum AutomationSchema {
             "items": { "type": "string", "description": "JMESPath expression that yields the items, such as data.runs[?conclusion=='failure']. Default @" },
             "id": { "type": "string", "description": "JMESPath expression on one item that yields its id" },
             "version": { "type": "string", "description": "JMESPath expression on one item. A new value for a known id fires again." },
-            "cooldownMinutes": { "type": "number", "minimum": 0 }
+            "cooldownMinutes": { "type": "number", "minimum": 0 },
+            "catchUpMinutes": { "type": "number", "minimum": 0, "maximum": 720, "description": "daily: a slot missed while the Mac slept or ironpet was not running still fires when it is at most this many minutes late. Only the latest missed slot fires." }
           }
         },
         "source": {
@@ -222,14 +223,15 @@ enum AutomationSchema {
           "required": ["type"],
           "additionalProperties": false,
           "properties": {
-            "type": { "enum": ["bubble", "prompt", "shell"] },
+            "type": { "enum": ["bubble", "prompt", "shell", "digest"] },
             "title": { "type": "string" },
             "body": { "type": "string" },
             "prompt": { "type": "string", "description": "Runs in the user's chat with the chat's tools. A prompt that uses {{item.*}} runs in a restricted background session instead." },
             "agent": { "type": "string", "description": "Only for the restricted background run. A prompt that runs in the chat uses the chat's agent." },
             "model": { "type": "string", "description": "Only for the restricted background run. A prompt that runs in the chat uses the chat's model." },
             "command": { "type": "string" },
-            "timeoutSeconds": { "type": "number", "minimum": 1, "maximum": 600 }
+            "timeoutSeconds": { "type": "number", "minimum": 1, "maximum": 600 },
+            "digest": { "enum": ["brief", "recap"], "description": "digest action: brief lists what needs you today, recap what happened today. Built from data on this Mac; no agent runs." }
           }
         },
         "presentation": {

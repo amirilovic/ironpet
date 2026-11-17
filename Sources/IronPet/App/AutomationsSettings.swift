@@ -91,6 +91,7 @@ private struct AutomationList: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(a.name)
                 Text(subtitle(a)).font(.caption).foregroundStyle(.secondary)
+                if DailySchedule.time(of: a.trigger) != nil { schedule(a) }
                 if let last = service.lastRun(a.id) {
                     Text("Last: \(last.outcome)\(last.output.isEmpty ? "" : ", \(last.output)")")
                         .font(.caption).foregroundStyle(last.outcome == "failed" ? Color.red : Color.secondary).lineLimit(2)
@@ -121,6 +122,26 @@ private struct AutomationList: View {
                 .menuStyle(.borderlessButton).fixedSize()
         }
         .id("\(a.id)-\(tick)")
+    }
+
+    /// The time of a daily automation with one time, and Weekdays only when its days are every day or Monday to Friday.
+    private func schedule(_ a: Automation) -> some View {
+        HStack(spacing: 12) {
+            DatePicker("Time", selection: Binding(
+                get: { DailySchedule.time(of: a.trigger) ?? Date() },
+                set: { date in try? store.update(a.id) { $0.trigger.times = [DailySchedule.format(date)] } }),
+                       displayedComponents: .hourAndMinute)
+                .labelsHidden()
+                .accessibilityLabel("\(a.name) time")
+            if let weekdaysOnly = DailySchedule.weekdaysOnly(a.trigger) {
+                Toggle("Weekdays only", isOn: Binding(
+                    get: { weekdaysOnly },
+                    set: { on in try? store.update(a.id) { $0.trigger.weekdays = DailySchedule.weekdays(only: on) } }))
+                    .toggleStyle(.checkbox)
+            }
+        }
+        .controlSize(.small)
+        .padding(.top, 2)
     }
 
     /// What a default alert needs before it can report anything.
@@ -249,4 +270,31 @@ private struct NewAutomationSheet: View {
         .padding(16)
         .frame(width: 460)
     }
+}
+
+/// The inline schedule editor's mapping between a daily trigger and the time picker.
+enum DailySchedule {
+    /// Today at the trigger's time, for a daily trigger with exactly one valid time. Nil hides the picker.
+    static func time(of trigger: Automation.Trigger, now: Date = Date(), calendar: Calendar = .current) -> Date? {
+        guard trigger.type == "daily", let times = trigger.times, times.count == 1 else { return nil }
+        let parts = times[0].split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2, (0..<24).contains(parts[0]), (0..<60).contains(parts[1]) else { return nil }
+        return calendar.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: now)
+    }
+
+    /// "09:05".
+    static func format(_ date: Date, calendar: Calendar = .current) -> String {
+        let c = calendar.dateComponents([.hour, .minute], from: date)
+        return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+    }
+
+    /// True for Monday to Friday, false for every day, nil for any other set of days, which the toggle would lose.
+    static func weekdaysOnly(_ trigger: Automation.Trigger) -> Bool? {
+        guard let days = trigger.weekdays else { return false }
+        if Set(days) == Set(AutomationDefaults.weekdays) { return true }
+        if Set(days) == Set(["sun", "mon", "tue", "wed", "thu", "fri", "sat"]) { return false }
+        return nil
+    }
+
+    static func weekdays(only: Bool) -> [String]? { only ? AutomationDefaults.weekdays : nil }
 }

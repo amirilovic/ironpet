@@ -33,6 +33,10 @@ final class AutomationEngine {
         var automations: [Automation]
         var item: [String: Any]?
         var agentWorking: Bool
+        /// The `daily` slot this delivery is for, when it has one.
+        var slot: Date? = nil
+        /// Run now from Settings, MCP or the CLI rather than the schedule.
+        var manual = false
     }
 
     var env: Environment
@@ -82,6 +86,13 @@ final class AutomationEngine {
                 if before?.trigger.at != a.trigger.at { onceFired.remove(a.id) }
             }
             if let before, !Self.sameExtraction(before.trigger, a.trigger) { state.forgetSeen(a.id); polling[a.id]?.cancel(); polling[a.id] = nil }
+            // Turning a catch-up automation on, or changing its times, must not fire a slot that passed before that.
+            // At launch (no `before`) the stored slot stands, so a slot missed while ironpet was not running catches up.
+            if a.trigger.type == "daily", a.trigger.catchUpMinutes != nil,
+               before.map({ $0.trigger != a.trigger || $0.enabled != a.enabled }) ?? (state.dailySlot(a.id) == nil),
+               let latest = latestSlot(a, atOrBefore: now) {
+                state.setDailySlot(a.id, latest)
+            }
         }
         for gone in old.values where !list.contains(where: { $0.id == gone.id }) {
             activeElapsed[gone.id] = nil
@@ -158,6 +169,11 @@ final class AutomationEngine {
                         state.clearSnooze(a.id)
                         onFire(Fire(automations: [a], item: nil, agentWorking: working))
                     }
+                case "daily" where a.trigger.catchUpMinutes != nil:
+                    if let slot = catchUpSlot(a, now: now) {
+                        state.setDailySlot(a.id, slot)
+                        onFire(Fire(automations: [a], item: nil, agentWorking: working, slot: slot))
+                    }
                 case "daily":
                     if dailyDue(a, from: previous, to: now) { onFire(Fire(automations: [a], item: nil, agentWorking: working)) }
                 case "once":
@@ -205,6 +221,28 @@ final class AutomationEngine {
             day = next
         }
         return false
+    }
+
+    /// The latest slot at or before `now` on an allowed weekday, looking back a week.
+    func latestSlot(_ a: Automation, atOrBefore now: Date) -> Date? {
+        let calendar = env.calendar
+        let allowed = Set(a.trigger.weekdays ?? Self.weekdayNames)
+        for offset in 0...7 {
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: calendar.startOfDay(for: now)),
+                  allowed.contains(Self.weekdayNames[calendar.component(.weekday, from: day) - 1]) else { continue }
+            let slots = (a.trigger.times ?? []).compactMap { time in
+                AutomationClock.minutes(of: time).flatMap { calendar.date(byAdding: .minute, value: $0, to: day) }
+            }.filter { $0 <= now }
+            if let best = slots.max() { return best }
+        }
+        return nil
+    }
+
+    /// The latest slot that has not fired yet, if it is no more than `catchUpMinutes` late. Older missed slots are dropped.
+    private func catchUpSlot(_ a: Automation, now: Date) -> Date? {
+        guard let latest = latestSlot(a, atOrBefore: now) else { return nil }
+        if let last = state.dailySlot(a.id), latest <= last { return nil }
+        return now.timeIntervalSince(latest) <= (a.trigger.catchUpMinutes ?? 0) * 60 ? latest : nil
     }
 
     /// When the automation is next due, for the settings list. Active reminders count keyboard time, so theirs is an estimate.

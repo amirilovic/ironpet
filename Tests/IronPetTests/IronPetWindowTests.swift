@@ -56,7 +56,7 @@ final class IronPetWindowTests: XCTestCase {
     }
 
     func testBubblesWaitOnTheSectionsThatShowWhatTheyWouldAnnounce() {
-        XCTAssertEqual(IronPetSection.allCases.filter(\.hidesBubbles), [.chat, .agents, .alerts, .tasks, .actions])
+        XCTAssertEqual(IronPetSection.allCases.filter(\.hidesBubbles), [.chat, .agents, .alerts, .tasks, .actions, .today])
     }
 
     func testCommandDigitsPickTheSidebarRowsInOrder() {

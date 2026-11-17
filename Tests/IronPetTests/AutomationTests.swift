@@ -1586,7 +1586,7 @@ final class AutomationLogTests: AutomationTestCase {
         XCTAssertEqual(db?.schemaVersion, 3)
         db = nil
         let upgraded = try Database(path: file, migrations: AutomationState.migrations)
-        XCTAssertEqual(upgraded.schemaVersion, 5)
+        XCTAssertEqual(upgraded.schemaVersion, 410)
         let state = AutomationState(database: upgraded)
         state.addLog("a", date: Date(), duration: 0, outcome: "ok", summary: "x", detail: "")
         XCTAssertEqual(state.logs().count, 1)
@@ -1815,7 +1815,7 @@ final class AlertRestoreTests: XCTestCase {
         old = nil
         let upgraded = try Database(path: file, migrations: AutomationState.migrations)
         let state = AutomationState(database: upgraded)
-        XCTAssertEqual(upgraded.schemaVersion, 5)
+        XCTAssertEqual(upgraded.schemaVersion, 410)
         XCTAssertTrue(state.openAlerts().isEmpty)
         XCTAssertEqual(state.alertHash("ci", "1"), "", "the next run re-adds it, without a bubble")
     }

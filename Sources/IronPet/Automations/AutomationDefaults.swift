@@ -19,6 +19,30 @@ enum AutomationDefaults {
                    note: "Asks the chat to review the task list. Skipped when no task is open, and hidden when nothing changed.")
     }
 
+    static let morningBriefID = "morning-brief"
+    static let dayRecapID = "day-recap"
+    static let weekdays = ["mon", "tue", "wed", "thu", "fri"]
+
+    /// The built-in morning brief: what needs the user today, at 09:00 on weekdays. Off until the user turns it on. A brief
+    /// missed while the Mac slept or was off still comes until noon.
+    static func morningBrief(enabled: Bool = false) -> Automation {
+        Automation(id: morningBriefID, name: "Morning brief", enabled: enabled,
+                   trigger: .init(type: "daily", times: ["09:00"], weekdays: weekdays, catchUpMinutes: 180),
+                   action: .init(type: "digest", digest: "brief"), presentation: .init(symbol: "sun.max.fill"), createdBy: "user",
+                   note: "Tasks due, tasks that need you, open alerts, meeting action items and waiting agents. Built from data on this Mac; no agent runs.")
+    }
+
+    /// The built-in end-of-day recap: what happened today, at 18:00 on weekdays. Off until the user turns it on.
+    static func dayRecap(enabled: Bool = false) -> Automation {
+        Automation(id: dayRecapID, name: "End-of-day recap", enabled: enabled,
+                   trigger: .init(type: "daily", times: ["18:00"], weekdays: weekdays, catchUpMinutes: 120),
+                   action: .init(type: "digest", digest: "recap"), presentation: .init(symbol: "moon.stars.fill"), createdBy: "user",
+                   note: "What agents finished, tasks closed, alerts resolved, meetings held and what is still open. Built from data on this Mac; no agent runs.")
+    }
+
+    /// Every built-in, added to the file when its id is missing.
+    static var builtIns: [Automation] { [reviewTasks(), morningBrief(), dayRecap()] }
+
     /// The `gh` binary, which the GitHub script runs.
     static var ghExecutable: URL? {
         ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"].map(URL.init(fileURLWithPath:))

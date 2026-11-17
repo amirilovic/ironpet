@@ -1,0 +1,110 @@
+import Combine
+import Foundation
+
+/// Gathers a brief's input from the app's stores and `~/.ironpet/meetings`, and builds it.
+@MainActor
+final class BriefSource {
+    private let tasks: TaskStore
+    private let sessions: SessionStore
+    private let signals: SignalStore
+    private let meetingsRoot: URL
+    /// What happened today. Without it the recap's agent turns come from the sessions still in the store.
+    var activity: BriefActivitySource?
+    var now: () -> Date = Date.init
+    var calendar: Calendar = .current
+    /// Each summary's open action items, keyed by folder, kept until the file changes.
+    private var summaries: [String: (modified: Date, items: [String])] = [:]
+
+    init(tasks: TaskStore, sessions: SessionStore, signals: SignalStore, meetingsRoot: URL = Paths.meetings,
+         activity: BriefActivitySource? = nil) {
+        self.tasks = tasks
+        self.sessions = sessions
+        self.signals = signals
+        self.meetingsRoot = meetingsRoot
+        self.activity = activity
+    }
+
+    /// Fires when anything the brief reads may have changed.
+    var changes: AnyPublisher<Void, Never> {
+        Publishers.Merge3(tasks.objectWillChange, sessions.objectWillChange, signals.objectWillChange).eraseToAnyPublisher()
+    }
+
+    /// `weekdays` are the brief trigger's, so Monday's brief reaches back to Friday's meetings.
+    func build(_ kind: Brief.Kind, weekdays: [String]? = nil) -> Brief {
+        let now = now()
+        let since = BriefBuilder.meetingsSince(weekdays: weekdays, now: now, calendar: calendar)
+        let today = DateInterval(start: calendar.startOfDay(for: now), end: now)
+        let live = Array(sessions.sessions.values)
+        let input = BriefInput(now: now, calendar: calendar, tasks: tasks.tasks, sessions: live, alerts: signals.signals,
+                               meetings: meetings(since: min(since, today.start), until: now),
+                               activity: activity?.briefActivity(in: today) ?? Self.finishedSessions(live, in: today))
+        return BriefBuilder.build(kind, input, meetingsSince: since)
+    }
+
+    /// The done and failed sessions the store still holds, as recap activity. Turns that ended earlier and were dismissed
+    /// are missing; the activity log keeps those.
+    nonisolated static func finishedSessions(_ sessions: [AgentSession], in window: DateInterval) -> [BriefActivity] {
+        sessions.filter { ($0.status == .done || $0.status == .failed) && window.contains($0.updatedAt) }.map { s in
+            BriefActivity(kind: s.status == .failed ? .sessionFailed : .sessionDone, at: s.updatedAt, ref: s.id,
+                          title: s.workspaceName, detail: s.summary, agent: s.source.displayName,
+                          workspace: s.origin.workspace, bundleID: s.origin.ownerBundleID)
+        }
+    }
+
+    private func meetings(since: Date, until: Date) -> [BriefMeeting] {
+        let folders = (try? FileManager.default.contentsOfDirectory(at: meetingsRoot, includingPropertiesForKeys: nil)) ?? []
+        return folders.compactMap { folder -> BriefMeeting? in
+            guard let date = MeetingLibrary.date(folderName: folder.lastPathComponent), date >= since, date <= until,
+                  let record = MeetingLibrary.record(folder) else { return nil }
+            return BriefMeeting(id: record.id, date: date, preview: record.preview,
+                                openItems: record.hasSummary ? openItems(record) : [])
+        }
+    }
+
+    private func openItems(_ record: MeetingRecord) -> [String] {
+        let modified = (try? record.summaryURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+        if let cached = summaries[record.id], cached.modified == modified { return cached.items }
+        let text = (try? String(contentsOf: record.summaryURL, encoding: .utf8)) ?? ""
+        let items = ActionItems.openItems(text).map(\.title)
+        summaries[record.id] = (modified, items)
+        return items
+    }
+}
+
+/// The Today page's content. Rebuilt when the page appears and, while it is on screen, when the stores change.
+@MainActor
+final class BriefModel: ObservableObject {
+    @Published private(set) var briefs: [Brief.Kind: Brief] = [:]
+    private let source: BriefSource?
+    /// The brief automation's weekdays.
+    var weekdays: () -> [String]? = { nil }
+    private var visible = false
+    private var cancellable: AnyCancellable?
+
+    init(source: BriefSource) {
+        self.source = source
+        cancellable = source.changes
+            .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
+            .sink { [weak self] in
+                guard let self, visible else { return }
+                refresh()
+            }
+    }
+
+    /// Fixed content for previews and tests.
+    init(briefs: [Brief]) {
+        source = nil
+        self.briefs = Dictionary(briefs.map { ($0.kind, $0) }, uniquingKeysWith: { _, last in last })
+    }
+
+    func refresh() {
+        guard let source else { return }
+        let weekdays = weekdays()
+        briefs = Dictionary(uniqueKeysWithValues: Brief.Kind.allCases.map { ($0, source.build($0, weekdays: weekdays)) })
+    }
+
+    func setVisible(_ visible: Bool) {
+        self.visible = visible
+        if visible { refresh() }
+    }
+}

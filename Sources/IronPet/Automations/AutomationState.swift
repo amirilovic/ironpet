@@ -76,6 +76,10 @@ final class AutomationState {
             ALTER TABLE automation_alerts ADD COLUMN payload TEXT;
             UPDATE automation_alerts SET hash = '';
             """),
+        // Numbered above every other feature's migrations, because a database already at a higher version would skip it.
+        .init(410, "automations: last daily slot", sql: """
+            CREATE TABLE IF NOT EXISTS automation_daily(automation TEXT PRIMARY KEY, last_slot REAL NOT NULL) WITHOUT ROWID;
+            """),
     ]
 
     private let database: Database
@@ -129,6 +133,18 @@ final class AutomationState {
 
     func setScriptState(_ id: String, _ state: String) {
         write { try $0.execute("INSERT OR REPLACE INTO automation_script_state(automation, state) VALUES(?, ?)", [id, state]) }
+    }
+
+    // MARK: Daily slots
+
+    /// The last `daily` slot that fired or was skipped on purpose, for triggers with `catchUpMinutes`.
+    func dailySlot(_ id: String) -> Date? {
+        (read { try $0.rows("SELECT last_slot FROM automation_daily WHERE automation = ?", [id]).first?.first as? Double } ?? nil)
+            .map(Date.init(timeIntervalSince1970:))
+    }
+
+    func setDailySlot(_ id: String, _ slot: Date) {
+        write { try $0.execute("INSERT OR REPLACE INTO automation_daily(automation, last_slot) VALUES(?, ?)", [id, slot.timeIntervalSince1970]) }
     }
 
     // MARK: Execution logs
@@ -293,7 +309,7 @@ final class AutomationState {
 
     // MARK: Housekeeping
 
-    private static let tables = ["automation_seen", "automation_state", "automation_runs", "automation_approvals", "automation_snoozes", "automation_script_state", "automation_alerts", "automation_logs"]
+    private static let tables = ["automation_seen", "automation_state", "automation_runs", "automation_approvals", "automation_snoozes", "automation_script_state", "automation_alerts", "automation_logs", "automation_daily"]
 
     /// Forgets everything about an automation that was deleted.
     func forget(_ id: String) {

@@ -56,6 +56,10 @@ final class AutomationService {
     var chatRunPending: (_ automationID: String) -> Bool = { _ in false }
     /// True when a task is in backlog, in progress or needs the user. The built-in task review does not run otherwise.
     var hasOpenTasks: () -> Bool = { true }
+    /// Builds a `digest` action's brief or recap from data on this Mac. Nil when the stores are not ready.
+    var digest: (_ kind: Brief.Kind, _ automation: Automation) -> Brief? = { _, _ in nil }
+    /// Shows a brief. `manual` is true for Run now, which shows an empty brief too.
+    var showDigest: (_ brief: Brief, _ automation: Automation, _ manual: Bool) -> Void = { _, _, _ in }
     var runShell: (_ command: String, _ timeout: TimeInterval) async -> CommandResult = { command, timeout in
         await CommandRunner.run(shell: command, timeout: timeout, environment: CommandRunner.defaultEnvironment())
     }
@@ -265,6 +269,18 @@ final class AutomationService {
             }
         case "prompt" where runsInChat(a):
             deliverToChat(a, fire: fire, values: values)
+        case "digest":
+            guard let kind = a.action.digest.flatMap(Brief.Kind.init(rawValue:)), let brief = digest(kind, a) else {
+                return record(a.id, "failed", "the brief is not available")
+            }
+            // A scheduled brief with nothing in it stays quiet; Run now always answers.
+            if brief.isEmpty, !fire.manual {
+                record(a.id, "ok", "nothing to report")
+            } else {
+                showDigest(brief, a, fire.manual)
+                record(a.id, "fired", brief.lines.isEmpty ? "nothing to report" : brief.lines.joined(separator: "; "))
+            }
+            afterRun(a)
         case "prompt":
             let prompt = AutomationTemplate.render(a.action.prompt ?? "", values: values)
             runInBackground(a) { [self] in
@@ -547,7 +563,7 @@ final class AutomationService {
                 if a.trigger.type == "poll" || a.trigger.type == "script" {
                     await engine.pollNow(a.id)
                 } else {
-                    handle(.init(automations: [a], item: nil, agentWorking: false))
+                    handle(.init(automations: [a], item: nil, agentWorking: false, manual: true))
                 }
                 let waiting = needsApproval(a)
                 return .success(["id": a.id, "status": waiting ? "waiting for approval" : "started"])

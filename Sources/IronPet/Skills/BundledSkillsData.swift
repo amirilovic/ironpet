@@ -26,7 +26,7 @@ Tools: `automations_list`, `automations_get`, `automations_create`, `automations
 | Trigger | Use it for | Fields |
 | --- | --- | --- |
 | `interval` | "every 45 minutes" | `minutes`, `clock`: `active` (counts only time at the keyboard, resets after a break, default) or `wall` (clock time) |
-| `daily` | "weekdays at 09:55" | `times: ["09:55"]`, optional `weekdays: ["mon","tue",...]` |
+| `daily` | "weekdays at 09:55" | `times: ["09:55"]`, optional `weekdays: ["mon","tue",...]`, optional `catchUpMinutes` (0 to 720): a slot missed while the Mac slept or ironpet was not running still fires when at most that late |
 | `once` | "at 3pm today", "tomorrow at 9" | `at`: ISO 8601 with the time zone. It turns itself off after it fires. |
 | `script` | watch something and compare with last time | `minutes`, `script`. See below. |
 | `poll` | simple "tell me about new items" from a command | `minutes`, `source`, `items`, `id`, `version`. See below. |
@@ -38,6 +38,7 @@ Use `once` with a full timestamp. Work out the user's time zone and today's date
 - `{"type":"bubble","title":"...","body":"..."}` shows a popup. `presentation` sets `mood`, `symbol` (an SF Symbol name), `buttons` (`["done","snooze"]`), `notification` (also a macOS notification) and `expiresSeconds`.
 - `{"type":"prompt","prompt":"..."}` sends the prompt into the chat the user has open, under a header naming the automation. The chat's agent runs it with its full tools (including the `tasks_*` tools), memory and context, and the answer appears in the chat, not in a bubble. `agent` and `model` are ignored there. If the previous run is still queued or running when it fires again, that tick is skipped. This is how to build a recurring "loop": an `interval` automation with a `prompt` action, such as "check my open tasks and move one forward" every 10 minutes. A prompt that uses `{{item.*}}` is the exception, because poll items hold text from outside. It runs in a background session that can only read and shows the answer in a bubble.
 - `{"type":"shell","command":"..."}` runs a command and shows its output.
+- `{"type":"digest","digest":"brief"}` (or `"recap"`) shows a bubble with what needs the user today (tasks due, tasks that need them, open alerts, meeting action items, waiting agents), or what happened today (agent turns, closed tasks, resolved alerts, meetings). ironpet builds it from data on the Mac, so no agent runs and it needs no approval. Not for `poll`. Two built-ins use it, `morning-brief` and `day-recap`, off until the user turns them on; turn one on with `automations_resume` instead of creating a copy.
 
 Text can use `{{name}}`, `{{now}}` and, for `poll`, `{{item.field}}`.
 

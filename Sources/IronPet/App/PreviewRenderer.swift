@@ -69,6 +69,26 @@ enum PreviewRenderer {
         let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
         render(list(sessions, tasks: noTasks, on: .tasks), to: dir, "tasks-empty")
 
+        // Today, from the same sample stores plus a meeting on the last weekday and a few agent turns from today.
+        let briefSource = BriefSource(tasks: tasks, sessions: sessions, signals: signals, meetingsRoot: sampleBriefMeetings(),
+                                      activity: FixedBriefActivity(events: sampleActivity))
+        let brief = BriefModel(source: briefSource)
+        brief.weekdays = { AutomationDefaults.weekdays }
+        brief.refresh()
+        func today(_ kind: Brief.Kind, _ content: BriefModel) -> some View {
+            let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
+            model.todayShown = true
+            model.briefKind = kind
+            model.section = .today
+            return IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: chat,
+                                     meetings: meetings, brief: content, actions: .none)
+                .frame(width: 780, height: 560).panel()
+        }
+        render(today(.brief, brief), to: dir, "today-brief")
+        render(today(.brief, brief), to: dir, "today-brief-light", scheme: .light)
+        render(today(.recap, brief), to: dir, "today-recap")
+        render(today(.brief, BriefModel(briefs: [])), to: dir, "today-empty")
+
         var patterned = config
         patterned.chat.background = "paws"
         // The same pages in a real window, so the screenshots show the title bar, selection and glass as they are.
@@ -81,9 +101,10 @@ enum PreviewRenderer {
                     // A throwaway suite, so rendering never changes the user's saved sidebar state.
                     let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
                     model.sidebarCollapsed = collapsed
+                    model.todayShown = true
                     model.section = section
                     let view = IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: chat,
-                                                 meetings: meetings, settings: settingsModel, actions: .none)
+                                                 meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
                     renderWindow(model: model, session: chat, content: view, to: dir,
                                  "real-\(section.rawValue)-\(suffix)\(collapsed ? "-collapsed" : "")", scheme: scheme)
                 }
@@ -115,6 +136,11 @@ enum PreviewRenderer {
         render(PetScene(atlas: atlas, row: .waiting, frame: 0,
                         bubbles: [Announcer.tasksDueBubble(due, now: Date(), done: {}, snooze: {}, open: {})]),
                to: dir, "task-due-several")
+        for (kind, automation) in [(Brief.Kind.brief, AutomationDefaults.morningBrief()), (.recap, AutomationDefaults.dayRecap())] {
+            let bubble = Announcer.briefBubble(briefSource.build(kind, weekdays: AutomationDefaults.weekdays), automation: automation,
+                                               now: Date(), open: {})
+            render(PetScene(atlas: atlas, row: .waiting, frame: 0, bubbles: [bubble]), to: dir, "bubble-\(kind.rawValue)")
+        }
 
         let left = Date().addingTimeInterval(-62 * 60)
         let window = DateInterval(start: left, end: Date())
@@ -185,7 +211,7 @@ enum PreviewRenderer {
         let paths = AutomationPaths(file: folder.appendingPathComponent("automations.json"),
                                     directory: folder.appendingPathComponent("automations"))
         let store = AutomationStore(paths: paths, defaults: { AutomationMigration.defaults(from: config, sentryConfigured: false) },
-                                    builtIns: [AutomationDefaults.reviewTasks()], watch: false)
+                                    builtIns: AutomationDefaults.builtIns, watch: false)
         let telegram = TelegramBridge(
             client: TelegramAPI(token: { nil }), host: chat, tokens: TelegramToken.shared,
             storage: .init(users: { [] }, add: { _ in }, remove: { _ in }, offset: { 0 }, setOffset: { _ in }))
@@ -287,6 +313,59 @@ enum PreviewRenderer {
             session("4", .cursor, .failed, "docs-site", prompt: "Upgrade to the new docs theme",
                     reply: "The build fails because the theme needs Node 20.", minutes: 11),
         ]
+    }
+
+    /// Agent turns that ended earlier today, as the activity log would list them.
+    private static var sampleActivity: [BriefActivity] {
+        func turn(_ ref: String, _ kind: BriefActivity.Kind, _ project: String, _ summary: String, minutes: Double) -> BriefActivity {
+            BriefActivity(kind: kind, at: Date().addingTimeInterval(-minutes * 60), ref: ref, title: project, detail: summary,
+                          agent: "Claude Code", workspace: "/Users/you/code/\(project)", bundleID: nil)
+        }
+        return [
+            turn("claude:a", .sessionDone, "demo-app", "Fixed the flaky login test", minutes: 6),
+            turn("claude:b", .sessionDone, "api-server", "Added rate limiting to the public endpoints", minutes: 45),
+            turn("cursor:c", .sessionFailed, "docs-site", "The build needs Node 20", minutes: 11),
+            BriefActivity(kind: .alertResolved, at: Date().addingTimeInterval(-30 * 60), ref: "5", title: "Fix flaky login test",
+                          detail: "CI failed", agent: nil, workspace: nil, bundleID: nil),
+        ]
+    }
+
+    /// A meeting on the last weekday with open action items, and one from this morning, for the Today previews.
+    private static func sampleBriefMeetings() -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-brief-meetings")
+        try? FileManager.default.removeItem(at: root)
+        let calendar = Calendar.current
+        let since = BriefBuilder.meetingsSince(weekdays: AutomationDefaults.weekdays, now: Date(), calendar: calendar)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd-HHmm"
+        let meetings = [
+            (since.addingTimeInterval(15 * 3600), """
+             # Summary
+
+             Planning for the 2.4 release.
+
+             ## Action items
+             - [ ] Send the design review notes to the team (owner: Me, due: Friday)
+             - [ ] Book the room for the launch review (owner: Me)
+             - [x] Share the load test results (owner: Me)
+             - [ ] Update the pricing page (owner: Priya)
+             """),
+            (min(Date().addingTimeInterval(-90 * 60), calendar.startOfDay(for: Date()).addingTimeInterval(10 * 3600)), """
+             # Summary
+
+             Weekly sync with the platform team.
+
+             ## Action items
+             None.
+             """),
+        ]
+        for (date, summary) in meetings {
+            let url = root.appendingPathComponent(formatter.string(from: date))
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            try? summary.write(to: url.appendingPathComponent("summary.md"), atomically: true, encoding: .utf8)
+        }
+        return root
     }
 
     /// An in-memory list with one task in each state, created at made-up times.

@@ -44,6 +44,8 @@ final class PetController: NSObject {
     /// The Chat section's session and the Transcripts section's meetings. Set before the window first opens.
     var chat: ChatSession?
     var meetings: MeetingLibrary?
+    /// The Today section's content. Set before the window first opens.
+    var brief: BriefModel?
     /// "Ask Ghost" on a meeting: attach these files in the chat.
     var onAskMeeting: (([URL]) -> Void)?
     var meetingInProgress: () -> URL? = { nil }
@@ -122,6 +124,50 @@ final class PetController: NSObject {
     func snapshotWindow(to url: URL) -> Bool { builtWindow?.snapshot(to: url) ?? false }
 
     func closeWindow() { builtWindow?.close() }
+
+    /// For `/test/window`.
+    var windowState: [String: Any] {
+        ["visible": isWindowVisible, "section": windowModel.section.rawValue, "todayShown": windowModel.todayShown,
+         "briefKind": windowModel.briefKind.rawValue, "focusTask": windowModel.focusTask ?? "", "focusMeeting": windowModel.focusMeeting ?? ""]
+    }
+
+    /// Lists or hides the Today row: a brief or recap automation is on.
+    func setTodayShown(_ shown: Bool) {
+        if windowModel.todayShown != shown { windowModel.todayShown = shown }
+    }
+
+    /// Opens the Today page on the brief or the recap.
+    func showBrief(_ kind: Brief.Kind) {
+        windowModel.todayShown = true
+        windowModel.briefKind = kind
+        showWindow(.today)
+    }
+
+    /// A Today row: its task or meeting in this window, its session in the editor or terminal, its alert's link.
+    func openBrief(_ target: Brief.Target) {
+        switch target {
+        case .task(let id):
+            windowModel.focusTask = id
+            windowModel.section = .tasks
+        case .meeting(let id):
+            windowModel.focusMeeting = id
+            windowModel.section = .transcripts
+        case .alert(_, let url?):
+            builtWindow?.close()
+            NSWorkspace.shared.open(url)
+        case .alert:
+            windowModel.section = .alerts
+        case .session(let id, let workspace, let bundleID):
+            if let session = store.sessions[id] { return jump(to: session) }
+            builtWindow?.close()
+            // The session has ended: open its folder with the app it ran in.
+            if let bundleID {
+                SourceJumper.open(OpenTarget(name: "", bundleID: bundleID), folder: workspace)
+            } else if let workspace {
+                NSWorkspace.shared.open(URL(fileURLWithPath: workspace))
+            }
+        }
+    }
 
     func jump(to session: AgentSession) {
         builtWindow?.close()
@@ -233,10 +279,11 @@ final class PetController: NSObject {
                 // The Settings window is a normal window, so it would open behind this floating one.
                 if !isChatVisible { builtWindow?.close() }
                 onSettings?()
-            })
+            },
+            onBriefOpen: { [weak self] target in self?.openBrief(target) })
         let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(
             model: windowModel, store: store, signals: signals, tasks: taskList, chat: chat, meetings: meetings,
-            settings: settings, actions: actions))
+            settings: settings, brief: brief, actions: actions))
         window.onVisibilityChange = { [weak self] visible in
             self?.syncChat()
             if !visible { self?.refreshMood() }

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// A page of the ironpet window, in sidebar order.
 enum IronPetSection: String, CaseIterable, Identifiable {
-    case chat, agents, alerts, tasks, transcripts, actions, automations
+    case chat, agents, alerts, tasks, transcripts, actions, automations, today
 
     var id: String { rawValue }
 
@@ -16,6 +16,7 @@ enum IronPetSection: String, CaseIterable, Identifiable {
         case .transcripts: return "Transcripts"
         case .actions: return "Actions"
         case .automations: return "Automations"
+        case .today: return "Today"
         }
     }
 
@@ -28,12 +29,14 @@ enum IronPetSection: String, CaseIterable, Identifiable {
         case .transcripts: return "waveform"
         case .actions: return "sparkles"
         case .automations: return "clock.badge.checkmark"
+        case .today: return "sun.horizon"
         }
     }
 
-    /// The sections the sidebar lists, in order. Chat, Transcripts and Automations need their backing object.
-    static func shown(chat: Bool, transcripts: Bool, automations: Bool) -> [IronPetSection] {
-        allCases.filter { ($0 != .chat || chat) && ($0 != .transcripts || transcripts) && ($0 != .automations || automations) }
+    /// The sections the sidebar lists, in order. Chat, Transcripts and Automations need their backing object. Today is
+    /// listed only while a brief or recap automation is on, and comes last so the other rows keep their ⌘N.
+    static func shown(chat: Bool, transcripts: Bool, automations: Bool, today: Bool = false) -> [IronPetSection] {
+        allCases.filter { ($0 != .chat || chat) && ($0 != .transcripts || transcripts) && ($0 != .automations || automations) && ($0 != .today || today) }
     }
 
     /// The section ⌘1 to ⌘9 select: the Nth row of `sections`. Nil for ⌘0, any other key, or a digit past the last row.
@@ -51,7 +54,7 @@ enum IronPetSection: String, CaseIterable, Identifiable {
 
     /// The sections that show what a bubble would announce, so bubbles wait while one is open. The others leave them
     /// visible, so an approval is not missed while reading a transcript or editing an automation.
-    var hidesBubbles: Bool { [.chat, .agents, .alerts, .tasks, .actions].contains(self) }
+    var hidesBubbles: Bool { [.chat, .agents, .alerts, .tasks, .actions, .today].contains(self) }
 
     /// Agents that need the user win; otherwise alerts when there are some and no agent is working, then tasks that
     /// wait on the user or on Add / Skip.
@@ -72,6 +75,15 @@ final class IronPetWindowModel: ObservableObject {
     static let railWidth: CGFloat = 72
 
     @Published var section: IronPetSection = .chat
+    /// Whether the Today row is listed: a brief or recap automation is on. Leaving it hidden moves off the page.
+    @Published var todayShown = false {
+        didSet { if !todayShown, section == .today { section = .chat } }
+    }
+    /// The page Today shows: the morning brief or the recap.
+    @Published var briefKind: Brief.Kind = .brief
+    /// A task or meeting a Today row opened. The Tasks and Transcripts pages show it, then clear it.
+    @Published var focusTask: String?
+    @Published var focusMeeting: String?
     /// True when the sidebar shows only the section icons. Saved, so it survives closing the window and restarting.
     @Published var sidebarCollapsed: Bool {
         didSet { defaults.set(sidebarCollapsed, forKey: Self.sidebarCollapsedKey) }
@@ -155,7 +167,7 @@ final class IronPetPanel: NSPanel {
 
     /// The rows the sidebar shows; ⌘1 to ⌘9 index into this list.
     private var sidebarSections: [IronPetSection] {
-        IronPetSection.shown(chat: session != nil, transcripts: true, automations: true)
+        IronPetSection.shown(chat: session != nil, transcripts: true, automations: true, today: model.todayShown)
     }
 
     private var onChat: Bool { session != nil && model.section == .chat }
@@ -343,6 +355,8 @@ struct IronPetWindowView: View {
     var meetings: MeetingLibrary?
     /// Nil in previews, which cannot build the Automations section; its row is hidden then.
     var settings: SettingsModel?
+    /// The Today page's content. Nil in tests that do not show it.
+    var brief: BriefModel?
     let actions: SessionActions
     @ObservedObject private var config = ConfigStore.shared
 
@@ -359,7 +373,7 @@ struct IronPetWindowView: View {
     }
 
     private var shown: [IronPetSection] {
-        IronPetSection.shown(chat: chat != nil, transcripts: meetings != nil, automations: settings != nil)
+        IronPetSection.shown(chat: chat != nil, transcripts: meetings != nil, automations: settings != nil, today: model.todayShown)
     }
 
     private var collapsed: Bool { model.sidebarCollapsed }
@@ -487,17 +501,22 @@ struct IronPetWindowView: View {
                 case .alerts: AlertsSection(signals: signals, onAsk: actions.onAsk)
                 case .tasks:
                     TaskListView(tasks: tasks, onTellGhost: actions.onTellGhost, onOpenThread: actions.onOpenThread,
-                                 onOpenSession: actions.onOpenSession)
+                                 onOpenSession: actions.onOpenSession, focus: $model.focusTask)
                         .pageHeader(IronPetSection.tasks.title)
                 case .transcripts:
                     if let meetings {
-                        TranscriptsView(library: meetings, activeFolder: actions.meetingInProgress, onAsk: actions.onAskMeeting)
+                        TranscriptsView(library: meetings, activeFolder: actions.meetingInProgress, onAsk: actions.onAskMeeting,
+                                        focus: $model.focusMeeting)
                     }
                 case .actions: ActionsSection(onTrick: actions.onTrick)
                 case .automations:
                     if let settings {
                         AutomationsSettings(model: settings).frame(maxHeight: .infinity)
                             .pageHeader(IronPetSection.automations.title)
+                    }
+                case .today:
+                    if let brief {
+                        TodayView(model: brief, kind: $model.briefKind, onOpen: actions.onBriefOpen)
                     }
                 }
             }
@@ -519,6 +538,8 @@ struct SessionActions {
     /// The folder of the meeting being recorded or summarized, if any.
     var meetingInProgress: () -> URL? = { nil }
     var onSettings: () -> Void = {}
+    /// A row of the Today page.
+    var onBriefOpen: (Brief.Target) -> Void = { _ in }
 
     static let none = SessionActions(onJump: { _ in }, onAsk: { _ in }, onTrick: { _ in }, onTellGhost: { _ in },
                                      onOpenThread: { _ in }, onOpenSession: { _ in })

@@ -34,6 +34,10 @@ struct Automation: Codable, Equatable, Identifiable {
         var script: String?
         /// `poll`: after a run fires, this many minutes pass before the next one can.
         var cooldownMinutes: Double?
+        /// `daily`: a slot missed while the Mac slept or ironpet was not running still fires when it is at most this many
+        /// minutes late. Only the latest missed slot fires. Without it, a slot missed during sleep fires once on wake and
+        /// one missed before launch never does.
+        var catchUpMinutes: Double?
 
         /// An `interval` on the `active` clock (the default): time counts only while the user is at the keyboard.
         var countsKeyboardTime: Bool { type == "interval" && clock != "wall" }
@@ -50,7 +54,7 @@ struct Automation: Codable, Equatable, Identifiable {
     }
 
     struct Action: Codable, Equatable {
-        /// `bubble`, `prompt` or `shell`.
+        /// `bubble`, `prompt`, `shell` or `digest`.
         var type: String
         var title: String?
         var body: String?
@@ -62,6 +66,8 @@ struct Automation: Codable, Equatable, Identifiable {
         /// `shell`: runs with `/bin/sh -c`.
         var command: String?
         var timeoutSeconds: Double?
+        /// `digest`: `brief` (what needs you today) or `recap` (what happened today), built from data on this Mac.
+        var digest: String?
     }
 
     struct Presentation: Codable, Equatable {
@@ -153,15 +159,16 @@ struct AutomationFile: Codable {
 enum AutomationValidator {
     static let weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
     static let triggerTypes = ["interval", "daily", "once", "poll", "script"]
-    static let actionTypes = ["bubble", "prompt", "shell"]
+    static let actionTypes = ["bubble", "prompt", "shell", "digest"]
+    static let digestKinds = ["brief", "recap"]
     static let pollModes = ["json", "lines", "text", "exit_code"]
         static let buttons = ["done", "snooze"]
 
     private static let keys: [String: Set<String>] = [
         "automation": ["id", "name", "enabled", "trigger", "action", "presentation", "createdBy", "note"],
-        "trigger": ["type", "minutes", "clock", "times", "weekdays", "at", "source", "mode", "items", "id", "version", "script", "cooldownMinutes"],
+        "trigger": ["type", "minutes", "clock", "times", "weekdays", "at", "source", "mode", "items", "id", "version", "script", "cooldownMinutes", "catchUpMinutes"],
         "source": ["type", "command", "timeoutSeconds", "url", "headers"],
-        "action": ["type", "title", "body", "prompt", "agent", "model", "command", "timeoutSeconds"],
+        "action": ["type", "title", "body", "prompt", "agent", "model", "command", "timeoutSeconds", "digest"],
         "presentation": ["mood", "symbol", "buttons", "notification", "expiresSeconds"],
     ]
 
@@ -261,6 +268,7 @@ enum AutomationValidator {
             if times.isEmpty { errors.append("trigger.times needs at least one HH:mm time") }
             for time in times where AutomationClock.minutes(of: time) == nil { errors.append("trigger.times: \"\(time)\" is not HH:mm") }
             for day in t.weekdays ?? [] where !weekdays.contains(day) { errors.append("trigger.weekdays: \"\(day)\" is not one of \(weekdays.joined(separator: ", "))") }
+            if let c = t.catchUpMinutes, c < 0 || c > 720 { errors.append("trigger.catchUpMinutes must be a number from 0 to 720") }
         case "once":
             if let at = t.at, let date = AutomationClock.parse(at) {
                 if isNew, date <= now { errors.append("trigger.at is in the past") }
@@ -327,6 +335,9 @@ enum AutomationValidator {
         case "prompt":
             if (a.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errors.append("action.prompt is empty") }
             if let agent = a.agent, AgentCatalog.agent(id: agent) == nil { errors.append("action.agent \"\(agent)\" is not a known agent") }
+        case "digest":
+            if !digestKinds.contains(a.digest ?? "") { errors.append("action.digest must be one of \(digestKinds.joined(separator: ", "))") }
+            if trigger.type == "poll" { errors.append("a digest action runs on an interval, daily or once trigger, not a poll") }
         default:
             if (a.command ?? "").trimmingCharacters(in: .whitespaces).isEmpty { errors.append("action.command is empty") }
             if placeholderInQuotes(a.command ?? "") {

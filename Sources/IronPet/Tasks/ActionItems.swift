@@ -15,6 +15,13 @@ enum ActionItems {
         entries(markdown).map(\.item)
     }
 
+    /// The unticked items that are the user's: owner "Me" or no owner. Someone else's items are tasks the user waits on.
+    static func openItems(_ markdown: String) -> [Item] {
+        entries(markdown).filter { entry in
+            !entry.checked && (entry.item.owner.map { $0.caseInsensitiveCompare("me") == .orderedSame } ?? true)
+        }.map(\.item)
+    }
+
     /// One checklist line of the section, with its position in the text and whether it is ticked.
     private struct Entry {
         var line: Int

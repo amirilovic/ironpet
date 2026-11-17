@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var welcomeBack: WelcomeBack?
     /// Replaces the system idle time in test mode (`POST /test/presence`). Nil otherwise.
     private var testIdleSeconds: TimeInterval?
+    private var brief: BriefSource?
     private lazy var logWindow = AutomationLogWindow(service: { [weak self] in self?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
@@ -198,7 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setUpAutomations() {
         let store = AutomationStore(defaults: { [config] in
             AutomationMigration.defaults(from: config.config, sentryConfigured: AutomationDefaults.sentryConfigured)
-        }, builtIns: [AutomationDefaults.reviewTasks()])
+        }, builtIns: AutomationDefaults.builtIns)
         let engine = AutomationEngine(env: .init(
             now: { [weak self] in Date().addingTimeInterval(self?.testClockOffset ?? 0) },
             isAgentWorking: { [weak self] in
@@ -251,6 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let workspace = store.paths.workspace
         service.runPrompt = { automation, prompt in await AutomationPrompt.run(automation, prompt: prompt, workspace: workspace) }
         service.hasOpenTasks = { [tasks] in tasks.tasks.contains { $0.status != .done } }
+        setUpBrief(service, tasks: tasks)
         service.sendToChat = { [weak self] id, message in self?.chat.submitFromAutomation(message, automation: id) ?? false }
         service.chatRunPending = { [weak self] id in self?.chat.hasAutomationRun(id) ?? false }
         chat.onAutomation = { [weak service] id, event in service?.chatOutcome(id, event) }
@@ -280,6 +282,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !TestControl.isEnabled {
             DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.checkSkills() }
         }
+    }
+
+    /// The morning brief and the recap: built from the stores for `digest` automations and the Today page. The Today row is
+    /// listed while one of those automations is on.
+    private func setUpBrief(_ service: AutomationService, tasks: TaskStore) {
+        let source = BriefSource(tasks: tasks, sessions: store, signals: signals)
+        source.now = { [weak self] in Date().addingTimeInterval(self?.testClockOffset ?? 0) }
+        let model = BriefModel(source: source)
+        let automations = service.store
+        model.weekdays = { [weak automations] in
+            automations?.automations.first { $0.action.type == "digest" && $0.action.digest == Brief.Kind.brief.rawValue }?.trigger.weekdays
+        }
+        brief = source
+        pet.brief = model
+        service.digest = { kind, a in source.build(kind, weekdays: kind == .brief ? a.trigger.weekdays : nil) }
+        service.showDigest = { [weak self] brief, a, _ in
+            self?.announcer.brief(brief, automation: a) { [weak self] in
+                self?.announcer.bubbles.dismiss(Announcer.briefID(brief.kind))
+                self?.pet.showBrief(brief.kind)
+            }
+        }
+        automations.$automations
+            .map { list in list.contains { $0.enabled && $0.action.type == "digest" } }
+            .removeDuplicates()
+            .sink { [weak self] shown in self?.pet.setTodayShown(shown) }
+            .store(in: &cancellables)
     }
 
     /// Builds screen capture on the shared database and applies the switch. With the switch off nothing starts.
@@ -723,6 +751,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self, let capture = self.capture else { return }
                 self.showProposal(proposal, service: capture)
             }
+            control.buildBrief = { [weak self] kind in
+                let weekdays = self?.automations.store.automations.first { $0.action.digest == kind.rawValue }?.trigger.weekdays
+                return self?.brief?.build(kind, weekdays: kind == .brief ? weekdays : nil)
+            }
+            control.windowState = { [weak self] in self?.pet.windowState ?? [:] }
+            control.openBrief = { [weak self] target in self?.pet.openBrief(target) }
             testControl = control
             server.onTest = { request, respond in
                 DispatchQueue.main.async { respond(control.handle(request)) }
