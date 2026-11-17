@@ -50,6 +50,7 @@ final class TaskStore: ObservableObject {
         .init(305, "tasks: due reminders", sql: """
             CREATE TABLE IF NOT EXISTS task_due_marks(task TEXT PRIMARY KEY, due REAL NOT NULL, snoozed_until REAL) WITHOUT ROWID;
             """),
+        TaskRunStore.migration,
     ]
 
     /// The column names of `table`, empty when it does not exist.
@@ -423,6 +424,8 @@ final class TaskStore: ObservableObject {
                 try db.execute("DELETE FROM task_links WHERE task IN (SELECT id FROM task_items WHERE status = 'done' AND closed < ?)", [cutoff])
                 try db.execute("DELETE FROM task_items WHERE status = 'done' AND closed < ?", [cutoff])
                 try db.execute("DELETE FROM task_due_marks WHERE task NOT IN (SELECT id FROM task_items)")
+                // Only runs whose worktree is gone: one that still exists stays listed until the runner removes it.
+                try db.execute("DELETE FROM task_runs WHERE task NOT IN (SELECT id FROM task_items) AND cleanup = 'removed'")
                 try db.execute("DELETE FROM task_events WHERE at < ? AND task NOT IN (SELECT id FROM task_items)", [cutoff])
                 try db.execute("DELETE FROM task_suggestion_keys WHERE at < ?",
                                [time.addingTimeInterval(-Double(Self.keepSuggestedKeysDays) * 86_400).timeIntervalSince1970])
