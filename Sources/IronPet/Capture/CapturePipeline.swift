@@ -169,12 +169,18 @@ final class CapturePipeline {
         if let skip = denylistCheck(app: snapshot.app, pageURL: snapshot.url) { return .failure(skip) }
         let outcome: ParseOutcome
         do { outcome = try parse(snapshot) } catch { return .failure(.ruleFailed(error.localizedDescription)) }
-        var item: CaptureItem
+        let item: CaptureItem
         switch outcome {
         case .item(let parsed): item = parsed
         case .refuse(let reason): return .failure(.refused(reason))
         case .notHandled: return .failure(.noParser)
         }
+        return finish(item, snapshot: snapshot)
+    }
+
+    /// The transform rules and the floor, for an item from a parser rule or from the form tracker.
+    private func finish(_ parsed: CaptureItem, snapshot: CaptureSnapshot) -> Result<CaptureItem, CaptureSkip> {
+        var item = parsed
         for name in rules.ruleSet.names(ofKind: "transform") {
             guard let input = CaptureJSON.string(item) else { return .failure(.ruleFailed("\(name): item")) }
             do {
@@ -194,6 +200,26 @@ final class CapturePipeline {
         }
         if item.content.isEmpty { return .failure(.emptyContent) }
         return .success(item)
+    }
+
+    /// Stores a finished form. It passes the same gate, denylist, transforms and floor as a window read, and the store redacts it.
+    func process(form: CaptureFormEmission, now: Date = Date()) -> Outcome {
+        var snapshot = form.snapshot
+        if let skip = privacy.check(snapshot) { return .skipped(skip) }
+        if isPrivateWindow(snapshot) { return .skipped(.privateWindow) }
+        snapshot.root = snapshot.root.scrubbed()
+        if let skip = denylistCheck(app: snapshot.app, pageURL: snapshot.url) { return .skipped(skip) }
+        let item: CaptureItem
+        switch finish(form.item, snapshot: snapshot) {
+        case .failure(let skip): return .skipped(skip)
+        case .success(let prepared): item = prepared
+        }
+        guard let store else { return .skipped(.ruleFailed("no store")) }
+        do {
+            return .stored(threadKey: item.threadKey, result: try store.ingest(item, now: now))
+        } catch {
+            return .skipped(.ruleFailed("store: \(error.localizedDescription)"))
+        }
     }
 
     /// Prepares `snapshot`, which `earlier` must confirm: it is stored only if both resolve to the same thread. Otherwise the window

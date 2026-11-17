@@ -225,6 +225,12 @@ final class CaptureService: @unchecked Sendable {
                 noteSkip(skip)
             }
         }
+        for form in reader.takeForms(now: now) {
+            switch pipeline.process(form: form, now: deps.now()) {
+            case .stored(_, let result): if result.itemId != nil { changed = true }
+            case .skipped(let skip): noteSkip(skip)
+            }
+        }
         if changed {
             refreshModel()
             scheduleFilter()

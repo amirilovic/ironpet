@@ -16,6 +16,9 @@ enum CaptureEventKind: Equatable {
 struct CaptureEvent: Equatable {
     var app: CaptureApp
     var kind: CaptureEventKind
+    /// The title of the button that just took focus, when the event is a focus change onto one. A form that closes right after is
+    /// a submitted form.
+    var button: String?
 }
 
 /// Limits for one read. When either is hit the source stops and marks the snapshot truncated.
@@ -127,21 +130,29 @@ final class CaptureReader {
     private var scheduler: CaptureScheduler
     private var awaiting: [Int32: Awaiting] = [:]
     private var kicked: Set<Int32> = []
+    private let forms: CaptureFormTracker
     var budget: CaptureReadBudget
     /// How long after the first read of an identity burst the second one happens.
     var settle: TimeInterval
 
     init(source: CaptureSource, scheduler: CaptureScheduler = CaptureScheduler(), budget: CaptureReadBudget = CaptureReadBudget(), settle: TimeInterval = 0.35,
-         mayRead: @escaping (CaptureApp) -> Bool, ocrRegions: @escaping (CaptureSnapshot) -> [CapturePipeline.OCRRegion] = { _ in [] }) {
+         forms: CaptureFormTracker = CaptureFormTracker(), mayRead: @escaping (CaptureApp) -> Bool, ocrRegions: @escaping (CaptureSnapshot) -> [CapturePipeline.OCRRegion] = { _ in [] }) {
         self.source = source
         self.scheduler = scheduler
         self.budget = budget
         self.settle = settle
+        self.forms = forms
         self.may = mayRead
         self.regions = ocrRegions
     }
 
-    func onEvent(_ event: CaptureEvent, now: TimeInterval) { scheduler.onEvent(event, now: now) }
+    func onEvent(_ event: CaptureEvent, now: TimeInterval) {
+        if let button = event.button { forms.notePress(app: event.app, title: button, now: now) }
+        scheduler.onEvent(event, now: now)
+    }
+
+    /// Forms finished since the last call: focus left the field, the form closed, or the field sat still for the settle interval.
+    func takeForms(now: TimeInterval) -> [CaptureFormEmission] { forms.takeReady(now: now) }
 
     func retry(_ app: CaptureApp, now: TimeInterval, attempt: Int) { scheduler.requeue(app, now: now, attempt: attempt) }
 
@@ -149,11 +160,12 @@ final class CaptureReader {
     func reset() {
         scheduler = CaptureScheduler(debounce: scheduler.debounce, maxWait: scheduler.maxWait)
         awaiting = [:]
+        forms.reset()
     }
 
     /// When the loop should run next, or nil when nothing is waiting.
     var nextWake: TimeInterval? {
-        [scheduler.nextDue, awaiting.values.map(\.confirmAt).min()].compactMap { $0 }.min()
+        [scheduler.nextDue, awaiting.values.map(\.confirmAt).min(), forms.nextWake].compactMap { $0 }.min()
     }
 
     func readDue(now: TimeInterval) -> [CaptureRead] {
@@ -162,12 +174,12 @@ final class CaptureReader {
             guard let waiting = awaiting.removeValue(forKey: pid) else { continue }
             // Pause, private mode or an exclusion may have started in between.
             guard may(waiting.app) else { continue }
-            if let snapshot = read(waiting.app) { out.append(CaptureRead(snapshot: snapshot, earlier: waiting.snapshot, attempt: waiting.attempt)) }
+            if let snapshot = read(waiting.app, now: now) { out.append(CaptureRead(snapshot: snapshot, earlier: waiting.snapshot, attempt: waiting.attempt)) }
         }
         for due in scheduler.takeDue(now: now) {
             guard may(due.app) else { continue }
             if source.isWebApp(due.app), kicked.insert(due.app.pid).inserted { source.enableWebAccessibility(due.app) }
-            guard let snapshot = read(due.app) else { continue }
+            guard let snapshot = read(due.app, now: now) else { continue }
             if due.identity && settle > 0 {
                 awaiting[due.app.pid] = Awaiting(app: due.app, snapshot: snapshot, confirmAt: now + settle, attempt: due.attempt)
             } else {
@@ -177,8 +189,11 @@ final class CaptureReader {
         return out
     }
 
-    private func read(_ app: CaptureApp) -> CaptureSnapshot? {
+    /// Reads the window. Returns nil when it shows a form being edited: the form tracker holds it and emits the form once the field
+    /// is done, so no read of a half-typed value reaches the pipeline.
+    private func read(_ app: CaptureApp, now: TimeInterval) -> CaptureSnapshot? {
         guard var snapshot = source.readFocusedWindow(of: app, budget: budget) else { return nil }
+        if forms.observe(snapshot, now: now) { return nil }
         // A screen rectangle shows whatever is on top, so it is read only while the window's app is frontmost.
         if source.frontmostApp()?.pid == app.pid {
             for region in regions(snapshot) {

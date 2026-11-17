@@ -270,6 +270,9 @@ final class CaptureAnalyzer {
             their screen, grouped by conversation or document. Your job is to find what needs the user's action. Reply with one JSON \
             object and nothing else.
 
+            A capture the user typed into a form or dialog is the whole form as "Label: value" lines, sent once when they finished. A first \
+            line "Submitted: <button>" means they confirmed it. "Closed without submit" means they gave it up.
+
             Look up the existing tasks yourself with your tools, and do it before you suggest anything:
             - tasks_list returns the open tasks. Call it again with include_done set to true to see finished ones too, and look at when they \
             were closed. tasks_get returns one task with its history.
