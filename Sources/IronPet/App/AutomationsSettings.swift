@@ -279,10 +279,9 @@ private struct NewAutomationSheet: View {
 enum DailySchedule {
     /// Today at the trigger's time, for a daily trigger with exactly one valid time. Nil hides the picker.
     static func time(of trigger: Automation.Trigger, now: Date = Date(), calendar: Calendar = .current) -> Date? {
-        guard trigger.type == "daily", let times = trigger.times, times.count == 1 else { return nil }
-        let parts = times[0].split(separator: ":").compactMap { Int($0) }
-        guard parts.count == 2, (0..<24).contains(parts[0]), (0..<60).contains(parts[1]) else { return nil }
-        return calendar.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: now)
+        guard trigger.type == "daily", let times = trigger.times, times.count == 1,
+              let minutes = AutomationClock.minutes(of: times[0]) else { return nil }
+        return calendar.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: now)
     }
 
     /// "09:05".
