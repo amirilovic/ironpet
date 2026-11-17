@@ -138,6 +138,7 @@ private struct AutomationList: View {
                     get: { weekdaysOnly },
                     set: { on in try? store.update(a.id) { $0.trigger.weekdays = DailySchedule.weekdays(only: on) } }))
                     .toggleStyle(.checkbox)
+                    .accessibilityLabel("\(a.name) weekdays only")
             }
         }
         .controlSize(.small)
@@ -292,7 +293,7 @@ enum DailySchedule {
     static func weekdaysOnly(_ trigger: Automation.Trigger) -> Bool? {
         guard let days = trigger.weekdays else { return false }
         if Set(days) == Set(AutomationDefaults.weekdays) { return true }
-        if Set(days) == Set(["sun", "mon", "tue", "wed", "thu", "fri", "sat"]) { return false }
+        if Set(days) == Set(AutomationValidator.weekdays) { return false }
         return nil
     }
 
