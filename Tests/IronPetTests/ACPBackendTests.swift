@@ -40,11 +40,18 @@ final class ACPBackendTests: XCTestCase {
                 modes = {"currentModeId": "agent", "availableModes": [{"id": "read-only"}, {"id": "workspace-write"}, {"id": "agent"}, {"id": "agent-full-access"}]}
             if mode == "codexold":
                 modes = {"currentModeId": "auto", "availableModes": [{"id": "auto"}, {"id": "full-access"}]}
-            send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": sid, "modes": modes,
+            reply = {"sessionId": sid, "modes": modes}
+            if mode == "configonly":
+                # Modes only as a config option in the "mode" category, the shape claude-agent-acp and cursor-agent also send.
+                reply = {"sessionId": sid, "configOptions": [{"id": "mode", "category": "mode", "type": "select", "currentValue": "bypassPermissions",
+                         "options": [{"value": "default"}, {"value": "plan"}, {"value": "bypassPermissions"}]}]}
+            if mode == "nomodes":
+                reply = {"sessionId": sid}
+            send({"jsonrpc": "2.0", "id": mid, "result": {**reply,
                   "models": {"currentModelId": "m1", "availableModels": [{"modelId": "m1", "name": "Model One"}, {"modelId": "m2", "name": "Model Two"}]}}})
         elif method == "session/set_mode" and mode == "setmodefail":
             send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "Invalid Mode"}})
-        elif method in ("session/set_model", "session/set_mode"):
+        elif method in ("session/set_model", "session/set_mode", "session/set_config_option"):
             send({"jsonrpc": "2.0", "id": mid, "result": {}})
         elif method == "session/prompt":
             text = "".join(b.get("text", "") for b in p["prompt"])
@@ -54,6 +61,11 @@ final class ACPBackendTests: XCTestCase {
                     c = json.loads(l); log.write(l); log.flush()
                     if c.get("method") == "session/cancel":
                         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "cancelled"}}); break
+                continue
+            if "CFGSWITCH" in text:
+                update({"sessionUpdate": "config_option_update", "configOptions": [{"id": "mode", "category": "mode", "currentValue": "acceptEdits"}]})
+                time.sleep(0.5)
+                send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
                 continue
             if "SWITCH" in text:
                 update({"sessionUpdate": "current_mode_update", "currentModeId": "bypassPermissions"})
@@ -357,6 +369,8 @@ final class ACPBackendTests: XCTestCase {
         XCTAssertNil(ACPBackend.askingMode(current: "default", available: ["default", "bypassPermissions"]))
         XCTAssertNil(ACPBackend.askingMode(current: "agent", available: ["agent", "plan", "ask"]), "Cursor's modes are left alone")
         XCTAssertNil(ACPBackend.askingMode(current: nil, available: ["default"]))
+        XCTAssertEqual(ACPBackend.askingMode(current: "full-access", available: ["read-only", "auto", "full-access"]), "auto", "an older Codex")
+        XCTAssertNil(ACPBackend.askingMode(current: "auto", available: ["read-only", "auto", "full-access"]), "an older Codex's auto asks on request")
         // The chat leaves codex-acp 2.6.0's modes as they are, as before; task runs use runMode below.
         let codex = ["read-only", "workspace-write", "agent", "agent-full-access"]
         XCTAssertNil(ACPBackend.askingMode(current: "agent", available: codex))
@@ -364,24 +378,98 @@ final class ACPBackendTests: XCTestCase {
     }
 
     func testTaskRunModeChoice() throws {
+        XCTAssertEqual(ACPBackend.runAskingModes, ["claude": ["default", "plan"], "codex": ["read-only"],
+                                                   "cursor": ["agent", "plan", "ask"], "gemini": ["default"]])
         let codex = ["read-only", "workspace-write", "agent", "agent-full-access"]
-        for current in ["agent", "agent-full-access", "workspace-write", nil] {
-            XCTAssertEqual(try ACPBackend.runMode(agent: "codex", current: current, available: codex), "read-only", current ?? "nil")
+        for current in ["agent", "agent-full-access", "workspace-write"] {
+            XCTAssertEqual(try ACPBackend.runMode(agent: "codex", current: current, available: codex), "read-only", current)
         }
         XCTAssertNil(try ACPBackend.runMode(agent: "codex", current: "read-only", available: codex))
         XCTAssertThrowsError(try ACPBackend.runMode(agent: "codex", current: "auto", available: ["auto", "full-access"]),
                              "a Codex without read-only cannot run tasks")
         let claude = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"]
-        for current in ["bypassPermissions", "acceptEdits", "auto", "dontAsk"] {
+        for current in ["bypassPermissions", "acceptEdits", "auto", "dontAsk", "somethingNew"] {
             XCTAssertEqual(try ACPBackend.runMode(agent: "claude", current: current, available: claude), "default", current)
         }
         XCTAssertNil(try ACPBackend.runMode(agent: "claude", current: "default", available: claude))
         XCTAssertNil(try ACPBackend.runMode(agent: "claude", current: "plan", available: claude))
+        XCTAssertThrowsError(try ACPBackend.runMode(agent: "claude", current: "plan", available: ["plan", "acceptEdits"]),
+                             "without default to fall back to, the run fails")
         XCTAssertEqual(try ACPBackend.runMode(agent: "gemini", current: "yolo", available: ["default", "autoEdit", "yolo"]), "default")
         XCTAssertEqual(try ACPBackend.runMode(agent: "gemini", current: "autoEdit", available: ["default", "autoEdit", "yolo"]), "default")
-        XCTAssertNil(try ACPBackend.runMode(agent: "cursor", current: "agent", available: ["agent", "plan", "ask"]), "Cursor's agent mode asks")
-        XCTAssertNil(try ACPBackend.runMode(agent: "fake", current: nil, available: []), "no modes to judge")
-        XCTAssertThrowsError(try ACPBackend.runMode(agent: "other", current: "auto", available: ["auto", "full-access"]))
+        let cursor = ["agent", "plan", "ask"]
+        for current in cursor { XCTAssertNil(try ACPBackend.runMode(agent: "cursor", current: current, available: cursor), current) }
+        XCTAssertEqual(try ACPBackend.runMode(agent: "cursor", current: "yolo", available: cursor + ["yolo"]), "agent")
+        XCTAssertThrowsError(try ACPBackend.runMode(agent: "cursor", current: nil, available: []), "no modes reported")
+        XCTAssertThrowsError(try ACPBackend.runMode(agent: "claude", current: nil, available: claude), "no current mode")
+        XCTAssertThrowsError(try ACPBackend.runMode(agent: "pi", current: "default", available: ["default"]), "not in the table")
+        XCTAssertEqual(try ACPBackend.runMode(agent: "fake", current: "x", available: ["safe", "x"], asking: ["fake": ["safe"]]), "safe",
+                       "a test's own table")
+    }
+
+    func testModesAreReadFromAModeConfigOption() {
+        let both: JSON = ["modes": ["currentModeId": "default", "availableModes": [["id": "default"], ["id": "plan"]]],
+                          "configOptions": [["id": "mode", "category": "mode", "currentValue": "plan", "options": [["value": "plan"]]]]]
+        XCTAssertEqual(ACPBackend.modeState(both)?.current, "default", "the modes block wins")
+        XCTAssertNil(ACPBackend.modeState(both)?.configID)
+        let options: JSON = ["configOptions": [["id": "model", "category": "model", "currentValue": "m1"],
+                                               ["id": "mode", "category": "mode", "currentValue": "agent",
+                                                "options": [["value": "agent"], ["value": "plan"], ["value": "ask"]]]]]
+        XCTAssertEqual(ACPBackend.modeState(options)?.current, "agent")
+        XCTAssertEqual(ACPBackend.modeState(options)?.available, ["agent", "plan", "ask"])
+        XCTAssertEqual(ACPBackend.modeState(options)?.configID, "mode")
+        let grouped: JSON = ["configOptions": [["id": "m", "category": "mode", "currentValue": "a",
+                                                "options": [["group": "g", "options": [["value": "a"], ["value": "b"]]]]]]]
+        XCTAssertEqual(ACPBackend.modeState(grouped)?.available, ["a", "b"])
+        XCTAssertNil(ACPBackend.modeState(["sessionId": "s"]))
+    }
+
+    func testARunNeverAnswersAllowAlways() {
+        let always: [JSON] = [["optionId": "always", "kind": "allow_always"], ["optionId": "no", "kind": "reject_once"]]
+        func chosen(_ outcome: JSON) -> String? { (outcome["outcome"] as? JSON)?["optionId"] as? String }
+        XCTAssertEqual(chosen(ACPBackend.outcome(.allow, options: always)), "always", "the chat falls back to allow_always, as before")
+        XCTAssertEqual(chosen(ACPBackend.outcome(.allow, options: always, allowAlways: false)), "no", "a run rejects instead")
+        let both = always + [["optionId": "once", "kind": "allow_once"]]
+        XCTAssertEqual(chosen(ACPBackend.outcome(.allow, options: both, allowAlways: false)), "once")
+        XCTAssertEqual(chosen(ACPBackend.outcome(.deny(), options: both, allowAlways: false)), "no")
+        let onlyAlways: [JSON] = [["optionId": "always", "kind": "allow_always"]]
+        XCTAssertEqual((ACPBackend.outcome(.allow, options: onlyAlways, allowAlways: false)["outcome"] as? JSON)?["outcome"] as? String, "cancelled")
+    }
+
+    func testATaskRunReadsAndSetsModesThroughAConfigOption() async {
+        setenv("FAKE_MODE", "configonly", 1)
+        defer { unsetenv("FAKE_MODE") }
+        let backend = ACPBackend(agent: agent)
+        backend.requiresAskingMode = true
+        backend.askingModes["fake"] = ["default", "plan"]
+        let events = await run(backend, turn("hi"))
+        guard case .finished(nil) = events.last else { return XCTFail("the run goes ahead in default: \(events)") }
+        let set = logged().last { $0["method"] as? String == "session/set_config_option" && ($0["params"] as? JSON)?["configId"] as? String == "mode" }
+        XCTAssertEqual((set?["params"] as? JSON)?["value"] as? String, "default")
+        XCTAssertFalse(logged().contains { $0["method"] as? String == "session/set_mode" })
+        backend.shutdown()
+    }
+
+    func testATaskRunFailsWhenTheAgentReportsNoModes() async {
+        setenv("FAKE_MODE", "nomodes", 1)
+        defer { unsetenv("FAKE_MODE") }
+        let backend = ACPBackend(agent: agent)
+        backend.requiresAskingMode = true
+        backend.askingModes["fake"] = ["default"]
+        let events = await run(backend, turn("hi"))
+        guard case .finished(let error?) = events.last else { return XCTFail("no modes must fail the run") }
+        XCTAssertEqual(error, "Fake did not report its modes, so ironpet cannot make sure it asks before each change.")
+        XCTAssertFalse(logged().contains { $0["method"] as? String == "session/prompt" })
+        backend.shutdown()
+        let unknown = ACPBackend(agent: agent)
+        unknown.requiresAskingMode = true
+        let unknownEvents = await run(unknown, turn("hi"))
+        guard case .finished(let refusal?) = unknownEvents.last else { return XCTFail("an agent outside the table fails") }
+        XCTAssertTrue(refusal.hasPrefix("ironpet does not know which of Fake's modes ask"), refusal)
+        unknown.shutdown()
+        let chat = ACPBackend(agent: agent)
+        guard case .finished(nil) = (await run(chat, turn("hi"))).last else { return XCTFail("the chat does not need modes") }
+        chat.shutdown()
     }
 
     func testATaskRunSwitchesCodexToReadOnly() async {
@@ -416,6 +504,7 @@ final class ACPBackendTests: XCTestCase {
         setenv("FAKE_MODE", "setmodefail", 1)
         let refused = ACPBackend(agent: agent)
         refused.requiresAskingMode = true
+        refused.askingModes["fake"] = ["default"]
         let refusedEvents = await run(refused, turn("hi", resume: "old-session"))
         guard case .finished(let refusal?) = refusedEvents.last else { return XCTFail("a failed set_mode must fail the turn") }
         XCTAssertTrue(refusal.contains("did not switch to its default mode"), refusal)
@@ -432,10 +521,18 @@ final class ACPBackendTests: XCTestCase {
     func testATaskRunAgentThatLeavesItsAskingModeIsStopped() async {
         let backend = ACPBackend(agent: agent)
         backend.requiresAskingMode = true
+        backend.askingModes["fake"] = ["default"]
         let events = await run(backend, turn("SWITCH modes"))
         guard case .finished(let error?) = events.last else { return XCTFail("switching to bypassPermissions must stop the run") }
         XCTAssertEqual(error, "Fake switched itself to its bypassPermissions mode, which does not ask before changes, so ironpet stopped it.")
         backend.shutdown()
+        let viaOption = ACPBackend(agent: agent)
+        viaOption.requiresAskingMode = true
+        viaOption.askingModes["fake"] = ["default"]
+        let optionEvents = await run(viaOption, turn("CFGSWITCH modes"))
+        guard case .finished(let optionError?) = optionEvents.last else { return XCTFail("a config_option_update to acceptEdits must stop the run") }
+        XCTAssertEqual(optionError, "Fake switched itself to its acceptEdits mode, which does not ask before changes, so ironpet stopped it.")
+        viaOption.shutdown()
         let chat = ACPBackend(agent: agent)
         let chatEvents = await run(chat, turn("SWITCH modes"))
         guard case .finished(nil) = chatEvents.last else { return XCTFail("the chat is not stopped") }

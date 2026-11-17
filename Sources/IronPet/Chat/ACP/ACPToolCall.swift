@@ -16,6 +16,8 @@ struct ACPToolCall {
     /// The tool call of the subagent this call runs under. The Claude adapter stamps `_meta.claudeCode.parentToolUseId`
     /// on every update that comes from a subagent, including a background one. Nil for the main agent's own calls.
     var parentToolUseID: String?
+    /// Whether the permission request offered an `allow_once` option. A task run never answers with `allow_always`.
+    var offersAllowOnce = true
 
     init(id: String = "", title: String = "", kind: String = "other", rawInput: Any? = nil, paths: [String] = [], toolName: String? = nil,
          parentToolUseID: String? = nil) {
@@ -231,6 +233,8 @@ enum ApprovalRules {
         \bgit\s+(?:-[cC]\s+\S+\s+|--?[a-z-]+(?:=\S+)?\s+)*(?:push|remote\s+(?:add|set-url))\b|\bgh\s+pr\s+(?:create|merge)\b
         """#, options: [.caseInsensitive])
 
+    static let onlyAlwaysAllow = "The agent offers only \"always allow\" for this, which ironpet never gives in a task run, so it can only be denied."
+
     static let refusedInRun = "ironpet does not let a task run push, open a PR or change remotes. The user pushes with Open PR in ironpet. Commit your work and stop."
 
     static func isPushOrPR(_ text: String) -> Bool {
@@ -366,6 +370,12 @@ enum ApprovalRules {
     /// A task run asks before every call that could change anything, whatever the Auto setting: only `isReadOnlyInRun`
     /// calls skip the card. Commands that match `pushOrPR` are refused and `sharedGitChange` ones ask with the reason.
     static func runPolicy(for call: ACPToolCall, run: RunScope) -> ApprovalPolicy {
+        let policy = judgeInRun(call, run: run)
+        guard !call.offersAllowOnce, case .ask(let title, let detail) = policy else { return policy }
+        return .ask(title: title, detail: [detail, onlyAlwaysAllow].filter { !$0.isEmpty }.joined(separator: "\n\n"))
+    }
+
+    private static func judgeInRun(_ call: ACPToolCall, run: RunScope) -> ApprovalPolicy {
         // A command, extra sandbox permissions or network access is judged as a command, whatever kind the call claims.
         let command = runCommand(call)
         if command != nil || grantsAccess(call) { return commandPolicy(call, command: command) }

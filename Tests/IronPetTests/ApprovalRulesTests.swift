@@ -117,6 +117,22 @@ final class ApprovalRulesTests: XCTestCase {
         guard case .ask = runPolicy(call, file: file, line: line) else { return XCTFail("must ask: \(message)", file: file, line: line) }
     }
 
+    func testARunCardSaysWhenTheAgentOffersOnlyAlwaysAllow() {
+        var call = ACPToolCall(id: "1", title: "`npm test`", kind: "execute", rawInput: ["command": "npm test"])
+        XCTAssertEqual(runPolicy(call), .ask(title: "Run this command?", detail: "npm test"))
+        call.offersAllowOnce = false
+        XCTAssertEqual(runPolicy(call), .ask(title: "Run this command?", detail: "npm test\n\n" + ApprovalRules.onlyAlwaysAllow))
+        XCTAssertEqual(runPolicy(ACPToolCall(id: "2", title: "git push", kind: "execute", rawInput: ["command": "git push"])),
+                       .refuse(ApprovalRules.refusedInRun))
+        var read = ACPToolCall(id: "3", title: "Read", kind: "read", rawInput: ["file_path": "/wt/repo/task/a.swift"])
+        read.offersAllowOnce = false
+        XCTAssertEqual(runPolicy(read), .allow, "a read is answered without a card; the backend then rejects, never allow_always")
+        XCTAssertEqual(ApprovalRules.policy(for: call, auto: false, isMemoryFile: { _ in false }, run: nil),
+                       ApprovalRules.policy(for: ACPToolCall(id: "1", title: "`npm test`", kind: "execute", rawInput: ["command": "npm test"]),
+                                            auto: false, isMemoryFile: { _ in false }, run: nil),
+                       "the chat's cards are unchanged")
+    }
+
     func testTaskRunRefusesPushAndPRCommands() {
         for command in ["git push", "git push origin ironpet/x", "git -C /wt/repo/task push -u origin HEAD", "gh pr create --fill",
                         "gh pr merge 12", "git remote add fork git@github.com:me/x.git", "git remote set-url origin x",

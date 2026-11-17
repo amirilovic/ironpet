@@ -472,43 +472,77 @@ final class ACPBackend {
         var errorDescription: String? { message }
     }
 
-    /// Codex's `agent` mode lets Codex's own reviewer answer escalations and `workspace-write` edits the workspace without
-    /// asking. `read-only` sends every edit and escalation to the client (codex-acp 2.6.0 `AgentMode.ReadOnly`).
-    nonisolated static let codexRunMode = "read-only"
+    /// The modes a task run may work in, per agent; the first is the one it switches to. Every other mode, and every
+    /// agent not listed, fails the run. claude-agent-acp 0.107.0 `buildAvailableModes`: `default` ("Always ask before
+    /// making changes") and `plan`; `acceptEdits`, `auto` and `bypassPermissions` do not ask. codex-acp 2.6.0 `AgentMode`:
+    /// only `read-only` asks before editing (`workspace-write` edits freely, `agent` lets Codex's reviewer answer,
+    /// `agent-full-access` never asks). cursor-agent 2026.11 `buildModesStateFromCliMode`: `agent`, `plan` and `ask`, all
+    /// sending changes through `session/request_permission`. Gemini CLI: `default`; `autoEdit` and `yolo` do not ask.
+    nonisolated static let runAskingModes: [String: [String]] = [
+        "claude": ["default", "plan"],
+        "codex": ["read-only"],
+        "cursor": ["agent", "plan", "ask"],
+        "gemini": ["default"],
+    ]
 
-    /// The mode a task run switches to, or nil when the current one already asks. Throws when no offered mode asks.
-    /// Unlike `askingMode`, `auto` counts as permissive even with no `default` next to it, and Codex must be in `codexRunMode`.
-    nonisolated static func runMode(agent: String, current: String?, available: [String]) throws -> String? {
-        if agent == "codex" {
-            guard available.contains(codexRunMode) else {
-                throw RunModeError(message: "Codex did not offer its \(codexRunMode) mode, so a task run cannot make it ask before each change.")
-            }
-            return current == codexRunMode ? nil : codexRunMode
+    /// `runAskingModes`. A test adds its scripted agent.
+    var askingModes = ACPBackend.runAskingModes
+
+    /// The mode a task run switches to, or nil when the current one is in the agent's asking modes. Throws when the
+    /// agent is not in the table, reports no modes, or does not offer its first asking mode.
+    nonisolated static func runMode(agent: String, name: String? = nil, current: String?, available: [String],
+                                    asking table: [String: [String]] = runAskingModes) throws -> String? {
+        let name = name ?? agent
+        guard let asking = table[agent], let first = asking.first else {
+            throw RunModeError(message: "ironpet does not know which of \(name)'s modes ask before each change, so a task run cannot use it.")
         }
-        guard let current, permissiveModes.contains(current) || current == "auto" else { return nil }
-        guard available.contains("default") else {
-            throw RunModeError(message: "The agent is in its \(current) mode and offers no mode that asks before each change, so a task run cannot use it.")
+        guard let current, !available.isEmpty else {
+            throw RunModeError(message: "\(name) did not report its modes, so ironpet cannot make sure it asks before each change.")
         }
-        return "default"
+        guard available.contains(first) else {
+            throw RunModeError(message: "\(name) did not offer its \(first) mode, so a task run cannot make it ask before each change.")
+        }
+        return asking.contains(current) ? nil : first
+    }
+
+    /// The session's modes: the `modes` block, else a config option in the "mode" category (claude-agent-acp and
+    /// cursor-agent send both). `configID` is set when only the config option names them, to switch through it.
+    nonisolated static func modeState(_ result: JSON) -> (current: String?, available: [String], configID: String?)? {
+        if let block = result["modes"] as? JSON {
+            return (block["currentModeId"] as? String, (block["availableModes"] as? [JSON] ?? []).compactMap { $0["id"] as? String }, nil)
+        }
+        guard let option = modeOption(result["configOptions"]) else { return nil }
+        let entries = (option["options"] as? [JSON] ?? []).flatMap { ($0["options"] as? [JSON]) ?? [$0] }
+        return (option["currentValue"] as? String, entries.compactMap { $0["value"] as? String }, option["id"] as? String)
+    }
+
+    nonisolated static func modeOption(_ options: Any?) -> JSON? {
+        (options as? [JSON])?.first { $0["category"] as? String == "mode" }
     }
 
     private func useAskingMode(_ result: JSON) async throws {
         let block = result["modes"] as? JSON
-        let current = block?["currentModeId"] as? String
-        let available = (block?["availableModes"] as? [JSON] ?? []).compactMap { $0["id"] as? String }
         guard requiresAskingMode else {
+            let current = block?["currentModeId"] as? String
+            let available = (block?["availableModes"] as? [JSON] ?? []).compactMap { $0["id"] as? String }
             guard block != nil, let target = Self.askingMode(current: current, available: available) else { return }
             try? await switchMode(to: target)
             return
         }
-        guard let target = try Self.runMode(agent: agent.id, current: current, available: available) else { return }
-        try await switchMode(to: target, required: true)
+        let state = Self.modeState(result)
+        guard let target = try Self.runMode(agent: agent.id, name: agent.name, current: state?.current, available: state?.available ?? [], asking: askingModes)
+        else { return }
+        try await switchMode(to: target, required: true, configID: state?.configID)
     }
 
-    private func switchMode(to target: String, required: Bool = false) async throws {
+    private func switchMode(to target: String, required: Bool = false, configID: String? = nil) async throws {
         guard let client, let sessionID else { return }
         do {
-            _ = try await client.request("session/set_mode", ["sessionId": sessionID, "modeId": target])
+            if let configID {
+                _ = try await client.request("session/set_config_option", ["sessionId": sessionID, "configId": configID, "value": target])
+            } else {
+                _ = try await client.request("session/set_mode", ["sessionId": sessionID, "modeId": target])
+            }
         } catch {
             guard required else {
                 NSLog("ironpet: could not switch \(agent.name) to its asking mode \(target): \(error.localizedDescription). It may run tools without asking.")
@@ -518,9 +552,9 @@ final class ACPBackend {
         }
     }
 
-    /// A task run's agent that switches itself to a mode that does not ask is stopped, so it cannot change files unasked.
+    /// A task run's agent that switches itself to a mode outside its asking modes is stopped, so it cannot change files unasked.
     private func modeChanged(to mode: String) {
-        guard requiresAskingMode, (try? Self.runMode(agent: agent.id, current: mode, available: [Self.codexRunMode, "default"])) != nil else { return }
+        guard requiresAskingMode, askingModes[agent.id]?.contains(mode) != true else { return }
         modeViolation = "\(agent.name) switched itself to its \(mode) mode, which does not ask before changes, so ironpet stopped it."
         NSLog("ironpet: \(modeViolation ?? "")")
         client?.close()
@@ -610,6 +644,8 @@ final class ACPBackend {
         }
         guard !replaying else { return }
         if update["sessionUpdate"] as? String == "current_mode_update", let mode = update["currentModeId"] as? String { modeChanged(to: mode) }
+        if update["sessionUpdate"] as? String == "config_option_update",
+           let mode = Self.modeOption(update["configOptions"])?["currentValue"] as? String { modeChanged(to: mode) }
         switch update["sessionUpdate"] as? String {
         case "agent_message_chunk":
             // A subagent's own chatter is not part of the main reply.
@@ -655,18 +691,23 @@ final class ACPBackend {
             call = merged
         }
         let options = params["options"] as? [JSON] ?? []
+        call.offersAllowOnce = options.contains { $0["kind"] as? String == "allow_once" }
+        let allowAlways = !requiresAskingMode
         guard let onPermission else { return respond(.success(Self.outcome(.deny("ironpet is not ready"), options: options))) }
         let token = UUID()
         pendingPermissions[token] = respond
         onPermission(call) { [weak self] decision in
             guard let self, let pending = self.pendingPermissions.removeValue(forKey: token) else { return }
-            pending(.success(Self.outcome(decision, options: options)))
+            pending(.success(Self.outcome(decision, options: options, allowAlways: allowAlways)))
         }
     }
 
-    /// Picks the offered option that matches the decision: allow_once or reject_once first.
-    nonisolated static func outcome(_ decision: ApprovalDecision, options: [JSON]) -> JSON {
-        let wanted = decision.allow ? ["allow_once", "allow_always"] : ["reject_once", "reject_always"]
+    /// Picks the offered option that matches the decision: allow_once or reject_once first. Without `allowAlways` (a
+    /// task run) an allow with no allow_once offered becomes a reject, so the agent never stops asking.
+    nonisolated static func outcome(_ decision: ApprovalDecision, options: [JSON], allowAlways: Bool = true) -> JSON {
+        let wanted = !decision.allow ? ["reject_once", "reject_always"]
+            : allowAlways ? ["allow_once", "allow_always"]
+            : options.contains(where: { $0["kind"] as? String == "allow_once" }) ? ["allow_once"] : ["reject_once", "reject_always"]
         for kind in wanted {
             if let option = options.first(where: { $0["kind"] as? String == kind }), let id = option["optionId"] as? String {
                 return ["outcome": ["outcome": "selected", "optionId": id]]

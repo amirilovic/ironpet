@@ -30,7 +30,8 @@ final class TaskRunnerTests: XCTestCase {
         elif method in ("session/new", "session/load"):
             sid = p.get("sessionId") or "sess-%d" % os.getpid()
             note({"method": method, "session": sid})
-            send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": sid}})
+            send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": sid,
+                  "modes": {"currentModeId": "default", "availableModes": [{"id": "default"}, {"id": "bypassPermissions"}]}}})
         elif method == "session/prompt":
             text = "".join(b.get("text", "") for b in p["prompt"])
             note({"cwd": os.getcwd(), "pushurl": os.environ.get("GIT_CONFIG_VALUE_0", ""), "resume": "Continue the task" in text})
@@ -103,6 +104,7 @@ final class TaskRunnerTests: XCTestCase {
         runner.ironpetRoot = dir.appendingPathComponent("ironpet")
         runner.shareMCPSignIns = { false }
         runner.allowedAgents.insert("fake")
+        runner.askingModes["fake"] = ["default"]
         runner.onApproval = { [unowned self] _, approval in approvals.append(approval) }
         runner.onFinished = { [unowned self] in finished.append($0.task) }
         runner.onFailed = { [unowned self] in failed.append($0.task) }

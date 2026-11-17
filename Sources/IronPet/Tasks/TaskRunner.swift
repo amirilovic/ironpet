@@ -115,6 +115,8 @@ final class TaskRunner: ObservableObject {
 
     /// `agentsThatAsk`. A test adds its scripted agent.
     var allowedAgents = TaskRunner.agentsThatAsk
+    /// The modes each agent may work in during a run (`ACPBackend.runAskingModes`). A test adds its scripted agent.
+    var askingModes = ACPBackend.runAskingModes
 
     func canRun(_ agent: ACPAgent) -> Bool { allowedAgents.contains(agent.id) }
 
@@ -237,6 +239,7 @@ final class TaskRunner: ObservableObject {
         let backend = makeBackend(agent)
         backend.usageFeature = .taskRuns
         backend.requiresAskingMode = true
+        backend.askingModes = askingModes
         backend.extraEnvironment = GitWorktree.pushBlockEnvironment(remotes: remotes)
         backend.onPermission = { [weak self] call, respond in self?.permission(id, call, respond) }
         backend.onBackground = { [weak self] event in self?.background(id, event) }
