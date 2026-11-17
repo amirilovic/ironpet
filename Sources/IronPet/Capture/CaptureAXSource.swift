@@ -95,11 +95,12 @@ final class AXCaptureSource: CaptureSource {
         guard let loop, let emit else { return }
         detach()
         var created: AXObserver?
-        let callback: AXObserverCallback = { _, _, notification, refcon in
+        let callback: AXObserverCallback = { _, element, notification, refcon in
             guard let refcon else { return }
             let context = Unmanaged<Context>.fromOpaque(refcon).takeUnretainedValue()
             let kind = AXCaptureSource.notifications.first { $0.0 == notification as String }?.1 ?? .focusChanged
-            context.emit(CaptureEvent(app: context.app, kind: kind))
+            let button = kind == .focusChanged && notification as String == "AXFocusedUIElementChanged" ? AXCaptureSource.buttonTitle(element) : nil
+            context.emit(CaptureEvent(app: context.app, kind: kind, button: button))
         }
         guard AXObserverCreate(app.pid, callback, &created) == .success, let observer = created else { return }
         let element = AXUIElementCreateApplication(app.pid)
@@ -279,6 +280,12 @@ final class AXCaptureSource: CaptureSource {
         return CaptureRect(x: out.origin.x, y: out.origin.y, width: out.size.width, height: out.size.height)
     }
 
+    /// The title of `el` when it is a button. A click on a button moves focus to it, which is how a submit is noticed.
+    private static func buttonTitle(_ el: AXUIElement) -> String? {
+        guard string(el, "AXRole") == "AXButton" else { return nil }
+        return [string(el, "AXTitle"), string(el, "AXDescription")].compactMap { $0 }.first { !$0.isEmpty }
+    }
+
     private static let textEntry: Set<String> = ["TextArea", "TextField", "SearchField", "ComboBox"]
 
     /// The attribute that lists only the on-screen children of a native list-like element. Asking for all rows makes a view-based
@@ -328,6 +335,9 @@ final class AXCaptureSource: CaptureSource {
         if let url = get("AXURL").flatMap({ text($0) }) ?? get("AXDocument").flatMap({ text($0) }) { node.attrs["url"] = url }
         if let label = get("AXDescription").flatMap({ text($0) }) ?? get("AXHelp").flatMap({ text($0) }) { node.attrs["label"] = label }
         if let identifier = get("AXIdentifier").flatMap({ text($0) }) { node.attrs["identifier"] = identifier }
+        // The label element of a field, for the form body. One extra read per input, not per node.
+        if CaptureForm.inputs.contains(node.role), let label = element(el, "AXTitleUIElement"),
+           let title = string(label, "AXValue") ?? string(label, "AXTitle"), !title.isEmpty { node.attrs["title_ui"] = title }
         node.focused = (get("AXFocused") as? NSNumber)?.boolValue ?? false
         node.selected = (get("AXSelected") as? NSNumber)?.boolValue ?? false
         node.hidden = (get("AXHidden") as? NSNumber)?.boolValue ?? false
