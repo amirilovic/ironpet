@@ -230,6 +230,7 @@ final class TaskStoreTests: XCTestCase {
         let created = try call("create", [
             "title": "Ship it", "notes": "Soon", "status": "needs_you", "due": "2026-11-20",
             "links": [["kind": "url", "ref": "https://example.com/pr/1", "label": "PR"]],
+            "origin": ["kind": "chat", "ref": "chat-1", "reason": "test"],
         ])
         let id = try XCTUnwrap(created["id"] as? String)
         XCTAssertEqual(created["status"] as? String, "needs_you")
@@ -238,12 +239,13 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual((created["links"] as? [[String: Any]])?.first?["label"] as? String, "PR")
         XCTAssertEqual(store.task(id)?.due, day("2026-11-20"))
 
-        XCTAssertEqual(try call("create", ["title": "From the terminal"], by: "agent:cli")["source"] as? String, "cli")
-        XCTAssertEqual(try call("create", ["title": "From Telegram", "source": "telegram"])["source"] as? String, "telegram")
-        XCTAssertEqual(try call("create", ["title": "Plain", "status": NSNull()])["status"] as? String, "backlog")
+        XCTAssertEqual(try call("create", ["title": "From the terminal", "origin": ["kind": "agent", "ref": "cli", "reason": "test"]],
+                                by: "agent:cli")["source"] as? String, "agent")
+        XCTAssertEqual(try call("create", ["title": "From a PR", "origin": ["kind": "pr", "ref": "u", "reason": "test"]])["source"] as? String, "pr")
+        XCTAssertEqual(try call("create", ["title": "Plain", "status": NSNull(), "origin": ["kind": "chat", "ref": "chat-1", "reason": "test"]])["status"] as? String, "backlog")
 
         XCTAssertNotNil(callError("create", [:]))
-        XCTAssertNotNil(callError("create", ["title": "x", "status": "finished"]))
+        XCTAssertNotNil(callError("create", ["title": "x", "status": "finished", "origin": ["kind": "chat", "ref": "chat-1", "reason": "test"]]))
         XCTAssertNotNil(callError("create", ["title": "x", "due": "next Tuesday"]))
         XCTAssertNotNil(callError("create", ["title": "x", "source": "email"]))
         XCTAssertNotNil(callError("create", ["title": "x", "links": [["kind": "url", "ref": "ftp://x"]]]))
@@ -276,7 +278,7 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(callError("archive"), "unknown operation \"archive\"")
         for op in ["get", "update", "close", "delete"] {
             XCTAssertEqual(callError(op), "id is required", op)
-            XCTAssertEqual(callError(op, ["id": "ghost"]), "no task with id \"ghost\"", op)
+            XCTAssertEqual(callError(op, ["id": "ghost", "note": "n"]), "no task with id \"ghost\"", op)
         }
     }
 
@@ -554,7 +556,7 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(deck.waitingLabel, "Waiting on Ana")
         XCTAssertEqual(deck.status, .backlog)
         XCTAssertEqual(deck.notes, "Due (from the meeting): Friday")
-        XCTAssertEqual(store.history(deck.id).first?.detail, "backlog: Send the deck (waiting on Ana)")
+        XCTAssertTrue(try XCTUnwrap(store.history(deck.id).first?.detail).hasPrefix("backlog: Send the deck (waiting on Ana) [source: meeting "))
         XCTAssertEqual(makeStore().task(deck.id)?.waitingOn, "Ana")
         XCTAssertNil(try store.accept("book-the-room").waitingOn)
     }
@@ -584,7 +586,7 @@ final class TaskStoreTests: XCTestCase {
     }
 
     func testWaitingOnThroughCall() throws {
-        let created = try call("create", ["title": "Send the deck", "waiting_on": "  Ana  "])
+        let created = try call("create", ["title": "Send the deck", "waiting_on": "  Ana  ", "origin": ["kind": "chat", "ref": "chat-1", "reason": "test"]])
         XCTAssertEqual(created["waiting_on"] as? String, "Ana")
         let id = try XCTUnwrap(created["id"] as? String)
         XCTAssertEqual(try call("update", ["id": id, "changes": ["waiting_on": "Priya"]])["waiting_on"] as? String, "Priya")
@@ -592,9 +594,9 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(try call("update", ["id": id, "changes": ["title": "Send the new deck"]])["waiting_on"] as? String, "Priya",
                        "absent, it stays")
         XCTAssertNil(try call("update", ["id": id, "changes": ["waiting_on": NSNull()]])["waiting_on"])
-        XCTAssertNil(try call("create", ["title": "Blank owner", "waiting_on": "   "])["waiting_on"])
+        XCTAssertNil(try call("create", ["title": "Blank owner", "waiting_on": "   ", "origin": ["kind": "chat", "ref": "c", "reason": "r"]])["waiting_on"])
 
-        XCTAssertEqual(callError("create", ["title": "x", "waiting_on": 7]), "waiting_on must be a string")
+        XCTAssertEqual(callError("create", ["title": "x", "waiting_on": 7, "origin": ["kind": "chat", "ref": "c", "reason": "r"]]), "waiting_on must be a string")
         XCTAssertNotNil(callError("update", ["id": id, "changes": ["waiting_on": String(repeating: "a", count: 101)]]))
     }
 
@@ -633,33 +635,23 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(upgraded.task(id)?.waitingOn, "Ana")
     }
 
-    func testSuggestionsBubbleTellsMineFromWaitingOn() {
-        func suggestion(_ title: String, _ waitingOn: String? = nil) -> TaskSuggestion {
-            TaskSuggestion(id: title, title: title, origin: .meeting(meeting), created: clock, waitingOn: waitingOn)
-        }
-        let mine = Announcer.taskSuggestionsText([suggestion("Send the invoice"), suggestion("Update the changelog")])
-        XCTAssertEqual(mine.title, "2 action items from the meeting")
-        XCTAssertEqual(mine.body, "• Send the invoice\n• Update the changelog")
+    func testMeetingSummaryLeavesPendingSuggestionsAndOneInfoBubble() throws {
+        let added = store.suggest([("Send the invoice", nil, nil), ("Send the deck", nil, "Ana")], meeting: meeting)
+        XCTAssertEqual(store.suggestions.count, 2)
+        XCTAssertTrue(store.tasks.isEmpty, "no task is created")
+        let bubbles = BubbleStore()
+        Announcer.showTaskSuggestions(added, in: bubbles)
+        XCTAssertEqual(bubbles.bubbles.count, 1)
+        let bubble = try XCTUnwrap(bubbles.bubbles.first)
+        XCTAssertEqual(bubble.title, "From your meeting")
+        XCTAssertTrue(bubble.actions.isEmpty)
+        XCTAssertEqual(bubble.body, "2 suggestions for review\nSend the invoice")
 
-        let waiting = Announcer.taskSuggestionsText([suggestion("Send the deck", "Ana")])
-        XCTAssertEqual(waiting.title, "1 item you're waiting on from the meeting")
-        XCTAssertEqual(waiting.body, "• Waiting on Ana: Send the deck")
-
-        let mixed = Announcer.taskSuggestionsText([suggestion("Send the invoice"), suggestion("Send the deck", "Ana"),
-                                                   suggestion("Review the budget", "Them"), suggestion("Book the room")])
-        XCTAssertEqual(mixed.title, "4 action items from the meeting")
-        XCTAssertEqual(mixed.body, """
-            2 for you, 2 waiting on others
-            • Send the invoice
-            • Waiting on Ana: Send the deck
-            • Waiting on them: Review the budget
-            and 1 more
-            """)
-
-        let watcher = Announcer.taskSuggestionsText([TaskSuggestion(id: "a", title: "Reply to Sam", origin: .automation(id: "gmail", name: "Gmail"),
-                                                                    created: clock)])
-        XCTAssertEqual(watcher.title, "1 suggested task from Gmail")
-        XCTAssertEqual(watcher.body, "• Reply to Sam")
+        let watcher = Announcer.taskSuggestionsBubble([TaskSuggestion(id: "a", title: "Reply to Sam", origin: .automation(id: "gmail", name: "Gmail"),
+                                                                       created: clock)])
+        XCTAssertEqual(watcher?.title, "Gmail")
+        XCTAssertEqual(watcher?.body, "1 suggestion for review\nReply to Sam")
+        XCTAssertNil(Announcer.taskSuggestionsBubble([]))
     }
 
     // MARK: Ordering

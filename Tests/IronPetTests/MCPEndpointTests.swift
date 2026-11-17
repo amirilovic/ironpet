@@ -37,7 +37,8 @@ final class MCPEndpointTests: XCTestCase {
         let names = Set(tools.compactMap { $0["name"] as? String })
         XCTAssertTrue(names.isSuperset(of: ["automations_list", "automations_create", "automations_run_now", "automations_history"]))
         XCTAssertEqual(Set(names.filter { $0.hasPrefix("tasks_") }),
-                       ["tasks_list", "tasks_get", "tasks_create", "tasks_update", "tasks_close", "tasks_delete"])
+                       ["tasks_list", "tasks_get", "tasks_create", "tasks_update", "tasks_close", "tasks_delete",
+                        "tasks_suggestions_list", "tasks_suggestion_accept", "tasks_suggestion_reject"])
         for tool in tools {
             let schema = tool["inputSchema"] as? [String: Any]
             XCTAssertEqual(schema?["type"] as? String, "object", "\(tool["name"] ?? "")")
@@ -45,7 +46,7 @@ final class MCPEndpointTests: XCTestCase {
         }
         let create = try XCTUnwrap(tools.first { $0["name"] as? String == "tasks_create" })
         XCTAssertTrue((create["description"] as? String ?? "").contains("needs_you"))
-        XCTAssertEqual((create["inputSchema"] as? [String: Any])?["required"] as? [String], ["title"])
+        XCTAssertEqual((create["inputSchema"] as? [String: Any])?["required"] as? [String], ["title", "origin"])
     }
 
     func testInitializeMentionsAutomationsAndTasks() async throws {
@@ -59,7 +60,8 @@ final class MCPEndpointTests: XCTestCase {
 
     func testCreateThenListRoundTripsThroughTheStore() async throws {
         let created = try await tool("tasks_create", ["title": "Review the release notes", "notes": "Before Friday", "status": "in_progress",
-                                                      "links": [["kind": "url", "ref": "https://example.com/pr/1", "label": "PR"]]], tasks: tasks)
+                                                      "links": [["kind": "url", "ref": "https://example.com/pr/1", "label": "PR"]],
+                                                      "origin": ["kind": "chat", "ref": "chat-1", "reason": "test"]], tasks: tasks)
         XCTAssertFalse(created.isError, created.text)
         XCTAssertTrue(created.text.contains("\"id\" : \"review-the-release-notes\""), created.text)
         XCTAssertEqual(tasks.tasks.map(\.status), [.inProgress])
@@ -89,7 +91,7 @@ final class MCPEndpointTests: XCTestCase {
         XCTAssertNotNil(properties("tasks_create")["waiting_on"])
         XCTAssertNotNil((properties("tasks_update")["changes"] as? [String: Any]).flatMap { $0["properties"] as? [String: Any] }?["waiting_on"])
 
-        let created = try await tool("tasks_create", ["title": "Send the deck", "waiting_on": "Ana"], tasks: tasks)
+        let created = try await tool("tasks_create", ["title": "Send the deck", "waiting_on": "Ana", "origin": ["kind": "chat", "ref": "chat-1", "reason": "test"]], tasks: tasks)
         XCTAssertFalse(created.isError, created.text)
         XCTAssertEqual(tasks.task("send-the-deck")?.waitingOn, "Ana")
         let got = try await tool("tasks_get", ["id": "send-the-deck"], tasks: tasks)
@@ -102,7 +104,7 @@ final class MCPEndpointTests: XCTestCase {
     }
 
     func testStoreValidationErrorsReachTheAgent() async throws {
-        let bad = try await tool("tasks_create", ["title": "  "], tasks: tasks)
+        let bad = try await tool("tasks_create", ["title": "  ", "origin": ["kind": "chat", "ref": "chat-1", "reason": "test"]], tasks: tasks)
         XCTAssertTrue(bad.isError)
         XCTAssertEqual(bad.text, "title is empty")
         let missing = try await tool("tasks_get", ["id": "nope"], tasks: tasks)

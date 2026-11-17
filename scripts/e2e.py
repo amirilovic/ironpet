@@ -1372,7 +1372,8 @@ def scenario_tasks():
 
         # CLI against the running app.
         env = {**os.environ, "IRONPET_ROOT": ROOT}
-        cli = subprocess.run([f"{APP}/Contents/MacOS/IronPet", "tasks", "add", "Review PR 42", "--url", "https://example.com/pr/42"],
+        cli = subprocess.run([f"{APP}/Contents/MacOS/IronPet", "tasks", "add", "Review PR 42", "--url", "https://example.com/pr/42",
+                              "--origin-kind", "pr", "--origin-ref", "https://example.com/pr/42", "--reason", "e2e check of the CLI"],
                              capture_output=True, text=True, timeout=20, env=env)
         try:
             added = json.loads(cli.stdout)
@@ -1399,8 +1400,8 @@ def scenario_tasks():
                and created["Prepare two more screenshots"]["waiting_on"] == "Them"
                and all(s["meeting"] == TASKS_MEETING for s in created.values()),
                f"created={list(created)} suggestions={[s['title'] for s in suggested.get('suggestions', [])]}")
-        bubble = next((b for b in suggested.get("bubbles", []) if {"Add all", "Review"} <= set(b["buttons"])), None)
-        record("Tasks: the app's summary path shows the Add all / Review bubble", suggested.get("appPath") and bool(bubble),
+        bubble = next((b for b in suggested.get("bubbles", []) if b["id"] == "task-suggestions" and not b["buttons"]), None)
+        record("Tasks: the app's summary path shows one info bubble without buttons", suggested.get("appPath") and bool(bubble),
                f"appPath={suggested.get('appPath')} bubbles={[(b['title'], b['buttons']) for b in suggested.get('bubbles', [])]}")
 
         accepted = call("POST", "/test/tasks/accept-all")
@@ -1410,7 +1411,7 @@ def scenario_tasks():
                and next((t for t in from_meeting if t["title"] == "Prepare two more screenshots"), {}).get("waiting_on") == "Them"
                and all(t["status"] == "backlog" and t["source"] == "meeting"
                        and any(l["kind"] == "file" and l["ref"] == TASKS_MEETING for l in t.get("links", [])) for t in from_meeting),
-               f"pressedBubble={accepted.get('pressedBubble')} tasks={[(t['title'], t['status'], t['source']) for t in from_meeting]}")
+               f"tasks={[(t['title'], t['status'], t['source']) for t in from_meeting]}")
 
         call("POST", "/test/tasks/reset")
 
