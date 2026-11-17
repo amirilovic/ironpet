@@ -186,6 +186,15 @@ struct Config: Codable, Equatable {
         var background = "default"
         /// File name of the imported image in `~/.ironpet/backgrounds`.
         var customImage: String?
+        /// A paste over this many characters becomes a `pasted-text.txt` attachment.
+        var pasteAttachmentChars = Chat.defaultPasteChars
+        /// A paste over this many lines becomes a `pasted-text.txt` attachment.
+        var pasteAttachmentLines = Chat.defaultPasteLines
+
+        static let defaultPasteChars = 4_000
+        static let defaultPasteLines = 60
+        static let pasteCharsRange = 500...100_000
+        static let pasteLinesRange = 10...2_000
     }
 
     var pet = Pet()
@@ -246,6 +255,8 @@ struct Config: Codable, Equatable {
             c.chat.customImage = name.isEmpty || name.hasPrefix(".") ? nil : name
         }
         if c.chat.background == ChatBackground.customID, c.chat.customImage == nil { c.chat.background = ChatBackground.defaultID }
+        c.chat.pasteAttachmentChars = min(Chat.pasteCharsRange.upperBound, max(Chat.pasteCharsRange.lowerBound, c.chat.pasteAttachmentChars))
+        c.chat.pasteAttachmentLines = min(Chat.pasteLinesRange.upperBound, max(Chat.pasteLinesRange.lowerBound, c.chat.pasteAttachmentLines))
         c.openIn = c.openIn.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.openIn.isEmpty { c.openIn = Config().openIn }
         c.editors = c.editors.filter { !$0.name.isEmpty && !$0.bundleId.isEmpty }
