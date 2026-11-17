@@ -125,7 +125,7 @@ final class VoiceStore {
         }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try sealed.write(to: url, options: [.atomic, .completeFileProtection])
+            try sealed.write(to: url, options: .atomic)
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         } catch {
             NSLog("ironpet: could not write the voice store: \(error)")
