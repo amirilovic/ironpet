@@ -115,6 +115,9 @@ final class UsageStore: @unchecked Sendable {
                                       cache_write_tokens INTEGER, total_tokens INTEGER, audio_seconds REAL, cost REAL, currency TEXT);
             CREATE INDEX usage_events_by_time ON usage_events(at);
             """),
+        // The first turn after a resumed chat session was recorded with the session's lifetime cost. Only rows more than 20 times
+        // their token-implied cost change, and they end up at that value, so running it again changes nothing.
+        .init(101, "usage: correct chat cost recorded from a resumed session's lifetime total", sql: UsagePricing.correctionSQL),
     ]
 
     private let database: Database

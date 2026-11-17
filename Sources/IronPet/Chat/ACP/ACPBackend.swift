@@ -155,6 +155,9 @@ final class ACPBackend {
     /// The part of `reportedCost` already stored in a usage record. A turn's cost is what came in since, which also covers a
     /// `usage_update` that arrives between turns.
     private var costAccounted: (amount: Double, currency: String)?
+    /// True after `session/load` when the agent replayed no running cost. The agent's next total is the session's lifetime cost,
+    /// not this turn's, so it only sets the baseline.
+    private var costBaselineMissing = false
     private var modelReportedInTurn: String?
     private var modelAtTurnStart: String?
 
@@ -209,7 +212,15 @@ final class ACPBackend {
         var event = UsageEvent(at: started, feature: feature, model: modelReportedInTurn ?? modelAtTurnStart ?? currentModel ?? "unknown",
                                duration: Date().timeIntervalSince(started))
         UsageEvent.applyACPUsage(result["usage"] as? JSON, to: &event)
-        if let now = reportedCost {
+        if let now = reportedCost, costBaselineMissing {
+            // First total of a resumed session with nothing to subtract from. Price the turn's tokens, else leave the cost out.
+            costBaselineMissing = false
+            costAccounted = now
+            if let priced = UsagePricing.cost(for: event) {
+                event.cost = priced
+                event.currency = "USD"
+            }
+        } else if let now = reportedCost {
             let before = costAccounted?.currency == now.currency ? costAccounted?.amount ?? 0 : 0
             if now.amount != before || costAccounted?.currency != now.currency {
                 // A smaller total means the agent restarted its count, so the new total is all there is to add.
@@ -250,6 +261,7 @@ final class ACPBackend {
         // The next session starts its own cost count.
         reportedCost = nil
         costAccounted = nil
+        costBaselineMissing = false
     }
 
     func authenticate(_ method: AuthMethod) async throws {
@@ -403,6 +415,7 @@ final class ACPBackend {
         // A new or reloaded session counts cost from its own start. A reload's replayed updates set the baseline again.
         reportedCost = nil
         costAccounted = nil
+        costBaselineMissing = false
         var params: JSON = ["cwd": turn.workspace.path, "mcpServers": sessionMCPServers]
         if restricted, readOnlyTaskTools {
             // The Claude adapter reads this and leaves these built-in tools out, so they cannot run even if the user's own settings allow
@@ -437,6 +450,7 @@ final class ACPBackend {
                 freshSession = false
                 // What the session spent before this run is not this run's cost.
                 costAccounted = reportedCost
+                costBaselineMissing = reportedCost == nil
                 return
             }
         }

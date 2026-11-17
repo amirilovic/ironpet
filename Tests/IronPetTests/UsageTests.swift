@@ -105,6 +105,39 @@ final class UsageTests: XCTestCase {
         XCTAssertEqual(today.todayCost, today.rangeCost, accuracy: 1e-9)
     }
 
+    func testMigrationCorrectsOutlierChatCostsOnceAndLeavesTheRestAlone() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-usage-\(UUID().uuidString)/ironpet.db")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        // A database from before the correction: only the first usage migration has run.
+        let old = try Database(path: url, migrations: UsageStore.migrations.filter { $0.version == 100 })
+        let store = UsageStore(database: old)
+        func chat(_ model: String, cost: Double?, hour: Int, feature: UsageFeature = .chat) {
+            store.record(UsageEvent(at: daysAgo(0, hour: hour), feature: feature, model: model, outputTokens: 1400, cacheReadTokens: 916_000, cost: cost, currency: "USD"))
+        }
+        chat("claude-opus-5-5", cost: 168.5, hour: 1)
+        chat("claude-opus-5-5", cost: 0.4, hour: 2)
+        chat("claude-opus-5-5", cost: nil, hour: 3)
+        chat("claude-opus-5-5", cost: 168.5, hour: 4, feature: .automations)
+        chat("unpriced-model", cost: 168.5, hour: 5)
+        store.flush()
+        func costs(_ database: Database) throws -> [Double?] {
+            try database.read { try $0.rows("SELECT cost FROM usage_events ORDER BY at").map { $0[0] as? Double } }
+        }
+        XCTAssertEqual(try costs(old).compactMap { $0 }.count, 4)
+
+        let migrated = try Database(path: url, migrations: AppMigrations.all)
+        let after = try costs(migrated)
+        XCTAssertEqual(after[0] ?? 0, 0.2112, accuracy: 1e-9, "the outlier takes the token-implied cost")
+        XCTAssertEqual(after[1], 0.4, "an ordinary cost is untouched")
+        XCTAssertNil(after[2], "a missing cost stays missing")
+        XCTAssertEqual(after[3], 168.5, "only chat rows change")
+        XCTAssertEqual(after[4], 168.5, "a model without a price is left alone")
+
+        // Running the same statements again changes nothing.
+        try migrated.write { try $0.script(UsagePricing.correctionSQL) }
+        XCTAssertEqual(try costs(migrated), after)
+    }
+
     // MARK: Persistence (S7)
 
     func testRecordsSurviveReopeningTheDatabase() throws {
