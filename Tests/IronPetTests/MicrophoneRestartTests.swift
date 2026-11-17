@@ -19,12 +19,20 @@ private final class FakeEngine: CaptureEngine, @unchecked Sendable {
     var onConfigurationChange: (@Sendable () -> Void)?
     var inputFormat = format(rate: 48_000, channels: 2)
     var failStarts = 0
+    /// Number of upcoming `installTap` calls that raise an NSException, as AVAudioEngine does on a format mismatch.
+    var raiseOnInstall = 0
     private(set) var starts = 0
     private(set) var tapsInstalled = 0
     private(set) var tapFormats: [AVAudioFormat] = []
     private var handler: (@Sendable (AVAudioPCMBuffer) -> Void)?
 
     func installTap(_ handler: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws -> AVAudioFormat {
+        if raiseOnInstall > 0 {
+            raiseOnInstall -= 1
+            try catchingObjCException {
+                NSException(name: .init("com.apple.coreaudio.avfaudio"), reason: "required condition is false: format.sampleRate == hwFormat.sampleRate", userInfo: nil).raise()
+            }
+        }
         self.handler = handler
         tapsInstalled += 1
         tapFormats.append(inputFormat)
@@ -39,6 +47,8 @@ private final class FakeEngine: CaptureEngine, @unchecked Sendable {
         }
     }
     func stop() {}
+    private(set) var resets = 0
+    func reset() { resets += 1 }
 
     /// Delivers half a second of audio in the current input format.
     func deliver() {
@@ -164,5 +174,70 @@ final class MicrophoneRestartTests: XCTestCase {
         _ = source.finish()
         clock.advance(by: 30)
         XCTAssertEqual(engine.starts, 1)
+    }
+
+    func testObjCExceptionBecomesAThrownError() {
+        XCTAssertThrowsError(try catchingObjCException { NSException(name: .init("x"), reason: "boom", userInfo: nil).raise() }) {
+            XCTAssertEqual($0.localizedDescription, "boom")
+        }
+        XCTAssertEqual(try catchingObjCException { 7 }, 7)
+    }
+
+    func testRaisingInstallTapCountsAsFailedRestartAndRecovers() throws {
+        let (source, engine, clock) = makeSource()
+        let failure = Box()
+        source.onFailure = { failure.message = $0 }
+        try source.start { _ in }
+        engine.raiseOnInstall = 1
+        engine.onConfigurationChange?()
+        clock.advance(by: 0.3)
+        XCTAssertNil(failure.message, "one failure is retried, not fatal")
+        clock.advance(by: 0.5)
+        XCTAssertEqual(engine.tapsInstalled, 2, "the retry installed the tap")
+        engine.deliver()
+        XCTAssertGreaterThan(sampleCount(source.finish()), 5_000)
+    }
+
+    func testRaisingInstallTapEveryTimeGivesUpWithANotice() throws {
+        let (source, engine, clock) = makeSource()
+        let failure = Box()
+        source.onFailure = { failure.message = $0 }
+        try source.start { _ in }
+        engine.raiseOnInstall = 10
+        engine.onConfigurationChange?()
+        clock.advance(by: 2)
+        XCTAssertTrue(failure.message?.contains("microphone stopped") ?? false)
+    }
+
+    func testFiveNotificationsWithinOneSecondRestartOnce() throws {
+        let (source, engine, clock) = makeSource()
+        try source.start { _ in }
+        let before = engine.starts
+        for _ in 0..<5 {
+            engine.onConfigurationChange?()
+            clock.advance(by: 0.15)
+        }
+        clock.advance(by: 0.3)
+        engine.deliver()
+        XCTAssertEqual(engine.starts, before + 1)
+    }
+
+    func testRestartResetsTheEngineBeforeReinstallingTheTap() throws {
+        let (source, engine, clock) = makeSource()
+        try source.start { _ in }
+        engine.onConfigurationChange?()
+        clock.advance(by: 0.3)
+        XCTAssertEqual(engine.resets, 1)
+    }
+
+    func testContinuousNotificationsStillRestartWithinOneSecond() throws {
+        let (source, engine, clock) = makeSource()
+        try source.start { _ in }
+        let before = engine.starts
+        for _ in 0..<12 {
+            engine.onConfigurationChange?()
+            clock.advance(by: 0.15)
+        }
+        XCTAssertGreaterThan(engine.starts, before)
     }
 }

@@ -7,6 +7,8 @@ protocol CaptureEngine: AnyObject {
     /// Installs a tap on the input at the input's current format and returns that format.
     func installTap(_ handler: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws -> AVAudioFormat
     func removeTap()
+    /// Drops cached graph state before a restart, so the next `installTap` reads the new hardware format.
+    func reset()
     func start() throws
     func stop()
 }
@@ -56,23 +58,32 @@ final class AVCaptureEngine: CaptureEngine, @unchecked Sendable {
     }
 
     func installTap(_ handler: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws -> AVAudioFormat {
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceError.noInput }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in handler(buffer) }
-        return format
+        try catchingObjCException {
+            let input = engine.inputNode
+            // The hardware format. `outputFormat` can still describe the previous device after a configuration change.
+            let format = input.inputFormat(forBus: 0)
+            guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceError.noInput }
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in handler(buffer) }
+            return format
+        }
     }
 
     func removeTap() {
-        engine.inputNode.removeTap(onBus: 0)
+        try? catchingObjCException { engine.inputNode.removeTap(onBus: 0) }
+    }
+
+    func reset() {
+        try? catchingObjCException { engine.reset() }
     }
 
     func start() throws {
-        engine.prepare()
-        try engine.start()
+        try catchingObjCException {
+            engine.prepare()
+            try engine.start()
+        }
     }
 
     func stop() {
-        engine.stop()
+        try? catchingObjCException { engine.stop() }
     }
 }

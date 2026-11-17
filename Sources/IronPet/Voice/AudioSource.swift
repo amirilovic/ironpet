@@ -95,6 +95,8 @@ final class AdaptiveConverter: @unchecked Sendable {
 /// source reinstalls the tap at the new format and starts the engine again, keeping the samples captured so far.
 final class MicrophoneSource: StreamingSource, @unchecked Sendable {
     static let restartDelay: TimeInterval = 0.2
+    /// A burst of notifications cannot push the restart back by more than this in total.
+    static let maxDebounce: TimeInterval = 1
     static let retryDelay: TimeInterval = 0.5
     static let silenceLimit: TimeInterval = 1.5
     static let watchdogInterval: TimeInterval = 0.5
@@ -115,6 +117,9 @@ final class MicrophoneSource: StreamingSource, @unchecked Sendable {
     private var failedRestarts = 0
     private var restartPending = false
     private var cancelWatchdog: (() -> Void)?
+    private var cancelDebounce: (() -> Void)?
+    private var debounceGeneration = 0
+    private var debounceStart: TimeInterval = 0
 
     init(engine: CaptureEngine = AVCaptureEngine(), clock: CaptureClock = DispatchCaptureClock()) {
         self.engine = engine
@@ -170,12 +175,26 @@ final class MicrophoneSource: StreamingSource, @unchecked Sendable {
 
     private func configurationChanged() {
         lock.lock()
-        let skip = !running || restartPending
-        if !skip { restartPending = true }
+        guard running else { lock.unlock(); return }
+        // A headset can post several notifications in a row while it switches profile. Each one pushes the restart back,
+        // so one restart runs after the burst ends. A retry already scheduled after a failure is left alone.
+        if restartPending && cancelDebounce == nil { lock.unlock(); return }
+        // A steady stream of notifications must not postpone the restart forever, so a burst older than maxDebounce
+        // keeps its pending timer.
+        if cancelDebounce != nil, clock.now - debounceStart >= Self.maxDebounce { lock.unlock(); return }
+        if cancelDebounce == nil { debounceStart = clock.now }
+        restartPending = true
+        cancelDebounce?()
+        debounceGeneration += 1
+        let generation = debounceGeneration
+        cancelDebounce = clock.after(Self.restartDelay) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            if self.debounceGeneration == generation { self.cancelDebounce = nil }
+            self.lock.unlock()
+            self.restart(reason: "audio configuration changed")
+        }
         lock.unlock()
-        guard !skip else { return }
-        // A headset can post several notifications in a row while it switches profile. One restart covers them.
-        _ = clock.after(Self.restartDelay) { [weak self] in self?.restart(reason: "audio configuration changed") }
     }
 
     private func checkForSilence() {
@@ -203,6 +222,7 @@ final class MicrophoneSource: StreamingSource, @unchecked Sendable {
         guard active else { return }
         engine.removeTap()
         engine.stop()
+        engine.reset()
         do {
             let new = try installTap()
             try engine.start()
@@ -243,6 +263,11 @@ final class MicrophoneSource: StreamingSource, @unchecked Sendable {
         lock.unlock()
         cancelWatchdog?()
         cancelWatchdog = nil
+        lock.lock()
+        cancelDebounce?()
+        cancelDebounce = nil
+        restartPending = false
+        lock.unlock()
         engine.onConfigurationChange = nil
         guard wasRunning else { return }
         engine.removeTap()
