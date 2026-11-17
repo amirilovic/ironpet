@@ -41,6 +41,7 @@ Please use GitHub's **Report a vulnerability** button on the repository's Securi
 - Cursor's `storage.json` and iTerm2 via AppleScript, to find the project you're working in.
 - The microphone, only while you record a voice note with voice notes on (off by default). macOS asks for permission the first time you record, not before.
 - The microphone and one app's audio (or all system audio, through ScreenCaptureKit), only while a meeting transcript is recording, with meeting transcripts on (off by default). macOS asks for microphone and Screen & System Audio Recording access the first time you start one.
+- With the welcome back summary on (`welcomeBack.enabled`, on by default): the system idle time and screen-lock state every 2 s, wake-from-sleep notifications, and, once you have been idle past `reminders.idleResetMinutes` (or right after the Mac wakes), which apps are capturing microphone input (Core Audio's process list: bundle id and pid, no audio and no permission prompt). This decides whether you are away or on a call; nothing is stored or sent.
 - Wispr Flow's local database, to pick up dictation while the chat is open.
 - The general pasteboard, briefly, after you select text in a chat message and release the mouse. ironpet sends the same copy command as Cmd-C to read the selection for the "Ask about this" button, then puts your earlier pasteboard contents back. It never reads the pasteboard otherwise, and the selected text stays in the chat unless you send it.
 
