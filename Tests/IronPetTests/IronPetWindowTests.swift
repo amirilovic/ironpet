@@ -61,9 +61,9 @@ final class IronPetWindowTests: XCTestCase {
 
     func testCommandDigitsPickTheSidebarRowsInOrder() {
         let all = IronPetSection.shown(chat: true, transcripts: true, automations: true)
-        XCTAssertEqual((1...7).map { IronPetSection.forShortcut("\($0)", in: all) },
-                       [.chat, .agents, .alerts, .tasks, .transcripts, .actions, .automations])
-        XCTAssertNil(IronPetSection.forShortcut("8", in: all))
+        XCTAssertEqual((1...8).map { IronPetSection.forShortcut("\($0)", in: all) },
+                       [.chat, .agents, .alerts, .tasks, .transcripts, .screen, .actions, .automations])
+        XCTAssertNil(IronPetSection.forShortcut("9", in: all))
         XCTAssertNil(IronPetSection.forShortcut("0", in: all))
         XCTAssertNil(IronPetSection.forShortcut("f", in: all))
         XCTAssertNil(IronPetSection.forShortcut(nil, in: all))
@@ -72,7 +72,7 @@ final class IronPetWindowTests: XCTestCase {
     func testHiddenRowsDoNotTakeANumber() {
         let noChat = IronPetSection.shown(chat: false, transcripts: true, automations: true)
         XCTAssertEqual(IronPetSection.forShortcut("1", in: noChat), .agents)
-        XCTAssertNil(IronPetSection.forShortcut("7", in: noChat))
+        XCTAssertNil(IronPetSection.forShortcut("8", in: noChat))
     }
 
     private func keyEvent(_ characters: String, flags: NSEvent.ModifierFlags = .command) -> NSEvent {
@@ -391,7 +391,7 @@ final class IronPetWindowTests: XCTestCase {
     func testRailTooltipsNameTheSectionAndItsShortcut() {
         let all = IronPetSection.shown(chat: true, transcripts: true, automations: true)
         XCTAssertEqual(all.map { $0.hint(in: all) },
-                       ["Chat (⌘1)", "Agents (⌘2)", "Alerts (⌘3)", "Tasks (⌘4)", "Transcripts (⌘5)", "Actions (⌘6)", "Automations (⌘7)"])
+                       ["Chat (⌘1)", "Agents (⌘2)", "Alerts (⌘3)", "Tasks (⌘4)", "Transcripts (⌘5)", "Screen (⌘6)", "Actions (⌘7)", "Automations (⌘8)"])
         let noChat = IronPetSection.shown(chat: false, transcripts: true, automations: true)
         XCTAssertEqual(IronPetSection.agents.hint(in: noChat), "Agents (⌘1)")
     }

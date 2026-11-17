@@ -74,7 +74,7 @@ macOS will ask for these permissions as you use the features:
 | See watched agents, alerts and tasks | Click Ghost when something needs attention, or right-click → Show agents. One window with a sidebar holds Agents, Alerts, Tasks, Actions, Automations and Settings |
 | Allow an action | **Allow** or <kbd>⌘↩</kbd> on the approval card |
 | Move Ghost | Drag him; he stays where you leave him |
-| Switch section | <kbd>⌘1</kbd> to <kbd>⌘7</kbd> in the ironpet window select the Nth sidebar row (Chat, Agents, Alerts, Tasks, Transcripts, Actions, Automations), and <kbd>⌘8</kbd> Today when it is listed, also while the chat field has focus |
+| Switch section | <kbd>⌘1</kbd> to <kbd>⌘8</kbd> in the ironpet window select the Nth sidebar row (Chat, Agents, Alerts, Tasks, Transcripts, Screen, Actions, Automations), and <kbd>⌘9</kbd> Today when it is listed, also while the chat field has focus |
 | Morning brief and recap | Turn on **Morning brief** or **End-of-day recap** in ironpet window → Automations and pick the time there. The bubble's Open, or the Today row, shows each item; click one to open its task, session, alert link or meeting |
 | Collapse the sidebar | <kbd>⌃⌘S</kbd> shrinks the sidebar to a 78 pt rail of section icons (a label with name and ⌘N after a short hover, count badge on the icon) and back. Dragging the sidebar's edge does the same: narrower than about 117 pt collapses it, and dragging the rail's edge wider expands it. The expanded width (156 to 300 pt) and the collapsed state are remembered |
 | Settings | <kbd>⌘,</kbd>, the Settings row in the ironpet window, right-click Ghost → Settings…, or the Dock icon menu. A separate window with General, Integrations, Voice, Meetings and Usage in a sidebar; it reopens on the last page |
@@ -363,7 +363,7 @@ Never captured, whatever a rule says: secure text fields, password managers and 
 
 The rules that turn a window into a conversation or a document are lookback's JavaScript rules (`capture-rules/`). A file in `~/.ironpet/capture/rules` replaces the bundled rule of the same name. After editing a bundled rule, run `python3 scripts/gen_capture_rules.py`.
 
-Pause capture from the pet menu or Settings. **Settings → Screen → Show captures…** lists everything stored with the filter's scores, so you can see what was kept. Suggestions you accept (or that an agent accepts) become tasks in the Tasks section of the ironpet window (source `capture`, with the capture item ids in the notes). The agent looks up your tasks (open and done) with read-only tools and can suggest updating one, for example a new due date or done.
+Pause capture from the pet menu or Settings. **Show captures…**, in the Screen section of the ironpet window, lists everything stored with the filter's scores, so you can see what was kept. Suggestions you accept (or that an agent accepts) become tasks in the Tasks section of the ironpet window (source `capture`, with the capture item ids in the notes). The agent looks up your tasks (open and done) with read-only tools and can suggest updating one, for example a new due date or done.
 
 ## Meeting transcripts
 

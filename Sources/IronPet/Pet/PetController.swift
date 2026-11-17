@@ -43,6 +43,8 @@ final class PetController: NSObject {
     var settings: SettingsModel?
     /// The Settings row at the bottom of the sidebar: opens the Settings window.
     var onSettings: (() -> Void)?
+    /// Opens Settings on the Screen tab.
+    var onScreenSettings: (() -> Void)?
     /// The Chat section's session and the Transcripts section's meetings. Set before the window first opens.
     var chat: ChatSession?
     var meetings: MeetingLibrary?
@@ -286,6 +288,11 @@ final class PetController: NSObject {
                 // The Settings window is a normal window, so it would open behind this floating one.
                 if !isChatVisible { builtWindow?.close() }
                 onSettings?()
+            },
+            onScreenSettings: { [weak self] in
+                guard let self else { return }
+                if !isChatVisible { builtWindow?.close() }
+                onScreenSettings?()
             },
             onBriefOpen: { [weak self] target in self?.openBrief(target) })
         let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(

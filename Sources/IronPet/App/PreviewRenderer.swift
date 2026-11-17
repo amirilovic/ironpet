@@ -64,6 +64,25 @@ enum PreviewRenderer {
         // The window opens on Alerts when no agent needs you or is working.
         render(list(SessionStore(), tasks: tasks), to: dir, "alerts")
         render(list(sessions, tasks: tasks, on: .actions), to: dir, "actions")
+        // The Screen section: counts and two sends, then with capture off.
+        let screenStatus = CaptureStatusModel()
+        screenStatus.itemCount = 1_595
+        screenStatus.pendingCount = 2
+        screenStatus.localOnlyCount = 1_028
+        screenStatus.sendLog = [
+            CaptureSendRecord(id: 2, at: Date(), harness: "claude", model: "sonnet", items: [4, 5, 6], bytes: 2_310, outcome: "2 suggestions"),
+            CaptureSendRecord(id: 1, at: Date().addingTimeInterval(-3_600), harness: "cursor", model: "auto", items: [1, 2], bytes: 880, outcome: "no suggestions"),
+        ]
+        let screenConfig = ConfigStore.shared.config
+        var captureOn = screenConfig
+        captureOn.screenCapture.enabled = true
+        ConfigStore.shared.usePreview(captureOn)
+        render(ScreenSection(model: screenStatus).frame(width: 600, height: 460).panel(), to: dir, "screen")
+        var captureOff = screenConfig
+        captureOff.screenCapture.enabled = false
+        ConfigStore.shared.usePreview(captureOff)
+        render(ScreenSection(model: screenStatus).frame(width: 600, height: 460).panel(), to: dir, "screen-off")
+        ConfigStore.shared.usePreview(screenConfig)
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks")
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks-light", scheme: .light)
         let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
@@ -121,6 +140,14 @@ enum PreviewRenderer {
                 }
             }
         }
+        // Settings → Screen: the controls only, with a hint that points at the Screen section.
+        settingsModel.capture = CaptureService(store: CaptureStore(database: Database.open(path: nil, migrations: CaptureStore.migrations).database),
+                                               config: { ConfigStore.shared.config.screenCapture },
+                                               rules: CaptureRules(folder: FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-rules")))
+        var screenOn = patterned
+        screenOn.screenCapture.enabled = true
+        ConfigStore.shared.usePreview(screenOn)
+        render(ScreenSettings(model: settingsModel).frame(width: 560, height: 700).panel(), to: dir, "settings-screen")
         ConfigStore.shared.usePreview(config)
 
         let done = Bubble(id: "done", symbol: AgentStatus.done.symbol, tint: AgentStatus.done.tint, title: "demo-app: Done",

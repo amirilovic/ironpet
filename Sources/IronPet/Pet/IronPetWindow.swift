@@ -3,7 +3,7 @@ import SwiftUI
 
 /// A page of the ironpet window, in sidebar order.
 enum IronPetSection: String, CaseIterable, Identifiable {
-    case chat, agents, alerts, tasks, transcripts, actions, automations, today
+    case chat, agents, alerts, tasks, transcripts, screen, actions, automations, today
 
     var id: String { rawValue }
 
@@ -14,6 +14,7 @@ enum IronPetSection: String, CaseIterable, Identifiable {
         case .alerts: return "Alerts"
         case .tasks: return "Tasks"
         case .transcripts: return "Transcripts"
+        case .screen: return "Screen"
         case .actions: return "Actions"
         case .automations: return "Automations"
         case .today: return "Today"
@@ -27,6 +28,7 @@ enum IronPetSection: String, CaseIterable, Identifiable {
         case .alerts: return "bell"
         case .tasks: return "checklist"
         case .transcripts: return "waveform"
+        case .screen: return "eye"
         case .actions: return "sparkles"
         case .automations: return "clock.badge.checkmark"
         case .today: return "sun.horizon"
@@ -641,6 +643,13 @@ struct IronPetWindowView: View {
                         TranscriptsView(library: meetings, activeFolder: actions.meetingInProgress, onAsk: actions.onAskMeeting,
                                         focus: $model.focusMeeting)
                     }
+                case .screen:
+                    if let service = settings?.capture {
+                        ScreenSection(model: service.model, onShowCaptures: { settings?.showCaptures() },
+                                      onOpenSettings: actions.onScreenSettings, onAppear: { service.refreshModel() })
+                    } else {
+                        ScreenSection(model: CaptureStatusModel(), onOpenSettings: actions.onScreenSettings)
+                    }
                 case .actions: ActionsSection(onTrick: actions.onTrick)
                 case .automations:
                     if let settings {
@@ -683,6 +692,8 @@ struct SessionActions {
     /// The folder of the meeting being recorded or summarized, if any.
     var meetingInProgress: () -> URL? = { nil }
     var onSettings: () -> Void = {}
+    /// Opens Settings on the Screen tab.
+    var onScreenSettings: () -> Void = {}
     /// A row of the Today page.
     var onBriefOpen: (Brief.Target) -> Void = { _ in }
 
