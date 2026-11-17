@@ -398,6 +398,11 @@ final class WelcomeBackTests: XCTestCase {
         XCTAssertEqual(store.shownAt["digest:brief"], now, "showing again restamps")
         now = start.addingTimeInterval(2 * 3600)
         store.show(Bubble(id: "other", symbol: "a", tint: .accentColor, title: "a"))
-        XCTAssertNil(store.lastShown(prefix: "digest:"), "forgotten after an hour")
+        XCTAssertEqual(store.shownAt["digest:brief"], start.addingTimeInterval(120), "still on screen, so kept past the hour")
+        store.dismiss("digest:brief")
+        store.dismiss("digest:recap")
+        now = start.addingTimeInterval(3 * 3600)
+        store.show(Bubble(id: "other", symbol: "a", tint: .accentColor, title: "a"))
+        XCTAssertNil(store.lastShown(prefix: "digest:"), "gone from the screen and over an hour old: forgotten")
     }
 }

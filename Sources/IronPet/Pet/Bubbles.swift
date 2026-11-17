@@ -53,7 +53,8 @@ final class BubbleStore: ObservableObject {
 
     func show(_ bubble: Bubble) {
         let now = now()
-        shownAt = shownAt.filter { now.timeIntervalSince($0.value) < 3600 }
+        let onScreen = Set(bubbles.map(\.id))
+        shownAt = shownAt.filter { onScreen.contains($0.key) || now.timeIntervalSince($0.value) < 3600 }
         shownAt[bubble.id] = now
         var next = bubbles.filter { $0.id != bubble.id }
         next.append(bubble)
