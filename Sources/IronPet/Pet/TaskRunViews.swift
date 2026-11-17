@@ -317,8 +317,9 @@ struct TaskStartPopover: View {
                                    baseBranch: nil)
     }
 
+    /// "web-app — ~/code": the folder first, so a long parent path never hides which project it is.
     private static func display(_ url: URL) -> String {
-        (url.path as NSString).abbreviatingWithTildeInPath
+        "\(url.lastPathComponent) — \((url.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)"
     }
 
     private func load() {
@@ -494,7 +495,8 @@ struct TaskRunApprovalStrip: View {
                 .controlSize(.small)
             }
             .padding(10)
-            .background(RoundedRectangle(cornerRadius: 10).fill(.regularMaterial))
+            // Opaque: the transcript scrolls under it, and text showing through would be hard to read.
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .windowBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(AgentStatus.needsInput.tint.opacity(0.4), lineWidth: 1))
             .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
             .accessibilityElement(children: .contain)

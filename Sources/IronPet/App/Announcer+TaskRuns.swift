@@ -21,17 +21,22 @@ extension Announcer {
     }
 
     func taskRunEnded(_ run: TaskRun, task: String, openTasks: @escaping () -> Void, openPR: (() -> Void)?) {
+        bubbles.show(Self.taskRunEndedBubble(run, task: task, openTasks: openTasks, openPR: openPR))
+        NSSound(named: "Pop")?.play()
+        let finished = run.state == .finished
+        if alsoSystemNotifications { notifier.announceChat(finished ? "Agent finished: \(task)" : "Agent failed: \(task)") }
+    }
+
+    static func taskRunEndedBubble(_ run: TaskRun, task: String, openTasks: @escaping () -> Void, openPR: (() -> Void)?) -> Bubble {
         let finished = run.state == .finished
         var actions: [Bubble.Action] = []
         if let openPR, run.canOpenPR { actions.append(.init(title: "Open PR", style: .primary, run: openPR)) }
         actions.append(.init(title: "Show task", style: actions.isEmpty ? .primary : .normal, run: openTasks))
-        let body = finished ? (run.summary ?? Self.commitsText(run)) : (run.error ?? "The agent stopped.")
-        bubbles.show(Bubble(id: Self.taskRunID(run.task), symbol: finished ? "checkmark.circle.fill" : "xmark.octagon.fill",
-                            tint: finished ? .green : .red, title: finished ? "Agent finished: \(task)" : "Agent failed: \(task)",
-                            subtitle: finished ? Self.commitsText(run) : run.agentName, body: body, actions: actions, onTap: openTasks,
-                            expires: Date().addingTimeInterval(finished ? 30 : 60)))
-        NSSound(named: "Pop")?.play()
-        if alsoSystemNotifications { notifier.announceChat(finished ? "Agent finished: \(task)" : "Agent failed: \(task)") }
+        let body = finished ? (run.summary ?? commitsText(run)) : (run.error ?? "The agent stopped.")
+        return Bubble(id: taskRunID(run.task), symbol: finished ? "checkmark.circle.fill" : "xmark.octagon.fill",
+                      tint: finished ? .green : .red, title: finished ? "Agent finished: \(task)" : "Agent failed: \(task)",
+                      subtitle: finished ? commitsText(run) : run.agentName, body: body, actions: actions, onTap: openTasks,
+                      expires: Date().addingTimeInterval(finished ? 30 : 60))
     }
 
     func taskRunPushed(_ run: TaskRun, remote: String) {

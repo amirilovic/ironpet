@@ -51,6 +51,11 @@ final class TaskRunner: ObservableObject {
         for run in store.all() { runs[run.task] = run }
     }
 
+    /// Sample runs for `--render-previews`. Nothing is stored.
+    func loadPreview(_ list: [TaskRun]) {
+        runs = Dictionary(uniqueKeysWithValues: list.map { ($0.task, $0) })
+    }
+
     // MARK: Reading
 
     var liveCount: Int { runs.values.filter(\.state.isLive).count }
