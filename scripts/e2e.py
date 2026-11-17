@@ -1874,6 +1874,7 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # "welcome-back" posts synthetic Claude hook events and a stand-in idle time, so it runs no agent; it puts config.json and ironpet.db back.
 # "brief" starts no agent; it puts ironpet.db and automations.json back afterwards.
 # "task-run" hands two tasks to $IRONPET_E2E_AGENT in a throwaway repo under /tmp, one short run and one stopped at once.
+# The agent must be one that can work on tasks: claude, codex, cursor or gemini (TaskRunner.agentsThatAsk).
 # It runs real agent turns with waits of up to five minutes. Open PR is recorded, never run; it puts ironpet.db back afterwards.
 OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks", "meeting", "meeting-system", "task-run"}
 
