@@ -55,7 +55,7 @@ Please use GitHub's **Report a vulnerability** button on the repository's Securi
 | `screenshots/` | Screen captures you attached to chats, and `attachments/` with files you attached. Text pasted into the chat over 4,000 characters or 60 lines (both adjustable in Settings > General) is saved there as `pasted-text.txt` and attached instead of staying in the input. A draft over 64 KB is handled the same way |
 | `scratch/` | Working folder for chats that aren't about a project |
 | `meetings/` | One folder per meeting transcript: the recorded audio as WAV chunks, `transcript.md`, `summary.md`. Kept until you delete them |
-| `ironpet.db` | Automation state and logs, usage numbers, and your tasks: titles, notes, links, history, and suggestions from meetings and watchers. Done tasks are deleted after `tasks.keepDoneDays` (30 by default) |
+| `ironpet.db` | Automation state and logs, usage numbers, and your tasks: titles, notes, links, history, and suggestions from meetings and watchers. Done tasks are deleted after `tasks.keepDoneDays` (30 by default). The activity log (`activity_events`) keeps what ironpet announced for 30 days: agent sessions that needed you, failed or finished (folder, agent, and the one-line summary, up to 140 characters), alert titles and links, automation bubbles, due and suggested tasks, meeting summary folders. It is read only on this Mac, for the welcome back summary, and is never sent anywhere |
 | `token`, `port` | Local server credentials |
 
 The chat that was open when the app quit is reopened on launch. Its id, its Auto switch, your unsent draft and the paths of attached screenshots are kept in the app's preferences (`dev.ironpet.app`), which `uninstall.sh` deletes.
