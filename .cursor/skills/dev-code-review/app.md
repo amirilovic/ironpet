@@ -8,7 +8,8 @@ The design is `SPEC.md`. Swift 5.10 tools (Swift 5 language mode), macOS 14 mini
 |---|---|
 | `main.swift` | Entry point: `--render-previews`, `--uninstall`, `--test-mode` flags, then `AppDelegate` |
 | `App/` | App glue: `AppDelegate` (menus, status, wiring), Settings and welcome windows, hotkeys (Carbon), login item, notifications (`Notifier`), speech-bubble announcements (`Announcer`), jumping to a session's terminal or editor (`SourceJumper`, `Editors`), `TestControl` (`/test/*`, test mode only), `PreviewRenderer` (README screenshots) |
-| `Pet/` | The pet window and sprite atlas (`PetController`, `PetView`, `Atlas`, `PetMood`), speech bubbles, the ironpet window (`IronPetPanel`: chat, agents, alerts, tasks, transcripts, actions and automations in one sidebar window) |
+| `Pet/` | The pet window and sprite atlas (`PetController`, `PetView`, `Atlas`, `PetMood`), speech bubbles, the ironpet window (`IronPetPanel`: chat, agents, alerts, tasks, transcripts, actions, automations and Today in one sidebar window) |
+| `Brief/` | The morning brief and recap: `BriefBuilder` (pure, local data only), `BriefSource` and `BriefModel` (gather from the stores, feed the Today page) |
 | `Sessions/` | Watched agent sessions: hook event mapping to status (`SessionStore`, `AgentSession`), process ancestry (`ProcessTree`) |
 | `Hooks/` | The hook shell script (`HookScript`) and merging it into each agent's config, with backups and uninstall (`HookInstaller`) |
 | `Bridge/` | Local HTTP server on `127.0.0.1` with the token (`EventServer`), the status snapshot it serves |
@@ -93,6 +94,7 @@ Installed-app and e2e checks change the user's machine (see Ground rules in `SKI
 | `Meeting/` | `meeting`, `meeting-system` (opt-in) |
 | `Tasks/`, task tools, `IronPet tasks` | `tasks` |
 | `Activity/`, digest bubbles | `welcome-back` |
+| `Brief/`, `TodayView`, `digest` actions, daily `catchUpMinutes` | `brief` |
 
 Summary rows for the **App** table:
 
