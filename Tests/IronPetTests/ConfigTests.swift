@@ -195,36 +195,6 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(config.meetings, Config.Meetings())
     }
 
-    func testTaskRunDefaults() {
-        let runs = Config().taskRuns
-        XCTAssertTrue(runs.enabled)
-        XCTAssertEqual(runs.maxConcurrent, 2)
-        XCTAssertEqual(runs.maxMinutes, 120)
-        XCTAssertNil(runs.agent)
-        XCTAssertNil(runs.model)
-    }
-
-    func testTaskRunLimitsAreClamped() throws {
-        try write(#"{"taskRuns":{"maxConcurrent":0,"maxMinutes":1}}"#)
-        var runs = Config.load(from: file).config.taskRuns
-        XCTAssertEqual(runs.maxConcurrent, 1)
-        XCTAssertEqual(runs.maxMinutes, 10)
-        try write(#"{"taskRuns":{"maxConcurrent":50,"maxMinutes":10000}}"#)
-        runs = Config.load(from: file).config.taskRuns
-        XCTAssertEqual(runs.maxConcurrent, 5)
-        XCTAssertEqual(runs.maxMinutes, 720)
-    }
-
-    func testPartialTaskRunsKeepDefaultsAndBlankAgentFollowsChat() throws {
-        try write(#"{"taskRuns":{"enabled":false,"agent":" ","model":"opus"}}"#)
-        let (config, error) = Config.load(from: file)
-        XCTAssertNil(error)
-        XCTAssertFalse(config.taskRuns.enabled)
-        XCTAssertNil(config.taskRuns.agent)
-        XCTAssertEqual(config.taskRuns.model, "opus")
-        XCTAssertEqual(config.taskRuns.maxConcurrent, 2)
-    }
-
     func testVoiceKeysRoundTrip() throws {
         var config = Config()
         config.voice = Config.Voice(enabled: true, baseUrl: "https://api.groq.com/openai/v1", model: "whisper-large-v3-turbo")

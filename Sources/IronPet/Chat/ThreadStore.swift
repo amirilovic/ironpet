@@ -10,8 +10,6 @@ struct ChatThread: Codable, Identifiable {
     var items: [ChatSession.Item]
     /// The catalog id of the agent that owns the session.
     var agent: String
-    /// The task whose agent run made this thread. Nil for a chat.
-    var task: String? = nil
 }
 
 extension ChatThread {

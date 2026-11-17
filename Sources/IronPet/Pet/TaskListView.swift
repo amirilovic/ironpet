@@ -10,8 +10,6 @@ struct TaskListView: View {
     let onOpenSession: (String) -> Void
     /// A task to scroll to and highlight, set by the Today page. Cleared once shown.
     var focus: Binding<String?> = .constant(nil)
-    /// Nil hides Start and the run rows, as in previews that do not show them.
-    var runner: TaskRunner? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showDone = false
@@ -121,9 +119,7 @@ struct TaskListView: View {
         TaskRow(task: task,
                 onDone: { _ = try? tasks.close(task.id, by: "user") },
                 onDelete: { try? tasks.delete(task.id, by: "user") },
-                onOpen: open(_:),
-                runner: runner,
-                onOpenThread: onOpenThread)
+                onOpen: open(_:))
             .background {
                 if highlighted == task.id { RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.18)) }
             }
@@ -196,8 +192,6 @@ private struct TaskRow: View {
     let onDone: () -> Void
     let onDelete: () -> Void
     let onOpen: (TaskLink) -> Void
-    var runner: TaskRunner?
-    var onOpenThread: (String) -> Void = { _ in }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
 
@@ -213,7 +207,6 @@ private struct TaskRow: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 details
-                if let runner { TaskRunControls(task: task, runner: runner, onOpenThread: onOpenThread) }
             }
             Spacer(minLength: 4)
             if !task.links.isEmpty {
