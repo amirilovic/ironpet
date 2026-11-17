@@ -196,6 +196,23 @@ final class DailyCatchUpTests: AutomationTestCase {
         XCTAssertEqual(fired(rig, "brief"), 1)
     }
 
+    func testZeroCatchUpStillFiresOnTheFirstTickAfterTheSlot() {
+        clock.now = AutomationTestClock.monday8.addingTimeInterval(10)
+        let rig = makeRig([daily("brief", at: "09:00", grace: 0)])
+        run(rig, minutes: 59.5)
+        XCTAssertEqual(fired(rig, "brief"), 0)
+        run(rig, minutes: 0.5)
+        XCTAssertEqual(fired(rig, "brief"), 1, "the tick at 09:00:10")
+        run(rig, minutes: 30)
+        XCTAssertEqual(fired(rig, "brief"), 1)
+    }
+
+    func testZeroCatchUpDropsASlotMissedBySeveralMinutes() {
+        let rig = makeRig([daily("brief", at: "09:00", grace: 0)])
+        wake(rig, at: AutomationTestClock.monday(hour: 9, minute: 5))
+        XCTAssertEqual(fired(rig, "brief"), 0)
+    }
+
     func testASlotPastGraceIsDroppedAndTheNextOneFires() {
         let rig = makeRig([daily("brief", at: "09:00", grace: 180)])
         wake(rig, at: AutomationTestClock.monday(hour: 12, minute: 30))
@@ -279,6 +296,72 @@ final class DailyCatchUpTests: AutomationTestCase {
         XCTAssertTrue(AutomationValidator.validate(a).contains("trigger.catchUpMinutes must be a number from 0 to 720"))
         a.trigger.catchUpMinutes = 0
         XCTAssertEqual(AutomationValidator.validate(a), [])
+    }
+}
+
+/// Daily slots are wall-clock times, so the days the clocks change still fire at the time the user set.
+final class DailyClockChangeTests: AutomationTestCase {
+    private func zone(_ id: String) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: id)!
+        return calendar
+    }
+
+    private func local(_ calendar: Calendar, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+        calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute))!
+    }
+
+    private func daily(_ time: String, grace: Double? = nil) -> Automation {
+        Automation(id: "daily", name: "daily", trigger: .init(type: "daily", times: [time], catchUpMinutes: grace),
+                   action: .init(type: "bubble", title: "daily", body: ""), createdBy: "user")
+    }
+
+    private func fired(_ rig: Rig) -> Int { rig.service.history("daily", limit: 50).filter { $0["outcome"] == "fired" }.count }
+    private func automation(_ rig: Rig) -> Automation { rig.store.automations.first { $0.id == "daily" }! }
+
+    /// Israel moves its clocks forward at 02:00 on Friday 2026-03-27.
+    func testSpringForwardInJerusalemFiresAtNineLocal() {
+        let jerusalem = zone("Asia/Jerusalem")
+        clock.calendar = jerusalem
+        clock.now = local(jerusalem, 3, 27, 8)
+        let rig = makeRig([daily("09:00")])
+        XCTAssertEqual(rig.engine.nextRun(automation(rig)), local(jerusalem, 3, 27, 9))
+        run(rig, minutes: 59.5)
+        XCTAssertEqual(fired(rig), 0)
+        run(rig, minutes: 1)
+        XCTAssertEqual(fired(rig), 1)
+        XCTAssertEqual(rig.engine.latestSlot(automation(rig), atOrBefore: local(jerusalem, 3, 27, 9, 30)), local(jerusalem, 3, 27, 9))
+    }
+
+    func testATimeTheClocksSkipIsTheEndOfTheGap() {
+        let jerusalem = zone("Asia/Jerusalem")
+        clock.calendar = jerusalem
+        clock.now = local(jerusalem, 3, 27, 1)
+        let rig = makeRig([daily("02:30")])
+        XCTAssertEqual(rig.engine.nextRun(automation(rig)), local(jerusalem, 3, 27, 3))
+    }
+
+    /// Germany moves its clocks back at 03:00 on Sunday 2026-10-25.
+    func testFallBackInBerlinCatchesUpFromNineLocal() {
+        let berlin = zone("Europe/Berlin")
+        clock.calendar = berlin
+        clock.now = local(berlin, 10, 25, 1)
+        let rig = makeRig([daily("09:00", grace: 60)])
+        XCTAssertEqual(rig.engine.nextRun(automation(rig)), local(berlin, 10, 25, 9))
+        clock.now = local(berlin, 10, 25, 8, 30)
+        rig.engine.tick()
+        XCTAssertEqual(fired(rig), 0, "08:30 is before the slot, even though 9 h have passed since midnight")
+        clock.now = local(berlin, 10, 25, 9, 30)
+        rig.engine.tick()
+        XCTAssertEqual(fired(rig), 1)
+    }
+
+    func testATimeThatHappensTwiceIsTheFirstOne() {
+        let berlin = zone("Europe/Berlin")
+        clock.calendar = berlin
+        clock.now = local(berlin, 10, 25, 1)
+        let rig = makeRig([daily("02:30")])
+        XCTAssertEqual(rig.engine.nextRun(automation(rig)), AutomationTestClock.calendar.date(from: DateComponents(year: 2026, month: 10, day: 25, hour: 0, minute: 30)))
     }
 }
 

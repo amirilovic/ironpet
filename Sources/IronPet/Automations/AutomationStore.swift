@@ -203,7 +203,7 @@ enum AutomationSchema {
             "id": { "type": "string", "description": "JMESPath expression on one item that yields its id" },
             "version": { "type": "string", "description": "JMESPath expression on one item. A new value for a known id fires again." },
             "cooldownMinutes": { "type": "number", "minimum": 0 },
-            "catchUpMinutes": { "type": "number", "minimum": 0, "maximum": 720, "description": "daily: a slot missed while the Mac slept or ironpet was not running still fires when it is at most this many minutes late. Only the latest missed slot fires." }
+            "catchUpMinutes": { "type": "number", "minimum": 0, "maximum": 720, "description": "daily: a slot missed while the Mac slept or ironpet was not running still fires when it is at most this many minutes late; 0 fires on time only. Only the latest missed slot fires." }
           }
         },
         "source": {

@@ -21,7 +21,7 @@ Tools: `automations_list`, `automations_get`, `automations_create`, `automations
 | Trigger | Use it for | Fields |
 | --- | --- | --- |
 | `interval` | "every 45 minutes" | `minutes`, `clock`: `active` (counts only time at the keyboard, resets after a break, default) or `wall` (clock time) |
-| `daily` | "weekdays at 09:55" | `times: ["09:55"]`, optional `weekdays: ["mon","tue",...]`, optional `catchUpMinutes` (0 to 720): a slot missed while the Mac slept or ironpet was not running still fires when at most that late |
+| `daily` | "weekdays at 09:55" | `times: ["09:55"]`, optional `weekdays: ["mon","tue",...]`, optional `catchUpMinutes` (0 to 720): a slot missed while the Mac slept or ironpet was not running still fires when at most that late; 0 fires on time only |
 | `once` | "at 3pm today", "tomorrow at 9" | `at`: ISO 8601 with the time zone. It turns itself off after it fires. |
 | `script` | watch something and compare with last time | `minutes`, `script`. See below. |
 | `poll` | simple "tell me about new items" from a command | `minutes`, `source`, `items`, `id`, `version`. See below. |

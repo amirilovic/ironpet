@@ -134,7 +134,7 @@ Two more built-ins, `morning-brief` ("Morning brief", 09:00) and `day-recap` ("E
 }
 ```
 
-- **Triggers.** `interval` (every N minutes, on `active` keyboard time or the `wall` clock), `daily` (times of day, optional weekdays, optional `catchUpMinutes`: a slot missed while the Mac slept or ironpet was not running fires when you are back, if at most that many minutes late), `once` (an exact date and time; it turns itself off afterwards) and `poll`.
+- **Triggers.** `interval` (every N minutes, on `active` keyboard time or the `wall` clock), `daily` (times of day, optional weekdays, optional `catchUpMinutes`: a slot missed while the Mac slept or ironpet was not running fires when you are back, if at most that many minutes late; 0 fires on time only), `once` (an exact date and time; it turns itself off afterwards) and `poll`.
 - **Polls.** The source is a shell command, an HTTP GET (header values must be `${ENV_VAR}` references). Items come Items come from a [JMESPath](https://jmespath.org) expression in `items`, with `id` and `version` expressions that run on one item, or from `lines`, `text` or `exit_code` mode. Filters do the filtering, for example `"items": "data.runs[?conclusion=='failure']"` or `[?contains(['open', 'new'], state)]`. JMESPath has no regular expressions. It runs inside ironpet, so nothing like jq has to be installed. The first run only records what exists. After that each new id, or a changed `version`, fires once.
 - **Scripts.** A `script` trigger is a small JavaScript function for watchers that need to compare with the last run. A script automation has no `action` field. The script returns its own actions:
 

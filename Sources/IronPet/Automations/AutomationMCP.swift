@@ -10,7 +10,7 @@ enum AutomationMCP {
         {"name": "Stand up", "trigger": {...}, "action": {...}, "presentation": {...}}
         trigger.type is one of:
         - interval: {"type":"interval","minutes":45,"clock":"active"|"wall"}. "active" counts keyboard time only and resets after a break. "wall" is clock time.
-        - daily: {"type":"daily","times":["09:00"],"weekdays":["mon","tue"],"catchUpMinutes":120}. weekdays is optional. catchUpMinutes (optional, 0 to 720): a slot missed while the Mac slept or ironpet was not running still fires when it is at most that many minutes late.
+        - daily: {"type":"daily","times":["09:00"],"weekdays":["mon","tue"],"catchUpMinutes":120}. weekdays is optional. catchUpMinutes (optional, 0 to 720): a slot missed while the Mac slept or ironpet was not running still fires when it is at most that many minutes late; 0 fires on time only.
         - once: {"type":"once","at":"2026-11-20T15:30:00+01:00"}. Turns itself off after it fires.
         - poll: {"type":"poll","minutes":5,"source":{"type":"shell","command":"gh pr list --json number,title"},"items":"[?draft==`false`]","id":"number","version":"updatedAt"}. items, id and version are JMESPath (id and version run on one item).
           Source is shell or http ({"type":"http","url":"...","headers":{"Authorization":"${TOKEN}"}}). Items come from the JMESPath expression in items, and filters like [?state=='open'] do the filtering. The first run only records what exists. After that each new id (or changed version) fires once.

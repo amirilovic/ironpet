@@ -7,6 +7,8 @@ final class AutomationTestClock {
     var idle: TimeInterval = 0
     var working = false
     var busy = false
+    /// UTC unless a test needs a zone with clock changes. Set it before `makeRig`.
+    var calendar = AutomationTestClock.calendar
 
     /// Monday 2026-11-16 08:00 UTC.
     init(_ date: Date = AutomationTestClock.monday8) { now = date }
@@ -26,7 +28,7 @@ final class AutomationTestClock {
 
     var environment: AutomationEngine.Environment {
         AutomationEngine.Environment(now: { self.now }, idleSeconds: { self.idle }, isAgentWorking: { self.working },
-                                     isBusy: { self.busy }, calendar: Self.calendar)
+                                     isBusy: { self.busy }, calendar: calendar)
     }
 }
 

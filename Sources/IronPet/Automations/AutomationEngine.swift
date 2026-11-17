@@ -204,45 +204,42 @@ final class AutomationEngine {
 
     private static let weekdayNames = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
 
+    /// `hour:minute` on the wall clock of `day`, so 09:00 stays 09:00 on a day the clocks change. A time the clocks skip
+    /// (02:30 when they go forward at 02:00) is the end of the gap, 03:00 (Calendar's `.nextTime`); a time that happens
+    /// twice when they go back is the first one.
+    func slot(on day: Date, hour: Int, minute: Int) -> Date? {
+        env.calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)
+    }
+
+    /// The automation's slots on the day `offset` days from `date`'s, none when that weekday is not one of its days.
+    private func slots(_ a: Automation, dayOffset offset: Int, from date: Date) -> [Date] {
+        let calendar = env.calendar
+        guard let day = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: date)),
+              (a.trigger.weekdays ?? Self.weekdayNames).contains(Self.weekdayNames[calendar.component(.weekday, from: day) - 1])
+        else { return [] }
+        return (a.trigger.times ?? []).compactMap(AutomationClock.minutes(of:)).compactMap { slot(on: day, hour: $0 / 60, minute: $0 % 60) }
+    }
+
     private func dailyDue(_ a: Automation, from previous: Date, to now: Date) -> Bool {
         let calendar = env.calendar
-        let allowed = Set(a.trigger.weekdays ?? Self.weekdayNames)
-        var day = calendar.startOfDay(for: previous)
-        while day <= now {
-            let name = Self.weekdayNames[calendar.component(.weekday, from: day) - 1]
-            if allowed.contains(name) {
-                for time in a.trigger.times ?? [] {
-                    guard let minutes = AutomationClock.minutes(of: time),
-                          let slot = calendar.date(byAdding: .minute, value: minutes, to: day) else { continue }
-                    if slot > previous, slot <= now { return true }
-                }
-            }
-            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
-            day = next
-        }
-        return false
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: previous), to: calendar.startOfDay(for: now)).day ?? 0
+        return (0...max(0, days)).contains { offset in slots(a, dayOffset: offset, from: previous).contains { $0 > previous && $0 <= now } }
     }
 
     /// The latest slot at or before `now` on an allowed weekday, looking back a week.
     func latestSlot(_ a: Automation, atOrBefore now: Date) -> Date? {
-        let calendar = env.calendar
-        let allowed = Set(a.trigger.weekdays ?? Self.weekdayNames)
         for offset in 0...7 {
-            guard let day = calendar.date(byAdding: .day, value: -offset, to: calendar.startOfDay(for: now)),
-                  allowed.contains(Self.weekdayNames[calendar.component(.weekday, from: day) - 1]) else { continue }
-            let slots = (a.trigger.times ?? []).compactMap { time in
-                AutomationClock.minutes(of: time).flatMap { calendar.date(byAdding: .minute, value: $0, to: day) }
-            }.filter { $0 <= now }
-            if let best = slots.max() { return best }
+            if let best = slots(a, dayOffset: -offset, from: now).filter({ $0 <= now }).max() { return best }
         }
         return nil
     }
 
     /// The latest slot that has not fired yet, if it is no more than `catchUpMinutes` late. Older missed slots are dropped.
+    /// At least 90 s, three ticks, so a slot on time always fires and `catchUpMinutes: 0` means no catch-up beyond that.
     private func catchUpSlot(_ a: Automation, now: Date) -> Date? {
         guard let latest = latestSlot(a, atOrBefore: now) else { return nil }
         if let last = state.dailySlot(a.id), latest <= last { return nil }
-        return now.timeIntervalSince(latest) <= (a.trigger.catchUpMinutes ?? 0) * 60 ? latest : nil
+        return now.timeIntervalSince(latest) <= max((a.trigger.catchUpMinutes ?? 0) * 60, 90) ? latest : nil
     }
 
     /// When the automation is next due, for the settings list. Active reminders count keyboard time, so theirs is an estimate.
@@ -255,19 +252,10 @@ final class AutomationEngine {
             if a.trigger.clock == "wall" { return (wallLast[a.id] ?? now).addingTimeInterval(seconds) }
             return now.addingTimeInterval(max(0, seconds - activeElapsed[a.id, default: 0]))
         case "daily":
-            let calendar = env.calendar
-            let allowed = Set(a.trigger.weekdays ?? Self.weekdayNames)
-            var best: Date?
             for offset in 0...7 {
-                guard let day = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now)),
-                      allowed.contains(Self.weekdayNames[calendar.component(.weekday, from: day) - 1]) else { continue }
-                for time in a.trigger.times ?? [] {
-                    guard let m = AutomationClock.minutes(of: time), let slot = calendar.date(byAdding: .minute, value: m, to: day), slot > now else { continue }
-                    if best == nil || slot < best! { best = slot }
-                }
-                if best != nil { break }
+                if let best = slots(a, dayOffset: offset, from: now).filter({ $0 > now }).min() { return best }
             }
-            return best
+            return nil
         case "once":
             return onceFired.contains(a.id) ? nil : a.trigger.at.flatMap(AutomationClock.parse)
         default:
