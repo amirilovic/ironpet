@@ -226,13 +226,9 @@ final class ChatSession: ObservableObject {
     private var lastTurn: ACPTurn?
     /// Replaces the agent turn in tests: receives the turn and the callback that delivers its events.
     var turnRunner: ((ACPTurn, @escaping (AgentEvent) -> Void) async -> Void)?
-    private var toolItems: [String: UUID] = [:]
-    /// A tool row's own summary, before the count of its subagent's tool calls is added.
-    private var toolBase: [String: String] = [:]
-    /// The tool calls each subagent has made, by the subagent's tool-use id, in the order they started.
-    private var subagentCalls: [String: [(id: String, ok: Bool?)]] = [:]
-    /// The reply item that late updates extend, so a later result starts its own item.
-    private var backgroundReply: UUID?
+    private var transcript = ChatTranscript()
+    /// Kept so continuing a task run's thread in the chat still links it to the task.
+    private var threadTask: String?
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
     private var decided: [String: Bool] = [:]
     let voice = VoiceController()
@@ -497,6 +493,7 @@ final class ChatSession: ObservableObject {
         replyingTo = nil
         items = []
         threadID = nil
+        threadTask = nil
         state = .idle
         lastRunDuration = nil
     }
@@ -513,6 +510,7 @@ final class ChatSession: ObservableObject {
         replyingTo = nil
         items = thread.items
         threadID = thread.id
+        threadTask = thread.task
         state = .idle
         let url = URL(fileURLWithPath: thread.workspace)
         workspace = url
@@ -527,7 +525,7 @@ final class ChatSession: ObservableObject {
         }.first ?? "Chat"
         let title = firstPrompt.count > 60 ? String(firstPrompt.prefix(57)) + "…" : firstPrompt
         ThreadStore.save(ChatThread(id: threadID, title: title, workspace: workspace.path, updatedAt: Date(),
-                                    items: items, agent: agent.id))
+                                    items: items, agent: agent.id, task: threadTask))
         history = ThreadStore.recent()
     }
 
@@ -865,14 +863,6 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    private static func presentTense(_ summary: String) -> String {
-        for (past, present) in [("Ran ", "Running "), ("Edited ", "Editing "), ("Read ", "Reading "),
-                                ("Deleted ", "Deleting "), ("Searched ", "Searching ")] where summary.hasPrefix(past) {
-            return present + summary.dropFirst(past.count)
-        }
-        return summary
-    }
-
     private func ask(title: String, detail: String, respond: @escaping (ApprovalDecision) -> Void) {
         let approval = Approval(title: title, detail: detail, responders: [respond])
         if let previous = decided[approval.key] { return respond(previous ? .allow : .deny()) }
@@ -948,59 +938,10 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    /// Text and tool items. Outside a running turn, text opens a new item instead of extending the last reply.
     private func applyTranscript(_ event: AgentEvent) {
-        switch event {
-        case .assistant(let text):
-            if isRunning { activity = "Writing" }
-            if case .assistant(let previous) = items.last?.kind, isRunning || items.last?.id == backgroundReply {
-                items[items.count - 1].kind = .assistant(previous + text)
-            } else {
-                let item = Item(kind: .assistant(text))
-                backgroundReply = isRunning ? nil : item.id
-                items.append(item)
-            }
-        case .toolStarted(let id, let summary):
-            if isRunning { activity = Self.presentTense(summary) }
-            let item = Item(kind: .tool(summary, ok: nil))
-            toolBase[id] = summary
-            toolItems[id] = item.id
-            items.append(item)
-        case .toolUpdated(let id, let summary):
-            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
-               case .tool(_, let ok) = items[index].kind {
-                toolBase[id] = summary
-                items[index].kind = .tool(composedSummary(id), ok: ok)
-            }
-        case .subagentTool(let parent, let id, let summary, let ok):
-            // A subagent's calls count on its own row. They never open an item, so the reply's text keeps one message.
-            if isRunning, ok == nil { activity = Self.presentTense(summary) }
-            var calls = subagentCalls[parent] ?? []
-            if let index = calls.firstIndex(where: { $0.id == id }) { calls[index].ok = ok } else { calls.append((id, ok)) }
-            subagentCalls[parent] = calls
-            if let itemID = toolItems[parent], let index = items.firstIndex(where: { $0.id == itemID }),
-               case .tool(_, let parentOK) = items[index].kind {
-                items[index].kind = .tool(composedSummary(parent), ok: parentOK)
-            }
-            if !isRunning { saveThread() }
-        case .toolFinished(let id, let ok):
-            if isRunning { activity = "Thinking" }
-            if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
-               case .tool(let summary, _) = items[index].kind {
-                items[index].kind = .tool(summary, ok: ok)
-            }
-            if !isRunning { saveThread() }
-        default:
-            break
-        }
-    }
-
-    /// A tool row's summary with its subagent's tool-call count, e.g. "Run research · 3 tool calls".
-    private func composedSummary(_ id: String) -> String {
-        let base = toolBase[id] ?? ""
-        let count = subagentCalls[id]?.count ?? 0
-        guard count > 0 else { return base }
-        return "\(base) · \(count) tool call\(count == 1 ? "" : "s")"
+        let outcome = transcript.apply(event, to: &items, running: isRunning)
+        if let next = outcome.activity { activity = next }
+        if outcome.save { saveThread() }
     }
 
     private func endTurn() {
