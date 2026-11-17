@@ -4,8 +4,9 @@ import Foundation
 /// were cut off.
 @MainActor
 final class TaskRunStore {
-    /// Numbered after tasks' 305. `IF NOT EXISTS`, so moving it to another number later changes nothing.
-    nonisolated static let migration = Database.Migration(306, "tasks: agent runs", sql: """
+    /// One `user_version` is shared by every feature: 402 comes after the activity log (400) and the daily brief (401).
+    /// `IF NOT EXISTS`, so moving it to another number later changes nothing.
+    nonisolated static let migration = Database.Migration(402, "tasks: agent runs", sql: """
         CREATE TABLE IF NOT EXISTS task_runs(task TEXT PRIMARY KEY, repo TEXT NOT NULL, worktree TEXT NOT NULL, branch TEXT NOT NULL,
                                              base TEXT NOT NULL, base_branch TEXT, agent TEXT NOT NULL, model TEXT, session TEXT,
                                              auto INTEGER NOT NULL, state TEXT NOT NULL, started REAL NOT NULL, ended REAL,
