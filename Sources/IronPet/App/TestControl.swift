@@ -645,8 +645,7 @@ extension TestControl {
             guard let agent else { return Self.encode(["ok": false, "error": "no agent"]) }
             let project = (body["project"] as? String).map { URL(fileURLWithPath: $0) }
             let model = body["model"] as? String
-            let auto = body["auto"] as? Bool ?? false
-            Task { Self.taskRunError = await runner.start(task: task, project: project, agent: agent, model: model, auto: auto) }
+            Task { Self.taskRunError = await runner.start(task: task, project: project, agent: agent, model: model) }
         case ("POST", "/test/task-runs/approve"):
             guard let approval = runner.run(for: task)?.approval else { return Self.encode(["ok": false, "error": "no approval"]) }
             let allow = body["allow"] as? Bool ?? false
@@ -671,7 +670,7 @@ extension TestControl {
         let runs = runner.runs.values.sorted { $0.started < $1.started }.map { run -> [String: Any] in
             var object: [String: Any] = [
                 "task": run.task, "state": run.state.rawValue, "repo": run.repo.path, "worktree": run.worktree.path,
-                "branch": run.branch, "base": run.base, "agent": run.agent, "auto": run.auto, "commits": run.commits,
+                "branch": run.branch, "base": run.base, "agent": run.agent, "commits": run.commits,
                 "dirty": run.dirty, "cleanup": run.cleanup.rawValue, "canOpenPR": run.canOpenPR,
             ]
             object["baseBranch"] = run.baseBranch
@@ -679,6 +678,8 @@ extension TestControl {
             object["summary"] = run.summary
             object["error"] = run.error
             object["activity"] = run.activity
+            object["gitDir"] = run.gitDir?.path
+            object["pushRemote"] = run.pushRemote
             if let approval = run.approval { object["approval"] = ["id": approval.id.uuidString, "title": approval.title, "detail": approval.detail] }
             return object
         }

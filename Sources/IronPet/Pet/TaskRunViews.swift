@@ -135,7 +135,7 @@ struct TaskRunControls: View {
             error = "The agent this task used is not installed."
             return
         }
-        perform { await runner.start(task: task.id, project: run.repo, agent: agent, model: run.model, auto: run.auto) }
+        perform { await runner.start(task: task.id, project: run.repo, agent: agent, model: run.model) }
     }
 
     private func openPR() { perform { await runner.openPR(task: task.id) } }
@@ -183,7 +183,7 @@ private struct AgentTag: View {
 
     var body: some View {
         if let run {
-            Text(run.auto ? "\(run.agentName) · Auto" : run.agentName)
+            Text(run.agentName)
                 .font(.system(size: 10, weight: .medium))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1.5)
@@ -212,7 +212,7 @@ private struct BranchLine: View {
 
 // MARK: - Start
 
-/// Start: the project, agent and Auto for a new run, and what the agent will be told.
+/// Start: the project and agent for a new run, and what the agent will be told.
 struct TaskStartPopover: View {
     let task: TaskItem
     @ObservedObject var runner: TaskRunner
@@ -220,7 +220,6 @@ struct TaskStartPopover: View {
     @State private var candidates: [URL] = []
     @State private var project: URL?
     @State private var agentID = ""
-    @State private var auto = false
     @State private var showPrompt = false
     @State private var starting = false
     @State private var error: String?
@@ -234,7 +233,7 @@ struct TaskStartPopover: View {
     }
 
     private var agents: [ACPAgent] {
-        var list = runner.agents()
+        var list = runner.runnableAgents
         if let fallback = runner.defaultAgent()?.agent, !list.contains(fallback) { list.insert(fallback, at: 0) }
         return list
     }
@@ -272,19 +271,21 @@ struct TaskStartPopover: View {
                 Picker("Agent", selection: $agentID) {
                     ForEach(agents, id: \.id) { Text($0.name).tag($0.id) }
                 }
-                Toggle(isOn: $auto) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Auto")
-                        Text("Auto lets the agent edit files in the task's copy without asking. Commands and tools that change anything still ask.")
-                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        if let origin = TaskRunPrompt.untrustedOrigin(task.source) {
-                            Text("This task's text came from \(origin). Read it before you start.")
-                                .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
             }
             .formStyle(.columns)
+            if let origin = TaskRunPrompt.untrustedOrigin(task.source) {
+                Text("This task's text came from \(origin). Read it before you start.")
+                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+            Label("The agent asks you before every edit, command and tool that could change something. Auto does not apply to task runs.",
+                  systemImage: "hand.raised")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !Self.excluded(runner.agents()).isEmpty {
+                Text(Self.excludedText(Self.excluded(runner.agents())))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             Label(continuing == nil
                   ? "A new branch ironpet/\(task.id) from the current commit, in its own folder. Your working copy is not touched."
                   : "The agent picks up in its copy and session.",
@@ -292,7 +293,7 @@ struct TaskStartPopover: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Label("The agent commits on its branch. Pushing asks you first, and you open the pull request.", systemImage: "lock")
+            Label("The agent commits on its branch. It cannot push: Open PR pushes when you click it.", systemImage: "lock")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -345,7 +346,15 @@ struct TaskStartPopover: View {
     static func unblockedText(_ remotes: [String]) -> String {
         let names = remotes.joined(separator: ", ")
         let verb = remotes.count == 1 ? "has its own push URL" : "have their own push URLs"
-        return "\(names) \(verb), which the extra push block does not cover. Commands still ask before they run, Auto or not."
+        return "\(names) \(verb), which the extra push block does not cover. Commands still ask before they run."
+    }
+
+    static func excluded(_ installed: [ACPAgent]) -> [ACPAgent] { installed.filter { !TaskRunner.canRun($0) } }
+
+    /// "Pi is not offered: it runs tools without asking ironpet first."
+    static func excludedText(_ agents: [ACPAgent]) -> String {
+        let names = agents.map(\.name).joined(separator: ", ")
+        return "\(names) \(agents.count == 1 ? "is" : "are") not offered: \(agents.count == 1 ? "it runs" : "they run") tools without asking ironpet first."
     }
 
     /// "web-app — ~/code": the folder first, so a long parent path never hides which project it is.
@@ -357,8 +366,8 @@ struct TaskStartPopover: View {
         candidates = runner.candidates(for: task)
         project = project ?? candidates.first
         let run = runner.run(for: task.id)
-        agentID = run?.agent ?? runner.defaultAgent()?.agent.id ?? agents.first?.id ?? ""
-        auto = run?.auto ?? false
+        let previous = run.flatMap { run in agents.first { $0.id == run.agent } }
+        agentID = previous?.id ?? runner.defaultAgent()?.agent.id ?? agents.first?.id ?? ""
     }
 
     private func choose() {
@@ -380,7 +389,7 @@ struct TaskStartPopover: View {
         starting = true
         error = nil
         Task {
-            let failure = await runner.start(task: task.id, project: project, agent: agent, model: model, auto: auto)
+            let failure = await runner.start(task: task.id, project: project, agent: agent, model: model)
             starting = false
             if let failure { error = failure } else { onDone() }
         }

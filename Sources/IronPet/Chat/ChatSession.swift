@@ -87,10 +87,11 @@ final class ChatSession: ObservableObject {
         let detail: String
         /// Identical requests share one card and one decision.
         var responders: [(ApprovalDecision) -> Void]
+        /// False in a task run's thread, where two calls with the same card text can change different things: each gets
+        /// its own card and answer.
+        var shared = true
 
-        var key: String { Self.key(title: title, detail: detail) }
-
-        static func key(title: String, detail: String) -> String { title + "\u{0}" + detail }
+        var key: String { shared ? title + "\u{0}" + detail : id.uuidString }
 
         func respond(_ decision: ApprovalDecision) {
             responders.forEach { $0(decision) }
@@ -235,8 +236,8 @@ final class ChatSession: ObservableObject {
     /// Where task runs keep their copies. A test points it elsewhere.
     var taskWorktrees = Paths.worktrees
 
-    /// A thread a task run made, still in its copy: the run's rules hold here too (no push or PR, shared git setup and
-    /// edits outside the copy ask). Nil for every other thread.
+    /// A thread a task run made, still in its copy: the run's rules hold here too (every change asks, Auto or not, and
+    /// push and PR commands are refused). Nil for every other thread.
     var taskRunScope: RunScope? {
         guard threadTask != nil, let workspace else { return nil }
         let root = RunScope.resolve(taskWorktrees.path)
@@ -256,10 +257,14 @@ final class ChatSession: ObservableObject {
         return GitWorktree.pushBlockEnvironment(remotes: runRemotes?.path == scope.root.path ? runRemotes?.names ?? [] : [])
     }
 
+    /// The main working copy of a task's run, so its remotes are read there and not through the copy's `.git`.
+    var taskRunRepo: (String) -> URL? = { _ in nil }
+
     /// Reads the open run thread's remotes off the main thread, once per copy.
     func loadRunRemotes() async {
         guard let scope = taskRunScope, runRemotes?.path != scope.root.path else { return }
-        let names = await GitWorktree.locate()?.remotes(scope.root) ?? []
+        var names: [String] = []
+        if let repo = threadTask.flatMap(taskRunRepo), let git = GitWorktree.locate() { names = await git.remotes(repo) }
         if taskRunScope == scope { runRemotes = (scope.root.path, names) }
     }
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
@@ -780,6 +785,7 @@ final class ChatSession: ObservableObject {
         backend.extraEnvironment = agentEnvironment
         let scope = taskRunScope
         acpScope = scope
+        backend.requiresAskingMode = scope != nil
         backend.onPermission = { [weak self] call, respond in self?.handlePermission(call, scope: scope, respond: respond) }
         backend.onBackground = { [weak self] event in self?.handleBackground(event) }
         acp = backend
@@ -864,7 +870,7 @@ final class ChatSession: ObservableObject {
         case .allow:
             respond(.allow)
         case .ask(let title, let detail):
-            ask(title: title, detail: detail, respond: respond)
+            ask(title: title, detail: detail, shared: scope == nil, respond: respond)
         case .refuse(let message):
             respond(.deny(message))
         }
@@ -916,8 +922,8 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    private func ask(title: String, detail: String, respond: @escaping (ApprovalDecision) -> Void) {
-        let approval = Approval(title: title, detail: detail, responders: [respond])
+    private func ask(title: String, detail: String, shared: Bool = true, respond: @escaping (ApprovalDecision) -> Void) {
+        let approval = Approval(title: title, detail: detail, responders: [respond], shared: shared)
         if let previous = decided[approval.key] { return respond(previous ? .allow : .deny()) }
         if let index = approvals.firstIndex(where: { $0.key == approval.key }) {
             approvals[index].responders.append(respond)

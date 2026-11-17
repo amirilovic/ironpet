@@ -9,8 +9,8 @@ final class TaskRunStore {
     nonisolated static let migration = Database.Migration(420, "tasks: agent runs", sql: """
         CREATE TABLE IF NOT EXISTS task_runs(task TEXT PRIMARY KEY, repo TEXT NOT NULL, worktree TEXT NOT NULL, branch TEXT NOT NULL,
                                              base TEXT NOT NULL, base_branch TEXT, agent TEXT NOT NULL, model TEXT, session TEXT,
-                                             auto INTEGER NOT NULL, state TEXT NOT NULL, started REAL NOT NULL, ended REAL,
-                                             summary TEXT, error TEXT, cleanup TEXT NOT NULL DEFAULT 'none', push_url TEXT) WITHOUT ROWID;
+                                             state TEXT NOT NULL, started REAL NOT NULL, ended REAL, summary TEXT, error TEXT,
+                                             cleanup TEXT NOT NULL DEFAULT 'none', push_url TEXT, push_remote TEXT, git_dir TEXT) WITHOUT ROWID;
         """)
 
     private let database: Database
@@ -22,8 +22,8 @@ final class TaskRunStore {
     func all() -> [TaskRun] {
         (try? database.read { db in
             try db.rows("""
-                SELECT task, repo, worktree, branch, base, base_branch, agent, model, session, auto, state, started, ended, summary, error, cleanup,
-                       push_url
+                SELECT task, repo, worktree, branch, base, base_branch, agent, model, session, state, started, ended, summary, error, cleanup,
+                       push_url, push_remote, git_dir
                 FROM task_runs
                 """).compactMap(Self.run)
         }) ?? []
@@ -33,12 +33,13 @@ final class TaskRunStore {
         do {
             try database.write { db in
                 try db.execute("""
-                    INSERT OR REPLACE INTO task_runs(task, repo, worktree, branch, base, base_branch, agent, model, session, auto, state,
-                                                     started, ended, summary, error, cleanup, push_url)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR REPLACE INTO task_runs(task, repo, worktree, branch, base, base_branch, agent, model, session, state,
+                                                     started, ended, summary, error, cleanup, push_url, push_remote, git_dir)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, [run.task, run.repo.path, run.worktree.path, run.branch, run.base, run.baseBranch, run.agent, run.model,
-                          run.session, run.auto ? 1 : 0, run.state.rawValue, run.started.timeIntervalSince1970,
-                          run.ended?.timeIntervalSince1970, run.summary, run.error, run.cleanup.rawValue, run.pushURL])
+                          run.session, run.state.rawValue, run.started.timeIntervalSince1970,
+                          run.ended?.timeIntervalSince1970, run.summary, run.error, run.cleanup.rawValue, run.pushURL, run.pushRemote,
+                          run.gitDir?.path])
             }
         } catch {
             NSLog("ironpet: could not save the run of task \(run.task): \(error.localizedDescription)")
@@ -65,13 +66,13 @@ final class TaskRunStore {
     private static func run(_ row: [Database.Value]) -> TaskRun? {
         guard let task = row[0] as? String, let repo = row[1] as? String, let worktree = row[2] as? String,
               let branch = row[3] as? String, let base = row[4] as? String, let agent = row[6] as? String,
-              let state = (row[10] as? String).flatMap(TaskRun.State.init(rawValue:)), let started = row[11] as? Double else { return nil }
+              let state = (row[9] as? String).flatMap(TaskRun.State.init(rawValue:)), let started = row[10] as? Double else { return nil }
         return TaskRun(task: task, repo: URL(fileURLWithPath: repo), worktree: URL(fileURLWithPath: worktree), branch: branch, base: base,
                        baseBranch: row[5] as? String, agent: agent, model: row[7] as? String, session: row[8] as? String,
-                       auto: (row[9] as? Int64 ?? 0) != 0, state: state, started: Date(timeIntervalSince1970: started),
-                       ended: (row[12] as? Double).map(Date.init(timeIntervalSince1970:)), summary: row[13] as? String,
-                       error: row[14] as? String, cleanup: (row[15] as? String).flatMap(TaskRun.Cleanup.init(rawValue:)) ?? .none,
-                       pushURL: row[16] as? String)
+                       state: state, started: Date(timeIntervalSince1970: started),
+                       ended: (row[11] as? Double).map(Date.init(timeIntervalSince1970:)), summary: row[12] as? String,
+                       error: row[13] as? String, cleanup: (row[14] as? String).flatMap(TaskRun.Cleanup.init(rawValue:)) ?? .none,
+                       pushURL: row[15] as? String, pushRemote: row[16] as? String, gitDir: (row[17] as? String).map(URL.init(fileURLWithPath:)))
     }
 }
 
@@ -86,28 +87,29 @@ enum TaskRunUninstall {
         for run in store.all() where run.cleanup != .removed {
             repos.insert(run.repo)
             guard FileManager.default.fileExists(atPath: run.worktree.path) else { continue }
-            let removed = sync(git, ["-C", run.repo.path, "worktree", "remove", run.worktree.path])
+            let removed = sync(git, run.repo, ["worktree", "remove", run.worktree.path])
             guard removed.code == 0 else {
                 lines.append("Kept \(run.worktree.path): \(GitWorktree.describe(removed))")
                 continue
             }
             lines.append("Removed the task copy \(run.worktree.path)")
-            let ahead = sync(git, ["-C", run.repo.path, "rev-list", "--count", "\(run.base)..\(run.branch)"])
+            let ahead = sync(git, run.repo, ["rev-list", "--count", "\(run.base)..\(run.branch)"])
             if ahead.code == 0, ahead.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "0" {
-                _ = sync(git, ["-C", run.repo.path, "branch", "-d", run.branch])
+                _ = sync(git, run.repo, ["branch", "-d", run.branch])
             } else {
                 lines.append("Kept the branch \(run.branch) in \(run.repo.path): it has the agent's commits")
             }
         }
         for repo in repos where FileManager.default.fileExists(atPath: repo.path) {
-            _ = sync(git, ["-C", repo.path, "worktree", "prune"])
+            _ = sync(git, repo, ["worktree", "prune"])
         }
         return lines
     }
 
-    private static func sync(_ git: String, _ arguments: [String]) -> CommandResult {
+    private static func sync(_ git: String, _ repo: URL, _ arguments: [String]) -> CommandResult {
         var env = LoginShell.environment()
         env["GIT_TERMINAL_PROMPT"] = "0"
-        return CommandRunner.runBlocking(executable: git, arguments: arguments, timeout: 60, environment: env, stdin: nil, maxBytes: 64 * 1024)
+        return CommandRunner.runBlocking(executable: git, arguments: ["-C", repo.path] + GitWorktree.safety + arguments, timeout: 60,
+                                         environment: env, stdin: nil, maxBytes: 64 * 1024)
     }
 }

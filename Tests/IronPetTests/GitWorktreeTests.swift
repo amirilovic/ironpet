@@ -58,7 +58,7 @@ final class GitWorktreeTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: slot.folder.appendingPathComponent("README.md").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: slot.folder.appendingPathComponent("wip.txt").path),
                        "uncommitted files are not copied")
-        let hasUncommitted = await git.hasUncommittedChanges(repo)
+        let hasUncommitted = await git.hasUncommittedChanges(GitWorktree.Copy(worktree: repo, gitDir: repo.appendingPathComponent(".git")))
         XCTAssertTrue(hasUncommitted)
         XCTAssertEqual(try GitFixture.sh(["git", "status", "--porcelain"], in: repo), before)
         XCTAssertEqual(try GitFixture.sh(["git", "branch", "--show-current"], in: repo), "main")
@@ -70,9 +70,10 @@ final class GitWorktreeTests: XCTestCase {
     }
 
     func testRemoveKeepsADirtyWorktreeUnlessForced() async throws {
-        let (folder, branch, base) = try await addWorktree("dirty")
+        let (copy, branch, base) = try await addWorktree("dirty")
+        let folder = copy.worktree
         try "x".write(to: folder.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
-        let dirty = await git.hasUncommittedChanges(folder)
+        let dirty = await git.hasUncommittedChanges(copy)
         XCTAssertTrue(dirty)
         do {
             try await git.removeWorktree(repo: repo, folder: folder, force: false)
@@ -86,11 +87,12 @@ final class GitWorktreeTests: XCTestCase {
     }
 
     func testABranchWithCommitsIsKept() async throws {
-        let (folder, branch, base) = try await addWorktree("work")
+        let (copy, branch, base) = try await addWorktree("work")
+        let folder = copy.worktree
         try "hello".write(to: folder.appendingPathComponent("HELLO.md"), atomically: true, encoding: .utf8)
         try GitFixture.sh(["git", "add", "."], in: folder)
         try GitFixture.sh(["git", "commit", "-qm", "hello"], in: folder)
-        let ahead = await git.commitsAhead(folder, base: base)
+        let ahead = await git.commitsAhead(copy, base: base)
         XCTAssertEqual(ahead, 1)
         try await git.removeWorktree(repo: repo, folder: folder, force: false)
         let deleted = await git.deleteBranchIfEmpty(repo: repo, branch: branch, base: base)
@@ -100,8 +102,8 @@ final class GitWorktreeTests: XCTestCase {
     }
 
     func testPruneForgetsAWorktreeDeletedByHand() async throws {
-        let (folder, _, _) = try await addWorktree("gone")
-        try FileManager.default.removeItem(at: folder)
+        let (copy, _, _) = try await addWorktree("gone")
+        try FileManager.default.removeItem(at: copy.worktree)
         await git.prune(repo)
         XCTAssertFalse(try GitFixture.sh(["git", "worktree", "list"], in: repo).contains("gone"))
     }
@@ -126,8 +128,8 @@ final class GitWorktreeTests: XCTestCase {
         try GitFixture.sh(["git", "remote", "add", "origin", bare.path], in: repo)
         let blocked = await git.run(["push", "origin", "main"], in: repo, environment: GitWorktree.pushBlockEnvironment(remotes: ["origin"]))
         XCTAssertNotEqual(blocked.code, 0)
-        let (folder, branch, _) = try await addWorktree("push")
-        try await git.push(worktree: folder, remote: "origin", branch: branch)
+        let (copy, branch, _) = try await addWorktree("push")
+        try await git.push(copy, url: bare.path, branch: branch)
         XCTAssertTrue(try GitFixture.sh(["git", "branch", "--list"], in: bare).contains("ironpet/push"))
     }
 
@@ -142,12 +144,13 @@ final class GitWorktreeTests: XCTestCase {
             try "#!/bin/sh\ntouch '\(marker.path)'\n".write(to: hook, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
         }
-        let (folder, branch, _) = try await addWorktree("hooks")
-        try await git.push(worktree: folder, remote: "origin", branch: branch)
+        let (copy, branch, _) = try await addWorktree("hooks")
+        let folder = copy.worktree
+        try await git.push(copy, url: bare.path, branch: branch)
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "the repository's pre-push hook must not run")
         try GitFixture.sh(["git", "config", "core.hooksPath", dir.appendingPathComponent("custom-hooks").path], in: repo)
         try GitFixture.sh(["git", "-C", folder.path, "commit", "-q", "--allow-empty", "-m", "more"], in: dir)
-        try await git.push(worktree: folder, remote: "origin", branch: branch)
+        try await git.push(copy, url: bare.path, branch: branch)
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "a hooks path the agent set must not run either")
         XCTAssertTrue(try GitFixture.sh(["git", "branch", "--list"], in: bare).contains(branch))
         let upstream = await git.run(["config", "--get", "branch.\(branch).remote"], in: repo)
@@ -187,12 +190,14 @@ final class GitWorktreeTests: XCTestCase {
     }
 
     func testAFailedStartIsUndoneWithoutLosingWork() async throws {
-        let (clean, cleanBranch, base) = try await addWorktree("clean")
+        let (cleanCopy, cleanBranch, base) = try await addWorktree("clean")
+        let clean = cleanCopy.worktree
         await git.discardFailedStart(repo: repo, folder: clean, branch: cleanBranch, base: base)
         XCTAssertFalse(FileManager.default.fileExists(atPath: clean.path))
         let cleanExists = await git.branchExists(repo, cleanBranch)
         XCTAssertFalse(cleanExists)
-        let (dirty, dirtyBranch, _) = try await addWorktree("dirty")
+        let (dirtyCopy, dirtyBranch, _) = try await addWorktree("dirty")
+        let dirty = dirtyCopy.worktree
         try "x".write(to: dirty.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
         await git.discardFailedStart(repo: repo, folder: dirty, branch: dirtyBranch, base: base)
         XCTAssertTrue(FileManager.default.fileExists(atPath: dirty.appendingPathComponent("new.txt").path), "uncommitted work stays")
@@ -211,6 +216,67 @@ final class GitWorktreeTests: XCTestCase {
         XCTAssertNil(missing)
     }
 
+    func testTheCopysGitFolderIsRecordedAndItsDotGitFileChecked() async throws {
+        let (copy, _, _) = try await addWorktree("pointer")
+        XCTAssertEqual(copy.gitDir.path, repo.appendingPathComponent(".git/worktrees/pointer").resolvingSymlinksInPath().path)
+        XCTAssertTrue(GitWorktree.isIntact(copy))
+        let dotGit = copy.worktree.appendingPathComponent(".git")
+        let original = try String(contentsOf: dotGit, encoding: .utf8)
+
+        let other = dir.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try GitFixture.initRepo(other)
+        try "gitdir: \(other.appendingPathComponent(".git").path)\n".write(to: dotGit, atomically: true, encoding: .utf8)
+        XCTAssertFalse(GitWorktree.isIntact(copy), "a .git file pointing at another repository")
+        try "gitdir: \(copy.gitDir.path)\nextra\n".write(to: dotGit, atomically: true, encoding: .utf8)
+        XCTAssertFalse(GitWorktree.isIntact(copy), "anything but one gitdir line")
+        try FileManager.default.removeItem(at: dotGit)
+        try FileManager.default.createSymbolicLink(at: dotGit, withDestinationURL: other.appendingPathComponent(".git"))
+        XCTAssertFalse(GitWorktree.isIntact(copy), "a symlink instead of the file")
+        try FileManager.default.removeItem(at: dotGit)
+        try original.write(to: dotGit, atomically: true, encoding: .utf8)
+        XCTAssertTrue(GitWorktree.isIntact(copy))
+    }
+
+    func testGitCallsOnTheCopyUseTheRecordedGitFolder() async throws {
+        let (copy, _, base) = try await addWorktree("redirect")
+        try GitFixture.sh(["git", "-C", copy.worktree.path, "commit", "-q", "--allow-empty", "-m", "work"], in: dir)
+        let other = dir.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try GitFixture.initRepo(other)
+        try "gitdir: \(other.appendingPathComponent(".git").path)\n".write(to: copy.worktree.appendingPathComponent(".git"),
+                                                                         atomically: true, encoding: .utf8)
+        let ahead = await git.commitsAhead(copy, base: base)
+        XCTAssertEqual(ahead, 1, "a rewritten .git file does not move ironpet's git calls")
+    }
+
+    func testIronpetsGitRunsNoFsmonitorOrHooks() async throws {
+        let (copy, _, _) = try await addWorktree("monitor")
+        let marker = dir.appendingPathComponent("monitor-ran")
+        let script = dir.appendingPathComponent("monitor.sh")
+        try "#!/bin/sh\ntouch '\(marker.path)'\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        try GitFixture.sh(["git", "config", "core.fsmonitor", script.path], in: repo)
+        try "x".write(to: copy.worktree.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        let dirty = await git.hasUncommittedChanges(copy)
+        XCTAssertTrue(dirty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "the fsmonitor command in the shared config must not run")
+        XCTAssertTrue(GitWorktree.safety.contains("core.fsmonitor=false"))
+        XCTAssertTrue(GitWorktree.safety.contains("core.hooksPath=/dev/null"))
+    }
+
+    func testOpenPRPushNamesTheRecordedFoldersAndURL() {
+        let copy = GitWorktree.Copy(worktree: URL(fileURLWithPath: "/w/app/x"), gitDir: URL(fileURLWithPath: "/code/app/.git/worktrees/x"))
+        let arguments = GitWorktree.pushArguments(copy: copy, url: "git@github.com:me/app.git", branch: "ironpet/x")
+        XCTAssertEqual(arguments, ["-C", "/w/app/x", "--git-dir=/code/app/.git/worktrees/x", "--work-tree=/w/app/x"] + GitWorktree.safety
+                       + ["push", "--no-verify", "git@github.com:me/app.git", "refs/heads/ironpet/x:refs/heads/ironpet/x"])
+        let env = GitWorktree.ghEnvironment(copy)
+        XCTAssertEqual(env["GIT_DIR"], "/code/app/.git/worktrees/x")
+        XCTAssertEqual(env["GIT_WORK_TREE"], "/w/app/x")
+        XCTAssertEqual(GitWorktree.githubRepo(remote: "https://github.com/me/app.git"), "me/app")
+        XCTAssertNil(GitWorktree.githubRepo(remote: "git@gitlab.com:me/app.git"))
+    }
+
     func testCompareURL() {
         XCTAssertEqual(GitWorktree.compareURL(remote: "git@github.com:me/app.git", base: "main", branch: "ironpet/x")?.absoluteString,
                        "https://github.com/me/app/compare/main...ironpet/x?expand=1")
@@ -227,11 +293,12 @@ final class GitWorktreeTests: XCTestCase {
         XCTAssertNotEqual(a, b)
     }
 
-    private func addWorktree(_ id: String) async throws -> (URL, String, String) {
+    private func addWorktree(_ id: String) async throws -> (GitWorktree.Copy, String, String) {
         let head = try await git.head(repo)
         let slot = await git.freeSlot(repo, task: id, parent: GitWorktree.parent(for: repo, root: dir.appendingPathComponent("worktrees")))
         try await git.addWorktree(repo: repo, folder: slot.folder, branch: slot.branch, base: head.sha)
-        return (slot.folder, slot.branch, head.sha)
+        let gitDir = try await git.gitDir(ofNewWorktree: slot.folder)
+        return (GitWorktree.Copy(worktree: slot.folder, gitDir: gitDir), slot.branch, head.sha)
     }
 }
 

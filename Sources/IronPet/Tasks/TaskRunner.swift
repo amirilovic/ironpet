@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 /// Runs agents on tasks, each in its own git worktree and ACP session. The agent's work stays on a local branch: it
-/// cannot push, and Open PR is the user's own action. Approvals go through Ghost like the chat's.
+/// cannot push, and Open PR is the user's own action. Every change the agent asks about gets a card through Ghost.
 @MainActor
 final class TaskRunner: ObservableObject {
     /// The author of every task change a run makes, in the task's history.
@@ -48,9 +48,8 @@ final class TaskRunner: ObservableObject {
         var transcript = ChatTranscript()
         var items: [ChatSession.Item]
         var title: String
+        /// Each request gets its own card and answer: two calls with the same card text can change different things.
         var pending: [(approval: TaskRun.Approval, respond: (ApprovalDecision) -> Void)] = []
-        /// The user's answers in this turn, by `ChatSession.Approval.key`, so an identical request is answered the same way.
-        var decided: [String: Bool] = [:]
         var limit: Task<Void, Never>?
     }
 
@@ -107,8 +106,21 @@ final class TaskRunner: ObservableObject {
     /// The folder of a watched agent session, for a task's session link.
     var sessionWorkspace: (String) -> String? = { _ in nil }
 
-    /// The agents the Start popover offers.
+    /// The installed agents. Start offers those that `canRun`.
     var agents: () -> [ACPAgent] = { AgentCatalog.present() }
+
+    /// Agents that run tools without sending ironpet a permission request (pi-acp never sends one), so a run could not
+    /// ask before each change.
+    static let agentsWithoutApprovals: Set<String> = ["pi"]
+
+    static func canRun(_ agent: ACPAgent) -> Bool { !agentsWithoutApprovals.contains(agent.id) }
+
+    static func cannotRun(_ agent: ACPAgent) -> String {
+        "\(agent.name) runs tools without asking ironpet first, so it cannot work on a task. Pick another agent."
+    }
+
+    /// The agents the Start popover offers.
+    var runnableAgents: [ACPAgent] { agents().filter(Self.canRun) }
 
     /// The folders a task's Start popover offers, best first.
     func candidates(for task: TaskItem) -> [URL] {
@@ -124,11 +136,11 @@ final class TaskRunner: ObservableObject {
         return (repo, branch, await git.remotesWithOwnPushURL(repo))
     }
 
-    /// The agent a run uses unless the popover picked another.
+    /// The agent a run uses unless the popover picked another. Nil when that agent cannot run tasks.
     func defaultAgent() -> (agent: ACPAgent, model: String?)? {
         let settings = config()
-        if let id = settings.agent, let agent = AgentCatalog.agent(id: id) { return (agent, settings.model) }
-        guard let chat = chatAgent() else { return nil }
+        if let id = settings.agent, let agent = AgentCatalog.agent(id: id) { return Self.canRun(agent) ? (agent, settings.model) : nil }
+        guard let chat = chatAgent(), Self.canRun(chat.agent) else { return nil }
         return (chat.agent, settings.model ?? chat.model)
     }
 
@@ -137,8 +149,9 @@ final class TaskRunner: ObservableObject {
     /// Starts or continues a run. A run that still has its worktree continues there and resumes its session. Returns
     /// why it could not start, or nil.
     @discardableResult
-    func start(task id: String, project: URL?, agent: ACPAgent, model: String?, auto: Bool) async -> String? {
+    func start(task id: String, project: URL?, agent: ACPAgent, model: String?) async -> String? {
         guard config().enabled else { return "Task runs are turned off in taskRuns.enabled." }
+        guard Self.canRun(agent) else { return Self.cannotRun(agent) }
         guard let task = tasks.task(id), task.status != .done else { return "That task is closed." }
         if let existing = runs[id], existing.state.isLive { return "An agent is already working on this task." }
         guard !starting.contains(id) else { return "An agent is already starting on this task." }
@@ -160,7 +173,6 @@ final class TaskRunner: ObservableObject {
         if var previous = runs[id], previous.cleanup != .removed, FileManager.default.fileExists(atPath: previous.worktree.path) {
             previous.agent = agent.id
             previous.model = model
-            previous.auto = auto
             run = previous
             fresh = false
         } else {
@@ -172,9 +184,10 @@ final class TaskRunner: ObservableObject {
                 let slot = await git.freeSlot(repo, task: id, parent: GitWorktree.parent(for: repo, root: worktreeRoot))
                 picked = (repo, head.sha, slot.branch, slot.folder)
                 try await git.addWorktree(repo: repo, folder: slot.folder, branch: slot.branch, base: head.sha)
+                let gitDir = try await git.gitDir(ofNewWorktree: slot.folder)
                 run = TaskRun(task: id, repo: repo, worktree: slot.folder, branch: slot.branch, base: head.sha, baseBranch: head.branch,
-                              agent: agent.id, model: model, session: nil, auto: auto, state: .starting, started: now(),
-                              ended: nil, summary: nil, error: nil)
+                              agent: agent.id, model: model, session: nil, state: .starting, started: now(),
+                              ended: nil, summary: nil, error: nil, gitDir: gitDir)
             } catch {
                 if let picked { await git.discardFailedStart(repo: picked.repo, folder: picked.folder, branch: picked.branch, base: picked.base) }
                 return error.localizedDescription
@@ -184,6 +197,7 @@ final class TaskRunner: ObservableObject {
         let remotes = await git.remotes(run.repo)
         run.unblockedRemotes = await git.remotesWithOwnPushURL(run.repo)
         if fresh, let remote = await git.pushRemote(run.repo, baseBranch: run.baseBranch) {
+            run.pushRemote = remote
             run.pushURL = await git.pushURL(run.repo, remote: remote)
         }
         if cancelledStarts.contains(id) {
@@ -209,6 +223,7 @@ final class TaskRunner: ObservableObject {
 
         let backend = makeBackend(agent)
         backend.usageFeature = .taskRuns
+        backend.requiresAskingMode = true
         backend.extraEnvironment = GitWorktree.pushBlockEnvironment(remotes: remotes)
         backend.onPermission = { [weak self] call, respond in self?.permission(id, call, respond) }
         backend.onBackground = { [weak self] event in self?.background(id, event) }
@@ -269,7 +284,6 @@ final class TaskRunner: ObservableObject {
         guard let task = live.first(where: { $0.value.pending.contains { $0.approval.id == id } })?.key,
               let index = live[task]?.pending.firstIndex(where: { $0.approval.id == id }),
               let entry = live[task]?.pending.remove(at: index) else { return }
-        live[task]?.decided[ChatSession.Approval.key(title: entry.approval.title, detail: entry.approval.detail)] = allow
         entry.respond(allow ? .allow : .deny())
         onApprovalResolved?(id)
         let next = live[task]?.pending.first?.approval
@@ -286,13 +300,10 @@ final class TaskRunner: ObservableObject {
 
     private func permission(_ task: String, _ call: ACPToolCall, _ respond: @escaping (ApprovalDecision) -> Void) {
         guard let run = runs[task], run.state.isLive else { return respond(.deny("The run ended")) }
-        switch ApprovalRules.policy(for: call, auto: run.auto, run: RunScope(root: run.worktree)) {
+        switch ApprovalRules.runPolicy(for: call, run: RunScope(root: run.worktree)) {
         case .allow: respond(.allow)
         case .refuse(let message): respond(.deny(message))
         case .ask(let title, let detail):
-            if let previous = live[task]?.decided[ChatSession.Approval.key(title: title, detail: detail)] {
-                return respond(previous ? .allow : .deny())
-            }
             let approval = TaskRun.Approval(id: UUID(), title: title, detail: detail)
             live[task]?.pending.append((approval, respond))
             guard live[task]?.pending.count == 1 else { return }
@@ -377,10 +388,10 @@ final class TaskRunner: ObservableObject {
     // MARK: Git
 
     func refreshGit(_ task: String) async {
-        guard let run = runs[task], run.cleanup != .removed, let git = git(),
+        guard let run = runs[task], run.cleanup != .removed, let copy = run.copy, let git = git(),
               FileManager.default.fileExists(atPath: run.worktree.path) else { return }
-        let commits = await git.commitsAhead(run.worktree, base: run.base)
-        let dirty = await git.hasUncommittedChanges(run.worktree)
+        let commits = await git.commitsAhead(copy, base: run.base)
+        let dirty = await git.hasUncommittedChanges(copy)
         runs[task]?.commits = commits
         runs[task]?.dirty = dirty
     }
@@ -398,32 +409,34 @@ final class TaskRunner: ObservableObject {
         guard let run = runs[id] else { return "There is no run for this task." }
         guard run.canOpenPR else { return run.openPRHint ?? "There is nothing to push yet." }
         guard let git = git() else { return "git was not found." }
-        guard let remote = await git.pushRemote(run.repo, baseBranch: run.baseBranch) else {
-            return "\(run.repo.lastPathComponent) has no remote to push to."
+        guard let copy = run.copy, GitWorktree.isIntact(copy) else {
+            return "The copy's .git file no longer points at the git folder ironpet made for it, so ironpet did not push. Push \(run.branch) yourself after checking the copy."
+        }
+        guard let remote = run.pushRemote, let expected = run.pushURL else {
+            return "\(run.repo.lastPathComponent) had no remote when the task started, so ironpet does not push \(run.branch). Push it yourself."
         }
         let pushURL = await git.pushURL(run.repo, remote: remote)
-        guard let expected = run.pushURL, pushURL == expected else {
+        guard pushURL == expected else {
             let now = pushURL ?? "nothing"
-            return run.pushURL == nil
-                ? "\(run.repo.lastPathComponent) had no remote when the task started, so ironpet does not push \(run.branch). Push it yourself."
-                : "The push URL of \(remote) changed since the task started (now \(now)), so ironpet did not push. Check the repository's remotes."
+            return "The push URL of \(remote) changed since the task started (now \(now)), so ironpet did not push. Check the repository's remotes."
         }
         let gh = LoginShell.find("gh")
         let prArguments = ["pr", "create", "--web", "--head", run.branch] + (run.baseBranch.map { ["--base", $0] } ?? [])
+            + (GitWorktree.githubRepo(remote: expected).map { ["--repo", $0] } ?? [])
         if let record = recordOpenPR {
-            record([git.git] + GitWorktree.pushArguments(remote: remote, branch: run.branch))
+            record([git.git] + GitWorktree.pushArguments(copy: copy, url: expected, branch: run.branch))
             record([gh?.path ?? "gh"] + prArguments)
             onPushed?(run, remote)
             return nil
         }
         do {
-            try await git.push(worktree: run.worktree, remote: remote, branch: run.branch)
+            try await git.push(copy, url: expected, branch: run.branch)
         } catch {
             return "Push to \(remote) failed: \(error.localizedDescription)"
         }
         onPushed?(run, remote)
         if let gh {
-            var env = LoginShell.environment()
+            var env = LoginShell.environment().merging(GitWorktree.ghEnvironment(copy)) { _, new in new }
             env["GH_PROMPT_DISABLED"] = "1"
             // gh reads the repository from the folder it runs in, and CommandRunner has no working directory.
             let result = await CommandRunner.run(executable: "/bin/sh", arguments: ["-c", #"cd "$1" && shift && exec "$@""#, "sh",
@@ -431,8 +444,7 @@ final class TaskRunner: ObservableObject {
                                                  timeout: 30, environment: env, maxBytes: 64 * 1024)
             if result.code == 0 { return nil }
         }
-        if let url = await git.remoteURL(run.repo, remote: remote),
-           let page = GitWorktree.compareURL(remote: url, base: run.baseBranch, branch: run.branch) {
+        if let page = GitWorktree.compareURL(remote: expected, base: run.baseBranch, branch: run.branch) {
             openURL(page)
             return nil
         }

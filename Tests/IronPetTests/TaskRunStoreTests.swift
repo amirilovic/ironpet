@@ -16,8 +16,9 @@ final class TaskRunStoreTests: XCTestCase {
 
     nonisolated static func sampleRun(_ task: String = "fix-login", state: TaskRun.State = .running) -> TaskRun {
         TaskRun(task: task, repo: URL(fileURLWithPath: "/code/app"), worktree: URL(fileURLWithPath: "/w/app-1/\(task)"), branch: "ironpet/\(task)",
-                base: "abc123", baseBranch: "main", agent: "claude", model: "opus", session: "s-1", auto: true, state: state,
-                started: Date(timeIntervalSince1970: 1_800_000_000), ended: nil, summary: "Edited 2 files", error: nil)
+                base: "abc123", baseBranch: "main", agent: "claude", model: "opus", session: "s-1", state: state,
+                started: Date(timeIntervalSince1970: 1_800_000_000), ended: nil, summary: "Edited 2 files", error: nil,
+                pushURL: "git@github.com:you/app.git", pushRemote: "origin", gitDir: URL(fileURLWithPath: "/code/app/.git/worktrees/\(task)"))
     }
 
     func testMigratesAnExistingDatabaseAndAgain() throws {

@@ -35,7 +35,6 @@ struct TaskRun: Identifiable, Equatable {
     var model: String?
     /// The ACP session id, which is also the chat thread id.
     var session: String?
-    var auto: Bool
     var state: State
     var started: Date
     var ended: Date?
@@ -45,6 +44,11 @@ struct TaskRun: Identifiable, Equatable {
     var cleanup: Cleanup = .none
     /// Where Open PR may push: the push URL of the push remote when the run was created. Open PR refuses when it changed.
     var pushURL: String? = nil
+    /// The remote `pushURL` belongs to, read from the main working copy's config at Start.
+    var pushRemote: String? = nil
+    /// The copy's git folder, resolved when git made the worktree. ironpet's git calls on the copy use it, and Open PR
+    /// refuses when the copy's `.git` file no longer points there.
+    var gitDir: URL? = nil
 
     // Not stored: refreshed from git and the running turn.
     /// "Running `npm test`", "Thinking".
@@ -65,6 +69,8 @@ struct TaskRun: Identifiable, Equatable {
     }
 
     var agentName: String { AgentCatalog.agent(id: agent)?.name ?? agent }
+
+    var copy: GitWorktree.Copy? { gitDir.map { GitWorktree.Copy(worktree: worktree, gitDir: $0) } }
 
     /// Open PR pushes only committed work.
     var canOpenPR: Bool { !state.isLive && cleanup != .removed && commits > 0 && !dirty }

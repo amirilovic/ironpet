@@ -115,8 +115,8 @@ final class TaskRunnerTests: XCTestCase {
     }
 
     @discardableResult
-    private func start(_ id: String, auto: Bool = false, project: URL? = nil) async -> String? {
-        await runner.start(task: id, project: project ?? repo, agent: agent, model: nil, auto: auto)
+    private func start(_ id: String, project: URL? = nil) async -> String? {
+        await runner.start(task: id, project: project ?? repo, agent: agent, model: nil)
     }
 
     private func wait(_ what: String, timeout: Double = 20, _ condition: () -> Bool) async {
@@ -151,6 +151,9 @@ final class TaskRunnerTests: XCTestCase {
         XCTAssertEqual(run.commits, 1)
         XCTAssertFalse(run.dirty)
         XCTAssertTrue(run.canOpenPR)
+        XCTAssertEqual(run.gitDir?.path, repo.appendingPathComponent(".git/worktrees/\(run.worktree.lastPathComponent)").resolvingSymlinksInPath().path)
+        XCTAssertEqual(run.pushRemote, "origin")
+        XCTAssertEqual(TaskRunStore(database: database).all().first?.gitDir, run.gitDir)
         XCTAssertEqual(run.summary, "Added the feature.")
         XCTAssertEqual(tasks.task(id)?.status, .needsYou)
         XCTAssertEqual(tasks.history(id).last?.by, TaskRunner.author)
@@ -190,9 +193,9 @@ final class TaskRunnerTests: XCTestCase {
         XCTAssertEqual(logged().first { $0["asked"] != nil }?["allowed"] as? Bool, true)
     }
 
-    func testPushIsRefusedEvenInAuto() async throws {
+    func testPushIsRefusedWithoutACard() async throws {
         let id = try newTask("PUSH the branch")
-        await start(id, auto: true)
+        await start(id)
         await wait("finish") { finished == [id] }
         XCTAssertTrue(approvals.isEmpty, "a push is refused, not asked")
         XCTAssertEqual(logged().first { $0["asked"] != nil }?["allowed"] as? Bool, false)
@@ -294,8 +297,10 @@ final class TaskRunnerTests: XCTestCase {
         await wait("finish") { finished == [id] }
         let prError = await runner.openPR(task: id)
         XCTAssertNil(prError)
-        XCTAssertEqual(commands.first?.dropFirst().map { $0 }, ["-c", "core.hooksPath=/dev/null", "push", "--no-verify", "origin", "ironpet/\(id)"])
-        XCTAssertEqual(commands.last?.suffix(7), ["pr", "create", "--web", "--head", "ironpet/\(id)", "--base", "main"])
+        let copy = try XCTUnwrap(runner.run(for: id)?.copy)
+        XCTAssertEqual(commands.first?.dropFirst().map { $0 },
+                       GitWorktree.pushArguments(copy: copy, url: "git@github.com:you/app.git", branch: "ironpet/\(id)"))
+        XCTAssertEqual(commands.last?.suffix(9), ["pr", "create", "--web", "--head", "ironpet/\(id)", "--base", "main", "--repo", "you/app"])
     }
 
     func testOpenPRRefusesWhenThePushURLChangedSinceTheStart() async throws {
@@ -350,14 +355,53 @@ final class TaskRunnerTests: XCTestCase {
         XCTAssertThrowsError(try git("show-ref", "--verify", "refs/heads/ironpet/\(id)"))
     }
 
-    func testIdenticalRequestsInARunAreAnsweredFromTheFirstDecision() async throws {
+    func testEveryRequestInARunAsksEvenWhenItRepeatsOne() async throws {
         let id = try newTask("TWICE the same command")
         await start(id)
         await wait("approval") { approvals.count == 1 }
         runner.decide(id: approvals[0].id, allow: true)
+        await wait("second approval") { approvals.count == 2 }
+        XCTAssertNotEqual(approvals[0].id, approvals[1].id)
+        runner.decide(id: approvals[1].id, allow: false)
         await wait("finish") { finished == [id] }
-        XCTAssertEqual(approvals.count, 1, "the repeat does not ask again")
-        XCTAssertEqual(logged().filter { $0["asked"] as? String == "touch y" }.map { $0["allowed"] as? Bool }, [true, true])
+        XCTAssertEqual(logged().filter { $0["asked"] as? String == "touch y" }.map { $0["allowed"] as? Bool }, [true, false])
+    }
+
+    func testAgentsThatDoNotAskCannotStart() async throws {
+        let pi = try XCTUnwrap(AgentCatalog.agent(id: "pi"))
+        let id = try newTask("COMMIT with pi")
+        let refused = await runner.start(task: id, project: repo, agent: pi, model: nil)
+        XCTAssertEqual(refused, TaskRunner.cannotRun(pi))
+        XCTAssertNil(runner.run(for: id))
+        XCTAssertEqual(try git("worktree", "list").split(separator: "\n").count, 1, "no copy is made")
+        runner.agents = { [pi, self.agent] }
+        XCTAssertEqual(runner.runnableAgents.map(\.id), ["fake"])
+        runner.chatAgent = { (pi, nil) }
+        XCTAssertNil(runner.defaultAgent(), "the chat's Pi is not offered as the run's agent")
+        settings.agent = "claude"
+        XCTAssertEqual(runner.defaultAgent()?.agent.id, "claude")
+        settings.agent = "pi"
+        XCTAssertNil(runner.defaultAgent())
+        XCTAssertEqual(TaskStartPopover.excluded([pi, agent]).map(\.id), ["pi"])
+        XCTAssertEqual(TaskStartPopover.excludedText([pi]), "Pi is not offered: it runs tools without asking ironpet first.")
+    }
+
+    func testOpenPRRefusesWhenTheCopysGitFileWasRewritten() async throws {
+        var commands: [[String]] = []
+        runner.recordOpenPR = { commands.append($0) }
+        let id = try newTask("COMMIT then repoint")
+        await start(id)
+        await wait("finish") { finished == [id] }
+        let run = try XCTUnwrap(runner.run(for: id))
+        let other = dir.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try GitFixture.initRepo(other)
+        try "gitdir: \(other.appendingPathComponent(".git").path)\n".write(to: run.worktree.appendingPathComponent(".git"),
+                                                                         atomically: true, encoding: .utf8)
+        let refusal = await runner.openPR(task: id)
+        let error = try XCTUnwrap(refusal)
+        XCTAssertTrue(error.hasPrefix("The copy's .git file no longer points at the git folder ironpet made for it"), error)
+        XCTAssertTrue(commands.isEmpty, "nothing is pushed")
     }
 
     func testRetryRefusesWhileTheRunsThreadIsOpenInTheChat() async throws {
@@ -404,7 +448,7 @@ final class TaskRunnerTests: XCTestCase {
         let none = await runner.target(of: plain)
         XCTAssertNil(none)
         XCTAssertEqual(TaskStartPopover.unblockedText(["origin"]),
-                       "origin has its own push URL, which the extra push block does not cover. Commands still ask before they run, Auto or not.")
+                       "origin has its own push URL, which the extra push block does not cover. Commands still ask before they run.")
     }
 
     func testLaunchMarksRunsThatWereLiveAsInterrupted() async throws {

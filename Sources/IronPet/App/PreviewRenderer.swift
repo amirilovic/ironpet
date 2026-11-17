@@ -444,15 +444,15 @@ enum PreviewRenderer {
         _ = add("Write the release notes for 2.4", .backlog, notes: "Cover the rate limiter and the new onboarding.",
                 links: [TaskLink(kind: .file, ref: project.path, label: "web-app")])
         let started = Date().addingTimeInterval(-640)
-        func run(_ task: String, _ state: TaskRun.State, agent: String = "claude", auto: Bool = false) -> TaskRun {
+        func run(_ task: String, _ state: TaskRun.State, agent: String = "claude") -> TaskRun {
             TaskRun(task: task, repo: URL(fileURLWithPath: "/Users/you/code/web-app"),
                     worktree: URL(fileURLWithPath: "/Users/you/.ironpet/worktrees/web-app-3f2a91c0/\(task)"), branch: "ironpet/\(task)",
-                    base: "9c1e2d4", baseBranch: "main", agent: agent, model: nil, session: "s-\(task)", auto: auto, state: state,
+                    base: "9c1e2d4", baseBranch: "main", agent: agent, model: nil, session: "s-\(task)", state: state,
                     started: started, ended: nil, summary: nil, error: nil)
         }
         var waiting = run(approval, .needsApproval)
         waiting.approval = .init(id: UUID(), title: "Run this command?", detail: "npm test -- login --runInBand")
-        var working = run(running, .running, agent: "cursor", auto: true)
+        var working = run(running, .running, agent: "cursor")
         working.activity = "Editing src/settings/Theme.tsx"
         var done = run(finished, .finished)
         done.summary = "Updated the client to v4 and fixed the three call sites that used the old pagination."

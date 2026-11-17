@@ -11,18 +11,42 @@ struct GitError: LocalizedError, Equatable {
 struct GitWorktree {
     let git: String
 
+    /// A task's copy as ironpet recorded it at Start. Git calls on it name both folders, so a `.git` file the agent
+    /// rewrote cannot send them to another repository.
+    struct Copy: Equatable {
+        let worktree: URL
+        let gitDir: URL
+    }
+
     /// The user's git on the login-shell PATH. Nil when there is none.
     static func locate() -> GitWorktree? {
         LoginShell.find("git").map { GitWorktree(git: $0.path) }
     }
 
+    /// Before every ironpet git call: no fsmonitor command and no hooks, which the agent could have set up in the
+    /// repository's shared config or hooks folder.
+    static let safety = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+
     /// Runs git in `folder`. `GIT_TERMINAL_PROMPT=0` so a remote that wants a password fails instead of waiting.
     func run(_ arguments: [String], in folder: URL, environment extra: [String: String] = [:], timeout: TimeInterval = 30) async -> CommandResult {
+        await execute(["-C", folder.path] + Self.safety + arguments, environment: extra, timeout: timeout)
+    }
+
+    /// Runs git on a task's copy with its recorded git folder.
+    func run(_ arguments: [String], copy: Copy, timeout: TimeInterval = 30) async -> CommandResult {
+        await execute(Self.arguments(arguments, copy: copy), timeout: timeout)
+    }
+
+    static func arguments(_ arguments: [String], copy: Copy) -> [String] {
+        ["-C", copy.worktree.path, "--git-dir=\(copy.gitDir.path)", "--work-tree=\(copy.worktree.path)"] + safety + arguments
+    }
+
+    private func execute(_ arguments: [String], environment extra: [String: String] = [:], timeout: TimeInterval) async -> CommandResult {
         var env = LoginShell.environment()
         env["GIT_TERMINAL_PROMPT"] = "0"
+        for key in ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT"] { env[key] = nil }
         env.merge(extra) { _, new in new }
-        return await CommandRunner.run(executable: git, arguments: ["-C", folder.path] + arguments, timeout: timeout,
-                                       environment: env, maxBytes: 64 * 1024)
+        return await CommandRunner.run(executable: git, arguments: arguments, timeout: timeout, environment: env, maxBytes: 64 * 1024)
     }
 
     private func output(_ arguments: [String], in folder: URL) async throws -> String {
@@ -59,10 +83,30 @@ struct GitWorktree {
         return (branch.code == 0 && !name.isEmpty ? name : nil, sha.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Uncommitted or untracked changes in a working copy.
-    func hasUncommittedChanges(_ folder: URL) async -> Bool {
-        let result = await run(["status", "--porcelain"], in: folder)
+    /// Uncommitted or untracked changes in a task's copy.
+    func hasUncommittedChanges(_ copy: Copy) async -> Bool {
+        let result = await run(["status", "--porcelain"], copy: copy)
         return result.code == 0 && !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The absolute git folder of a worktree git just made, with symlinks followed. Read once, at Start.
+    func gitDir(ofNewWorktree folder: URL) async throws -> URL {
+        let path = try await output(["rev-parse", "--absolute-git-dir"], in: folder)
+        guard !path.isEmpty else { throw GitError(message: "git did not report the git folder of \(folder.lastPathComponent)") }
+        return URL(fileURLWithPath: path).resolvingSymlinksInPath()
+    }
+
+    /// True while the copy's `.git` is still a plain file that points at the recorded git folder.
+    static func isIntact(_ copy: Copy) -> Bool {
+        let file = copy.worktree.appendingPathComponent(".git")
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let text = try? String(contentsOf: file, encoding: .utf8) else { return false }
+        let lines = text.split(whereSeparator: \.isNewline)
+        guard lines.count == 1, lines[0].hasPrefix("gitdir: ") else { return false }
+        let named = String(lines[0].dropFirst("gitdir: ".count))
+        let url = named.hasPrefix("/") ? URL(fileURLWithPath: named) : copy.worktree.appendingPathComponent(named)
+        return url.standardizedFileURL.resolvingSymlinksInPath().path == copy.gitDir.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     func remotes(_ repo: URL) async -> [String] {
@@ -115,14 +159,14 @@ struct GitWorktree {
         return url.isEmpty ? nil : url
     }
 
-    func remoteURL(_ repo: URL, remote: String) async -> String? {
-        let url = await run(["remote", "get-url", remote], in: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return url.isEmpty ? nil : url
+    /// Commits on `ref` of the repository that `base` does not have.
+    func commitsAhead(_ repo: URL, base: String, ref: String) async -> Int {
+        Int(await run(["rev-list", "--count", "\(base)..\(ref)"], in: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     }
 
-    /// Commits on `HEAD` of `folder` that `base` does not have.
-    func commitsAhead(_ folder: URL, base: String, ref: String = "HEAD") async -> Int {
-        Int(await run(["rev-list", "--count", "\(base)..\(ref)"], in: folder).stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    /// Commits on the copy's `HEAD` that `base` does not have.
+    func commitsAhead(_ copy: Copy, base: String) async -> Int {
+        Int(await run(["rev-list", "--count", "\(base)..HEAD"], copy: copy).stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     }
 
     func branchExists(_ repo: URL, _ branch: String) async -> Bool {
@@ -168,17 +212,24 @@ struct GitWorktree {
         _ = await run(["worktree", "prune"], in: repo)
     }
 
-    func push(worktree: URL, remote: String, branch: String) async throws {
-        let result = await run(Self.pushArguments(remote: remote, branch: branch), in: worktree, timeout: 180)
+    func push(_ copy: Copy, url: String, branch: String) async throws {
+        let result = await execute(Self.pushArguments(copy: copy, url: url, branch: branch), timeout: 180)
         guard result.code == 0, !result.timedOut else { throw GitError(message: Self.describe(result)) }
     }
 
     // MARK: Pure helpers
 
-    /// Open PR's push. Hooks are off, since the agent could have written them into the shared repository, and no upstream
-    /// is set, since that would write the task's branch into the shared config.
-    static func pushArguments(remote: String, branch: String) -> [String] {
-        ["-c", "core.hooksPath=/dev/null", "push", "--no-verify", remote, branch]
+    /// Open PR's push, to the push URL recorded at Start rather than a remote name, so remote settings changed in the
+    /// shared config since then do not apply. No hooks, and no upstream, which would write the branch into that config.
+    static func pushArguments(copy: Copy, url: String, branch: String) -> [String] {
+        arguments(["push", "--no-verify", url, "refs/heads/\(branch):refs/heads/\(branch)"], copy: copy)
+    }
+
+    /// Environment for `gh` run in a task's copy: the recorded git folder, no fsmonitor and no hooks for the git it runs.
+    static func ghEnvironment(_ copy: Copy) -> [String: String] {
+        ["GIT_DIR": copy.gitDir.path, "GIT_WORK_TREE": copy.worktree.path, "GIT_CONFIG_COUNT": "2",
+         "GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": "false",
+         "GIT_CONFIG_KEY_1": "core.hooksPath", "GIT_CONFIG_VALUE_1": "/dev/null"]
     }
 
     /// `~/.ironpet/worktrees/<repo>-<hash>`: one folder per repository, so two repos with the same name never share one.
@@ -205,8 +256,8 @@ struct GitWorktree {
         return env
     }
 
-    /// GitHub's new-PR page for `branch`, from a remote URL. Nil for other hosts.
-    static func compareURL(remote: String, base: String?, branch: String) -> URL? {
+    /// `owner/name` of a GitHub remote URL. Nil for other hosts.
+    static func githubRepo(remote: String) -> String? {
         var path: String?
         if remote.hasPrefix("git@github.com:") {
             path = String(remote.dropFirst("git@github.com:".count))
@@ -215,6 +266,12 @@ struct GitWorktree {
         }
         guard var repo = path, !repo.isEmpty else { return nil }
         if repo.hasSuffix(".git") { repo.removeLast(4) }
+        return repo
+    }
+
+    /// GitHub's new-PR page for `branch`, from a remote URL. Nil for other hosts.
+    static func compareURL(remote: String, base: String?, branch: String) -> URL? {
+        guard let repo = githubRepo(remote: remote) else { return nil }
         let range = base.map { "\($0)...\(branch)" } ?? branch
         let encoded = range.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "?#"))) ?? range
         return URL(string: "https://github.com/\(repo)/compare/\(encoded)?expand=1")
