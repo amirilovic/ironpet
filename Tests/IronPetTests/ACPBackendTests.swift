@@ -99,6 +99,17 @@ final class ACPBackendTests: XCTestCase {
                 reply = json.loads(sys.stdin.readline()); log.write(json.dumps(reply) + "\n"); log.flush()
                 ok = reply["result"]["outcome"].get("optionId") == "yes"
                 update({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed" if ok else "failed"})
+            if "ELICIT" in text:
+                props = {"question_0": {"type": "string", "title": "Library", "description": "Which one?", "oneOf": [{"const": "A", "title": "A", "description": "first"}, {"const": "B", "title": "B"}]},
+                         "question_0_custom": {"type": "string", "title": "Other"}}
+                if "NESTED" in text:
+                    props = {"x": {"type": "object", "properties": {"y": {"type": "string"}}}}
+                send({"jsonrpc": "2.0", "id": 901, "method": "elicitation/create", "params": {"mode": "form", "sessionId": sid,
+                      "message": "Which library?", "requestedSchema": {"type": "object", "properties": props}}})
+                reply = json.loads(sys.stdin.readline()); log.write(json.dumps(reply) + "\n"); log.flush()
+                update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "got " + reply["result"]["action"]}})
+                send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+                continue
             update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pid=%d" % os.getpid()}})
             if mode == "usage":
                 turns += 1
@@ -302,6 +313,68 @@ final class ACPBackendTests: XCTestCase {
             backend.shutdown()
             try? FileManager.default.removeItem(at: dir.appendingPathComponent("log"))
         }
+    }
+
+    private func elicitationReplies() -> [JSON] {
+        logged().filter { $0["id"] as? Int == 901 }.compactMap { $0["result"] as? JSON }
+    }
+
+    func testClaudeAdvertisesFormElicitationButNotUrl() {
+        let claude = ACPAgent(id: "claude", name: "Claude Code", command: "claude", args: [], helper: nil)
+        let elicitation = ACPBackend.clientCapabilities(for: claude)["elicitation"] as? JSON
+        XCTAssertNotNil(elicitation?["form"] as? JSON)
+        XCTAssertNil(elicitation?["url"])
+        XCTAssertNil(ACPBackend.clientCapabilities(for: agent)["elicitation"])
+    }
+
+    func testSubmittedFormIsAnsweredWithAcceptAndContent() async throws {
+        let backend = ACPBackend(agent: agent)
+        var asked: ElicitationForm?
+        backend.onElicitation = { form, respond in
+            asked = form
+            respond(.accept(form.content(["question_0": .one("B"), "question_0_custom": .text("  ")])))
+        }
+        let events = await run(backend, turn("ELICIT"))
+        XCTAssertEqual(asked?.message, "Which library?")
+        XCTAssertEqual(text(events), "got accept")
+        let reply = try XCTUnwrap(elicitationReplies().first)
+        XCTAssertEqual(reply["action"] as? String, "accept")
+        XCTAssertEqual(NSDictionary(dictionary: reply["content"] as? JSON ?? [:]), ["question_0": "B"])
+        backend.shutdown()
+    }
+
+    func testSkippedFormIsAnsweredWithDecline() async {
+        let backend = ACPBackend(agent: agent)
+        backend.onElicitation = { _, respond in respond(.decline) }
+        let events = await run(backend, turn("ELICIT"))
+        XCTAssertEqual(text(events), "got decline")
+        XCTAssertEqual(elicitationReplies().first?["action"] as? String, "decline")
+        backend.shutdown()
+    }
+
+    func testCancellingTheTurnCancelsTheOpenFormOnce() async throws {
+        let backend = ACPBackend(agent: agent)
+        var late: ((ElicitationReply) -> Void)?
+        backend.onElicitation = { _, respond in late = respond }
+        let running = Task { await backend.runTurn(turn("ELICIT")) { _ in } }
+        for _ in 0..<100 where late == nil { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertNotNil(late)
+        backend.cancel()
+        await running.value
+        late?(.accept(["question_0": "A"]))
+        let replies = elicitationReplies()
+        XCTAssertEqual(replies.map { $0["action"] as? String }, ["cancel"], "the pending entry is gone, so a late answer sends nothing")
+        backend.shutdown()
+    }
+
+    func testFormWithNestedObjectIsDeclinedWithoutAsking() async {
+        let backend = ACPBackend(agent: agent)
+        var asked = false
+        backend.onElicitation = { _, _ in asked = true }
+        let events = await run(backend, turn("ELICIT NESTED"))
+        XCTAssertFalse(asked)
+        XCTAssertEqual(text(events), "got decline")
+        backend.shutdown()
     }
 
     func testCancelSendsSessionCancelAndKeepsTheProcess() async throws {

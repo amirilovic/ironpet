@@ -155,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chat.onApprovalNeeded = { [weak self] approval in
             self?.announcer.approval(id: approval.id, title: approval.title, detail: approval.detail)
         }
+        chat.onFormNeeded = { [weak self] title, detail in self?.announcer.chat(title, detail: detail) }
         chat.onApprovalResolved = { [weak self] id in self?.announcer.clearApproval(id: id) }
         chat.objectWillChange
             .receive(on: RunLoop.main)

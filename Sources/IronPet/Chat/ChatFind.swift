@@ -46,6 +46,8 @@ enum ChatFind {
             return Markdown.segments(of: text)
         case .tool(let summary, _):
             return [displayed(summary)]
+        case .form(let record):
+            return [record.message] + record.lines.flatMap { [$0.question, $0.answer] }
         case .screenshot:
             return []
         }
