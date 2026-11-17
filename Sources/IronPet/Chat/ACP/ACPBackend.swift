@@ -114,6 +114,12 @@ final class ACPBackend {
     /// Added to the agent process's environment. Read when the process starts, so set it before the first turn.
     var extraEnvironment: [String: String] = [:]
 
+    /// Task runs: the session must be in a mode where the agent asks ironpet before it changes anything. When no offered
+    /// mode does, or switching fails, the turn fails; a later switch to a mode that does not ask stops the agent.
+    var requiresAskingMode = false
+    /// Why the agent was stopped for leaving its asking mode. It replaces the closed connection's error.
+    private var modeViolation: String?
+
     /// MCP servers every unrestricted session gets, as ACP `mcpServers` entries. ironpet's own automation tools go here.
     nonisolated(unsafe) static var defaultMCPServers: () -> [JSON] = { [] }
 
@@ -287,6 +293,7 @@ final class ACPBackend {
     }
 
     private func describe(_ error: Error) -> String {
+        if let modeViolation { return modeViolation }
         let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         if timedOut { return "The agent did not answer in time. \(text)" }
         return text
@@ -297,6 +304,7 @@ final class ACPBackend {
         client = nil
         sessionReady = false
         timedOut = false
+        modeViolation = nil
         let launch = try Self.launch(for: agent)
         let transport = ACPProcessTransport(executable: launch.executable, arguments: launch.arguments,
                                             environment: launch.environment.merging(extraEnvironment) { _, extra in extra },
@@ -410,23 +418,26 @@ final class ACPBackend {
             sessionID = existing
             replaying = true
             defer { replaying = false }
+            var loaded: JSON?
             do {
                 var load = params
                 load["sessionId"] = existing
-                let result = try await guarded(client, seconds: 60) { try await client.request("session/load", load) }
-                await useAskingMode(result)
-                readModels(result)
-                sessionReady = true
-                freshSession = false
-                // What the session spent before this run is not this run's cost.
-                costAccounted = reportedCost
-                return
+                loaded = try await guarded(client, seconds: 60) { try await client.request("session/load", load) }
             } catch let error as ACPError where error.isAuthRequired || client.isClosed {
                 throw error
             } catch {
                 NSLog("ironpet: \(agent.name) could not load session \(existing): \(error.localizedDescription). Starting a new one.")
                 ChatLog.note("session/load failed for \(existing): \(error.localizedDescription). Starting a new agent session, transcript kept")
                 sessionID = nil
+            }
+            if let loaded {
+                try await useAskingMode(loaded)
+                readModels(loaded)
+                sessionReady = true
+                freshSession = false
+                // What the session spent before this run is not this run's cost.
+                costAccounted = reportedCost
+                return
             }
         }
         let result = try await guarded(client, seconds: 60) { try await client.request("session/new", params) }
@@ -435,7 +446,12 @@ final class ACPBackend {
         sessionReady = true
         freshSession = true
         emit(.session(id))
-        await useAskingMode(result)
+        do {
+            try await useAskingMode(result)
+        } catch {
+            sessionReady = false
+            throw error
+        }
         readModels(result)
     }
 
@@ -451,15 +467,63 @@ final class ACPBackend {
         return ["default", "auto"].first { available.contains($0) && $0 != current }
     }
 
-    private func useAskingMode(_ result: JSON) async {
-        guard let client, let sessionID, let block = result["modes"] as? JSON,
-              let target = Self.askingMode(current: block["currentModeId"] as? String,
-                                           available: (block["availableModes"] as? [JSON] ?? []).compactMap { $0["id"] as? String }) else { return }
+    struct RunModeError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    /// Codex's `agent` mode lets Codex's own reviewer answer escalations and `workspace-write` edits the workspace without
+    /// asking. `read-only` sends every edit and escalation to the client (codex-acp 2.6.0 `AgentMode.ReadOnly`).
+    nonisolated static let codexRunMode = "read-only"
+
+    /// The mode a task run switches to, or nil when the current one already asks. Throws when no offered mode asks.
+    /// Unlike `askingMode`, `auto` counts as permissive even with no `default` next to it, and Codex must be in `codexRunMode`.
+    nonisolated static func runMode(agent: String, current: String?, available: [String]) throws -> String? {
+        if agent == "codex" {
+            guard available.contains(codexRunMode) else {
+                throw RunModeError(message: "Codex did not offer its \(codexRunMode) mode, so a task run cannot make it ask before each change.")
+            }
+            return current == codexRunMode ? nil : codexRunMode
+        }
+        guard let current, permissiveModes.contains(current) || current == "auto" else { return nil }
+        guard available.contains("default") else {
+            throw RunModeError(message: "The agent is in its \(current) mode and offers no mode that asks before each change, so a task run cannot use it.")
+        }
+        return "default"
+    }
+
+    private func useAskingMode(_ result: JSON) async throws {
+        let block = result["modes"] as? JSON
+        let current = block?["currentModeId"] as? String
+        let available = (block?["availableModes"] as? [JSON] ?? []).compactMap { $0["id"] as? String }
+        guard requiresAskingMode else {
+            guard block != nil, let target = Self.askingMode(current: current, available: available) else { return }
+            try? await switchMode(to: target)
+            return
+        }
+        guard let target = try Self.runMode(agent: agent.id, current: current, available: available) else { return }
+        try await switchMode(to: target, required: true)
+    }
+
+    private func switchMode(to target: String, required: Bool = false) async throws {
+        guard let client, let sessionID else { return }
         do {
             _ = try await client.request("session/set_mode", ["sessionId": sessionID, "modeId": target])
         } catch {
-            NSLog("ironpet: could not switch \(agent.name) to its asking mode \(target): \(error.localizedDescription). It may run tools without asking.")
+            guard required else {
+                NSLog("ironpet: could not switch \(agent.name) to its asking mode \(target): \(error.localizedDescription). It may run tools without asking.")
+                return
+            }
+            throw RunModeError(message: "\(agent.name) did not switch to its \(target) mode, which a task run needs so it asks before each change: \(error.localizedDescription)")
         }
+    }
+
+    /// A task run's agent that switches itself to a mode that does not ask is stopped, so it cannot change files unasked.
+    private func modeChanged(to mode: String) {
+        guard requiresAskingMode, (try? Self.runMode(agent: agent.id, current: mode, available: [Self.codexRunMode, "default"])) != nil else { return }
+        modeViolation = "\(agent.name) switched itself to its \(mode) mode, which does not ask before changes, so ironpet stopped it."
+        NSLog("ironpet: \(modeViolation ?? "")")
+        client?.close()
     }
 
     private func readModels(_ result: JSON) {
@@ -545,6 +609,7 @@ final class ACPBackend {
             reportedCost = (amount, currency)
         }
         guard !replaying else { return }
+        if update["sessionUpdate"] as? String == "current_mode_update", let mode = update["currentModeId"] as? String { modeChanged(to: mode) }
         switch update["sessionUpdate"] as? String {
         case "agent_message_chunk":
             // A subagent's own chatter is not part of the main reply.
