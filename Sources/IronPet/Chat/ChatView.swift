@@ -1130,12 +1130,17 @@ private struct UserBubble: View {
     var source: String?
     var find: ChatFind.RowHighlight?
     @ObservedObject private var paths = PathCache.shared
+    /// Per-message view state, not persisted.
+    @State private var expanded = false
 
     var body: some View {
+        let preview = MessageCollapse.preview(of: text)
+        // A row with find matches shows the whole text, so the highlighted occurrences exist on screen.
+        let showsAll = expanded || find != nil
         VStack(alignment: .trailing, spacing: 3) {
             VStack(alignment: .leading, spacing: 6) {
                 if let reply { ReplyQuote(reply: reply, onUser: true, tap: onQuoteTap) }
-                let linked = FilePathLinks.link(AttributedString(text), underline: true)
+                let linked = FilePathLinks.link(AttributedString(showsAll ? text : (preview?.text ?? text)), underline: true)
                 ChatFind.text(linked, segment: 0, find: find)
                     .font(.system(size: 13.5))
                     .linkCursor(linked, size: 13.5)
@@ -1147,6 +1152,17 @@ private struct UserBubble: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.accentColor, in: UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 5, topTrailingRadius: 16))
+            if let preview {
+                Button {
+                    expanded.toggle()
+                } label: {
+                    Text(showsAll ? "Show less" : "Show more · \(preview.hiddenCharacters.formatted()) characters")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(find != nil)
+            }
             HStack(spacing: 4) {
                 ReplyButton(visible: hovering, action: onReply)
                 if source == ChatSession.telegramOrigin {
