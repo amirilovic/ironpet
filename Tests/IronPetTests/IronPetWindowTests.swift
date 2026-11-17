@@ -43,6 +43,18 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), signals: signals(0), tasks: tasks()), .agents)
     }
 
+    func testTasksWaitingOnSomeoneElseDoNotOpenTasks() throws {
+        let list = tasks()
+        _ = try list.create(title: "Send the deck", source: .meeting, waitingOn: "Ana", by: "user")
+        _ = try list.create(title: "Approve the budget", status: .needsYou, source: .agent, waitingOn: "Them", by: "agent:mcp")
+        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), signals: signals(0), tasks: list), .agents)
+        XCTAssertEqual(list.activeCount, 0)
+
+        list.suggest([("Share the results", nil, "Priya")], meeting: URL(fileURLWithPath: "/tmp/meeting"))
+        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), signals: signals(0), tasks: list), .tasks,
+                       "a suggestion still waits on the user's Add or Skip")
+    }
+
     func testBubblesWaitOnTheSectionsThatShowWhatTheyWouldAnnounce() {
         XCTAssertEqual(IronPetSection.allCases.filter(\.hidesBubbles), [.chat, .agents, .alerts, .tasks, .actions])
     }

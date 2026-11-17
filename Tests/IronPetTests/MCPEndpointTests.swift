@@ -79,6 +79,28 @@ final class MCPEndpointTests: XCTestCase {
         XCTAssertFalse(open.text.contains("review-the-release-notes"), "done tasks are left out by default")
     }
 
+    func testWaitingOnIsInTheSchemaAndRoundTrips() async throws {
+        let reply = try await rpc("tools/list", tasks: nil)
+        let tools = try XCTUnwrap((reply["result"] as? [String: Any])?["tools"] as? [[String: Any]])
+        func properties(_ name: String) -> [String: Any] {
+            let schema = tools.first { $0["name"] as? String == name }?["inputSchema"] as? [String: Any]
+            return schema?["properties"] as? [String: Any] ?? [:]
+        }
+        XCTAssertNotNil(properties("tasks_create")["waiting_on"])
+        XCTAssertNotNil((properties("tasks_update")["changes"] as? [String: Any]).flatMap { $0["properties"] as? [String: Any] }?["waiting_on"])
+
+        let created = try await tool("tasks_create", ["title": "Send the deck", "waiting_on": "Ana"], tasks: tasks)
+        XCTAssertFalse(created.isError, created.text)
+        XCTAssertEqual(tasks.task("send-the-deck")?.waitingOn, "Ana")
+        let got = try await tool("tasks_get", ["id": "send-the-deck"], tasks: tasks)
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(got.text.utf8)) as? [String: Any])
+        XCTAssertEqual(object["waiting_on"] as? String, "Ana")
+
+        let cleared = try await tool("tasks_update", ["id": "send-the-deck", "changes": ["waiting_on": NSNull()]], tasks: tasks)
+        XCTAssertFalse(cleared.isError, cleared.text)
+        XCTAssertNil(tasks.task("send-the-deck")?.waitingOn)
+    }
+
     func testStoreValidationErrorsReachTheAgent() async throws {
         let bad = try await tool("tasks_create", ["title": "  "], tasks: tasks)
         XCTAssertTrue(bad.isError)

@@ -34,11 +34,15 @@ struct TaskListView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         suggestions
                         ForEach([TaskStatus.needsYou, .inProgress, .backlog], id: \.self) { status in
-                            let items = open.filter { $0.status == status }
+                            let items = open.filter { $0.waitingOn == nil && $0.status == status }
                             if !items.isEmpty {
                                 SectionTitle(status.title)
                                 ForEach(items) { row($0) }
                             }
+                        }
+                        if !waiting.isEmpty {
+                            SectionTitle("Waiting on others")
+                            ForEach(waiting) { row($0) }
                         }
                         doneSection
                     }
@@ -55,6 +59,8 @@ struct TaskListView: View {
 
     private var open: [TaskItem] { tasks.ordered.filter { $0.status != .done } }
 
+    private var waiting: [TaskItem] { open.filter { $0.waitingOn != nil } }
+
     /// Done tasks stay in the database for `tasks.keepDoneDays`; the list only shows the last week.
     private var done: [TaskItem] {
         let cutoff = Date().addingTimeInterval(-7 * 86_400)
@@ -63,7 +69,7 @@ struct TaskListView: View {
 
     @ViewBuilder private var suggestions: some View {
         if !tasks.suggestions.isEmpty {
-            SectionHeader("Suggestions", action: "Add all", help: "Add every suggestion to the backlog") { tasks.acceptAll() }
+            SectionHeader("Suggestions", action: "Add all", help: "Add every suggestion to the task list") { tasks.acceptAll() }
             ForEach(tasks.suggestions) { suggestion in
                 SuggestionRow(suggestion: suggestion,
                               onAdd: { _ = try? tasks.accept(suggestion.id) },
@@ -206,6 +212,10 @@ private struct TaskRow: View {
                 .font(.system(size: 10))
                 .accessibilityLabel("From \(task.source.rawValue)")
             Text((task.closed ?? task.updated).formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
+            if let waiting = task.waitingLabel {
+                Text("·").accessibilityHidden(true)
+                Label(waiting, systemImage: "person.badge.clock").labelStyle(DueLabelStyle())
+            }
             if let due = task.dueLabel(now: now) {
                 Text("·").accessibilityHidden(true)
                 Label(due, systemImage: overdue ? "exclamationmark.circle.fill" : "calendar")
@@ -262,6 +272,10 @@ private struct SuggestionRow: View {
                 HStack(spacing: 5) {
                     Image(systemName: suggestion.source.symbol).font(.system(size: 10)).accessibilityHidden(true)
                     Text("\(suggestion.originLabel), \(suggestion.created.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))")
+                    if let waiting = suggestion.waitingLabel {
+                        Text("·").accessibilityHidden(true)
+                        Label(waiting, systemImage: "person.badge.clock").labelStyle(DueLabelStyle())
+                    }
                     if let due = suggestion.due {
                         Text("·").accessibilityHidden(true)
                         Label("Due \(due)", systemImage: "calendar").labelStyle(DueLabelStyle())
@@ -272,7 +286,7 @@ private struct SuggestionRow: View {
                 .lineLimit(1)
                 HStack(spacing: 6) {
                     Button("Add", action: onAdd)
-                        .help("Add to the backlog")
+                        .help(suggestion.waitingOn == nil ? "Add to the backlog" : "Add to Waiting on others")
                     Button("Skip", action: onSkip)
                         .help("Dismiss this suggestion")
                 }

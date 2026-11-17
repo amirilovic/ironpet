@@ -121,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         meetings.regenerator.onReplaced = { [weak self] replaced in
             self?.meetings.reload()
             // Only items the old summary did not have: the user may have skipped the others.
-            self?.offerTasks(ActionItems.newMine(old: replaced.previousSummary, new: replaced.summary), meeting: replaced.folder)
+            self?.offerTasks(ActionItems.newSuggestions(old: replaced.previousSummary, new: replaced.summary), meeting: replaced.folder)
         }
         meeting.regenerateSummaryOf = { [weak self] folder in
             guard let self, let record = MeetingLibrary.record(folder) else { return false }
@@ -868,13 +868,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// The picker is a small window. Once recording starts, the status lives in a pet bubble. The user can hide that
     /// bubble, and the pet then shows a Recording button that brings it back.
-    /// Offers the user's own action items from a meeting summary as tasks. The text stays data: it is stored as
-    /// suggestions and shown, never sent to an agent.
+    /// Offers the action items from a meeting summary as tasks: the user's own, and the ones they wait on from others. The
+    /// text stays data: it is stored as suggestions and shown, never sent to an agent.
     private func suggestTasks(fromSummary text: String, meeting: URL) {
-        offerTasks(ActionItems.mine(text), meeting: meeting)
+        offerTasks(ActionItems.suggestions(text), meeting: meeting)
     }
 
-    private func offerTasks(_ items: [(title: String, due: String?)], meeting: URL) {
+    private func offerTasks(_ items: [(title: String, due: String?, waitingOn: String?)], meeting: URL) {
         guard config.config.tasks.meetingSuggestions, let tasks = TaskStore.shared, !items.isEmpty else { return }
         offerSuggestions(tasks.suggest(items, meeting: meeting))
     }

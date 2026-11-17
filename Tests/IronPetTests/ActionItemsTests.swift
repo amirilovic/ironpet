@@ -39,10 +39,19 @@ final class ActionItemsTests: XCTestCase {
     }
 
     func testMineKeepsOnlyMyItemsInAnyCase() {
-        let mine = ActionItems.mine(summary)
+        let mine = ActionItems.suggestions(summary).filter { $0.waitingOn == nil }
         XCTAssertEqual(mine.map(\.title), ["Send the deck to Sam", "Fix login (the SSO one)", "Draft the agenda", "Call   the bank",
                                            "Pay the invoice"])
         XCTAssertEqual(mine.map(\.due), ["2026-11-20", nil, "tomorrow", "Monday", "Nov 20, 2026"])
+    }
+
+    func testOthersItemsAreWaitingOnTheirOwnerAndUnownedOnesAreLeftOut() {
+        let suggested = ActionItems.suggestions(summary)
+        XCTAssertEqual(suggested.map(\.title), ["Send the deck to Sam", "Review the budget", "Book the venue", "Fix login (the SSO one)",
+                                                "Draft the agenda", "Call   the bank", "Pay the invoice"])
+        XCTAssertEqual(suggested.map(\.waitingOn), [nil, "Them", "Priya", nil, nil, nil, nil])
+        XCTAssertEqual(suggested[2].due, "Friday")
+        XCTAssertEqual(ActionItems.suggestions("## Action items\n- [ ] Send the slides (owner: Ana, Me)\n").map(\.waitingOn), ["Ana"])
     }
 
     func testNoneAndMissingSectionGiveNothing() {
@@ -53,7 +62,7 @@ final class ActionItemsTests: XCTestCase {
 
     func testOnlyTheActionItemsSectionCounts() {
         let text = "## Decisions\n- [ ] A (owner: Me)\n### Action Items\n- [ ] B (owner: Me)\n# Next\n- [ ] C (owner: Me)\n"
-        XCTAssertEqual(ActionItems.mine(text).map(\.title), ["B"])
+        XCTAssertEqual(ActionItems.suggestions(text).map(\.title), ["B"])
     }
 
     func testIgnoresPlainBulletsAndEmptyBoxes() {

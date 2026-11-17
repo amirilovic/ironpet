@@ -264,9 +264,10 @@ enum PreviewRenderer {
         let store = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database, now: { clock })
         let day: TimeInterval = 86_400
         func add(_ title: String, _ status: TaskStatus, _ source: TaskSource, ago: TimeInterval, due: Date? = nil,
-                 notes: String = "", links: [TaskLink] = []) {
+                 notes: String = "", links: [TaskLink] = [], waitingOn: String? = nil) {
             clock = Date().addingTimeInterval(-ago)
-            _ = try? store.create(title: title, notes: notes, status: status, source: source, due: due, links: links, by: "agent:mcp")
+            _ = try? store.create(title: title, notes: notes, status: status, source: source, due: due, links: links,
+                                  waitingOn: waitingOn, by: "agent:mcp")
         }
         let today = Calendar.current.startOfDay(for: Date())
         add("Approve the staging deploy for the rate limiter", .needsYou, .agent, ago: 600,
@@ -279,11 +280,13 @@ enum PreviewRenderer {
         add("Write the release notes for 2.4", .backlog, .meeting, ago: day, due: today.addingTimeInterval(4 * day),
             links: [TaskLink(kind: .file, ref: "/Users/you/.ironpet/meetings/2026-11-15-1000", label: "Meeting")])
         add("Upgrade the docs site to Node 20", .backlog, .cli, ago: 2 * day)
+        add("Send the updated pricing deck", .backlog, .meeting, ago: day + 1800, due: today.addingTimeInterval(3 * day),
+            links: [TaskLink(kind: .file, ref: "/Users/you/.ironpet/meetings/2026-11-15-1000", label: "Meeting")], waitingOn: "Ana")
         add("Rotate the Sentry token", .done, .user, ago: 2 * 3600)
         add("Answer Maya about the onboarding copy", .done, .meeting, ago: day + 3600)
         add("Remove the old feature flags", .done, .agent, ago: 3 * day)
         clock = Date().addingTimeInterval(-900)
-        store.suggest([("Send the design review notes to the team", "Friday")],
+        store.suggest([("Send the design review notes to the team", "Friday", nil), ("Share the load test results", nil, "Priya")],
                       meeting: URL(fileURLWithPath: "/Users/you/.ironpet/meetings/2026-11-16-1500"))
         clock = Date().addingTimeInterval(-300)
         store.suggest([TaskSuggestion.Draft(key: "msg-1", title: "Reply to Sam about the Q4 budget", due: nil,
