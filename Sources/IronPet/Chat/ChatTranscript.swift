@@ -8,6 +8,8 @@ struct ChatTranscript {
         var activity: String?
         /// True when an update outside a turn changed a saved item.
         var save = false
+        /// False when the event changed no item, e.g. an update for a tool row that is not in the transcript.
+        var changed = false
     }
 
     private var toolItems: [String: UUID] = [:]
@@ -24,6 +26,7 @@ struct ChatTranscript {
         switch event {
         case .assistant(let text):
             if running { outcome.activity = "Writing" }
+            outcome.changed = true
             if case .assistant(let previous) = items.last?.kind, running || items.last?.id == backgroundReply {
                 items[items.count - 1].kind = .assistant(previous + text)
             } else {
@@ -37,11 +40,13 @@ struct ChatTranscript {
             toolBase[id] = summary
             toolItems[id] = item.id
             items.append(item)
+            outcome.changed = true
         case .toolUpdated(let id, let summary):
             if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
                case .tool(_, let ok) = items[index].kind {
                 toolBase[id] = summary
                 items[index].kind = .tool(composedSummary(id), ok: ok)
+                outcome.changed = true
             }
         case .subagentTool(let parent, let id, let summary, let ok):
             // A subagent's calls count on its own row. They never open an item, so the reply's text keeps one message.
@@ -52,6 +57,7 @@ struct ChatTranscript {
             if let itemID = toolItems[parent], let index = items.firstIndex(where: { $0.id == itemID }),
                case .tool(_, let parentOK) = items[index].kind {
                 items[index].kind = .tool(composedSummary(parent), ok: parentOK)
+                outcome.changed = true
             }
             outcome.save = !running
         case .toolFinished(let id, let ok):
@@ -59,6 +65,7 @@ struct ChatTranscript {
             if let itemID = toolItems[id], let index = items.firstIndex(where: { $0.id == itemID }),
                case .tool(let summary, _) = items[index].kind {
                 items[index].kind = .tool(summary, ok: ok)
+                outcome.changed = true
             }
             outcome.save = !running
         default:

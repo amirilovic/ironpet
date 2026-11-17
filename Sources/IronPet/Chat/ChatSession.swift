@@ -88,7 +88,9 @@ final class ChatSession: ObservableObject {
         /// Identical requests share one card and one decision.
         var responders: [(ApprovalDecision) -> Void]
 
-        var key: String { title + "\u{0}" + detail }
+        var key: String { Self.key(title: title, detail: detail) }
+
+        static func key(title: String, detail: String) -> String { title + "\u{0}" + detail }
 
         func respond(_ decision: ApprovalDecision) {
             responders.forEach { $0(decision) }
@@ -230,6 +232,22 @@ final class ChatSession: ObservableObject {
     private var transcript = ChatTranscript()
     /// Kept so continuing a task run's thread in the chat still links it to the task.
     private var threadTask: String?
+    /// Where task runs keep their copies. A test points it elsewhere.
+    var taskWorktrees = Paths.worktrees
+
+    /// A thread a task run made, still in its copy: the run's rules hold here too (no push or PR, shared git setup and
+    /// edits outside the copy ask). Nil for every other thread.
+    var taskRunScope: RunScope? {
+        guard threadTask != nil, let workspace else { return nil }
+        let root = RunScope.resolve(taskWorktrees.path)
+        let folder = RunScope.resolve(workspace.path)
+        return folder.hasPrefix(root + "/") ? RunScope(root: workspace) : nil
+    }
+
+    /// The push block a task run's agent gets, when the open thread is one.
+    private var agentEnvironment: [String: String] {
+        taskRunScope == nil ? [:] : GitWorktree.pushBlockEnvironment(remotes: [])
+    }
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
     private var decided: [String: Bool] = [:]
     let voice = VoiceController()
@@ -602,7 +620,7 @@ final class ChatSession: ObservableObject {
             return
         }
         if agent.id == "cursor", Config.load().config.integrations.shareMCPSignIns { MCPAuthSharing.prepare(workspace: turn.workspace) }
-        let backend = acp?.agent == agent ? acp! : makeBackend()
+        let backend = acp?.agent == agent && acp?.extraEnvironment == agentEnvironment ? acp! : makeBackend()
         Task { [weak self] in
             await backend.runTurn(turn) { event in self?.handle(event, turn: id) }
         }
@@ -742,6 +760,7 @@ final class ChatSession: ObservableObject {
         acp?.shutdown()
         let backend = ACPBackend(agent: agent)
         backend.usageFeature = .chat
+        backend.extraEnvironment = agentEnvironment
         backend.onPermission = { [weak self] call, respond in self?.handlePermission(call, respond: respond) }
         backend.onBackground = { [weak self] event in self?.handleBackground(event) }
         acp = backend
@@ -817,7 +836,7 @@ final class ChatSession: ObservableObject {
 
     /// Answers the agent's `session/request_permission`: either straight away or through an approval card.
     func handlePermission(_ call: ACPToolCall, respond: @escaping (ApprovalDecision) -> Void) {
-        switch ApprovalRules.policy(for: call, auto: autoMode) {
+        switch ApprovalRules.policy(for: call, auto: autoMode, run: taskRunScope) {
         case .allow:
             respond(.allow)
         case .ask(let title, let detail):
@@ -949,7 +968,9 @@ final class ChatSession: ObservableObject {
     }
 
     private func applyTranscript(_ event: AgentEvent) {
-        let outcome = transcript.apply(event, to: &items, running: isRunning)
+        var next = items
+        let outcome = transcript.apply(event, to: &next, running: isRunning)
+        if outcome.changed { items = next }
         if let next = outcome.activity { activity = next }
         if outcome.save { saveThread() }
     }

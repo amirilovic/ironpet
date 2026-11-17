@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import IronPet
 
@@ -59,17 +60,67 @@ final class ThreadRestoreTests: XCTestCase {
                        "Running `npm test`")
         _ = transcript.apply(.subagentTool(parent: "1", id: "s1", summary: "Read a.ts", ok: nil), to: &items, running: true)
         _ = transcript.apply(.subagentTool(parent: "1", id: "s1", summary: "Read a.ts", ok: true), to: &items, running: true)
-        XCTAssertEqual(transcript.apply(.toolFinished(id: "1", ok: true), to: &items, running: true), .init(activity: "Thinking"))
+        XCTAssertEqual(transcript.apply(.toolFinished(id: "1", ok: true), to: &items, running: true), .init(activity: "Thinking", changed: true))
         XCTAssertEqual(describe(items), ["a:Hello", "t:Ran `npm test` · 1 tool call:true"])
     }
 
     func testTranscriptOutsideATurnOpensANewReplyAndAsksToSave() {
         var transcript = ChatTranscript()
         var items = [ChatSession.Item(kind: .assistant("Done"))]
-        XCTAssertEqual(transcript.apply(.assistant("Late"), to: &items, running: false), .init())
+        XCTAssertEqual(transcript.apply(.assistant("Late"), to: &items, running: false), .init(changed: true))
         _ = transcript.apply(.assistant(" result"), to: &items, running: false)
         _ = transcript.apply(.toolStarted(id: "2", summary: "Edited a.ts"), to: &items, running: false)
-        XCTAssertEqual(transcript.apply(.toolFinished(id: "2", ok: false), to: &items, running: false), .init(save: true))
+        XCTAssertEqual(transcript.apply(.toolFinished(id: "2", ok: false), to: &items, running: false), .init(save: true, changed: true))
         XCTAssertEqual(describe(items), ["a:Done", "a:Late result", "t:Edited a.ts:false"])
+        XCTAssertEqual(transcript.apply(.toolFinished(id: "unknown", ok: true), to: &items, running: false), .init(save: true),
+                       "an update for a row that is not there changes nothing")
+    }
+
+    @MainActor
+    func testATaskRunThreadKeepsTheRunRulesInTheChat() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-chat-run-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let worktrees = base.appendingPathComponent("worktrees")
+        let copy = worktrees.appendingPathComponent("app-1a2b3c4d/fix-login")
+        try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
+        let session = ChatSession(restore: false)
+        session.taskWorktrees = worktrees
+        session.autoMode = true
+        var answers: [ApprovalDecision] = []
+        func ask(_ call: ACPToolCall) { session.handlePermission(call) { answers.append($0) } }
+        func shell(_ command: String) -> ACPToolCall { ACPToolCall(id: UUID().uuidString, title: command, kind: "execute", rawInput: ["command": command]) }
+
+        session.open(ChatThread(id: "t-run", title: "Task: Fix login", workspace: copy.path, updatedAt: Date(), items: [], agent: "none", task: "fix-login"))
+        XCTAssertEqual(session.taskRunScope, RunScope(root: copy))
+        ask(shell("git push origin HEAD"))
+        XCTAssertEqual(answers.last?.allow, false)
+        XCTAssertEqual(answers.last?.message, ApprovalRules.refusedInRun)
+        ask(shell("npm test"))
+        XCTAssertEqual(answers.last?.allow, true, "Auto still runs ordinary commands in the copy")
+        let count = answers.count
+        ask(shell("git config remote.origin.url https://evil.example/app.git"))
+        ask(ACPToolCall(id: "e", title: "Edit", kind: "edit", rawInput: ["file_path": base.appendingPathComponent("elsewhere.txt").path]))
+        XCTAssertEqual(answers.count, count, "shared git setup and edits outside the copy wait on a card, even in Auto")
+        XCTAssertEqual(session.approvals.map(\.title), ["Change the project's shared git setup?", "Edit elsewhere.txt outside the task's copy?"])
+        session.stop()
+
+        session.open(ChatThread(id: "t-moved", title: "Task: Fix login", workspace: base.path, updatedAt: Date(), items: [], agent: "none", task: "fix-login"))
+        XCTAssertNil(session.taskRunScope, "after the copy is removed the thread points at the user's own folder")
+        session.open(ChatThread(id: "t-chat", title: "Chat", workspace: copy.path, updatedAt: Date(), items: [], agent: "none"))
+        XCTAssertNil(session.taskRunScope, "a chat that is not a task's thread")
+    }
+
+    @MainActor
+    func testANoOpEventDoesNotPublishTheItems() {
+        let session = ChatSession(restore: false)
+        session.items = [ChatSession.Item(kind: .assistant("Done"))]
+        var published = 0
+        let watch = session.$items.dropFirst().sink { _ in published += 1 }
+        session.handleBackground(.toolFinished(id: "unknown", ok: true))
+        session.handleBackground(.toolUpdated(id: "unknown", summary: "x"))
+        XCTAssertEqual(published, 0)
+        session.handleBackground(.assistant("Late"))
+        XCTAssertEqual(published, 1)
+        watch.cancel()
     }
 }
