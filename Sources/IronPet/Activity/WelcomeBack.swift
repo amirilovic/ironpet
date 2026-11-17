@@ -65,12 +65,13 @@ final class WelcomeBack {
         summarize(DateInterval(start: since, end: max(since, now)))
     }
 
-    /// Builds the summary of `window` and shows it, unless there is nothing to say or it would only repeat what is on screen.
+    /// Builds the summary of `window` and shows it, unless there is nothing to say, it would only repeat what is on screen,
+    /// or a daily brief or recap appeared in the last 30 minutes. One that is still up from earlier does not count: it
+    /// stays until midnight.
     func summarize(_ window: DateInterval) {
         guard env.isEnabled() else { return }
         let now = env.now()
-        if bubbles.bubbles.contains(where: { $0.id.hasPrefix(Self.digestPrefix) })
-            || bubbles.lastShown(prefix: Self.digestPrefix).map({ now.timeIntervalSince($0) < Self.digestQuiet }) == true { return }
+        if bubbles.lastShown(prefix: Self.digestPrefix).map({ now.timeIntervalSince($0) < Self.digestQuiet }) == true { return }
         let events = log.events(in: window)
         var state = live()
         // A task due bubble waits for Done or Snooze, so it keeps its own place.

@@ -241,13 +241,13 @@ final class WelcomeBackTests: XCTestCase {
         XCTAssertTrue(f.shown.isEmpty)
     }
 
-    func testADailyBriefOnScreenOrRecentSkipsTheSummary() throws {
+    func testADailyBriefShownInTheLast30MinutesSkipsTheSummary() throws {
         let f = try fixture(live: .init(sessions: ["claude:1": .sessionDone, "claude:2": .sessionDone]))
         awayAndBack(f) {
             done(f, "claude:1"); done(f, "claude:2")
             f.bubbles.show(Bubble(id: "digest:brief", symbol: "sun.horizon", tint: .accentColor, title: "Morning brief"))
         }
-        XCTAssertTrue(f.shown.isEmpty, "on screen")
+        XCTAssertTrue(f.shown.isEmpty, "just shown")
 
         f.bubbles.dismiss("digest:brief")
         f.clock.now = f.clock.now.addingTimeInterval(20 * 60)
@@ -257,6 +257,16 @@ final class WelcomeBackTests: XCTestCase {
         f.clock.now = f.clock.now.addingTimeInterval(11 * 60)
         f.welcome.summarize(DateInterval(start: start, end: f.clock.now))
         XCTAssertEqual(f.shown.count, 1, "over 30 minutes ago")
+    }
+
+    func testABriefStillOnScreenHoursLaterDoesNotSkipTheSummary() throws {
+        let f = try fixture(live: .init(sessions: ["claude:1": .sessionDone, "claude:2": .sessionDone]))
+        f.bubbles.show(Bubble(id: "digest:brief", symbol: "sun.horizon", tint: .accentColor, title: "Morning brief",
+                              expires: f.clock.now.addingTimeInterval(12 * 3600)))
+        f.clock.now = f.clock.now.addingTimeInterval(2 * 3600)
+        awayAndBack(f) { done(f, "claude:1"); done(f, "claude:2") }
+        XCTAssertTrue(f.bubbles.bubbles.contains { $0.id == "digest:brief" }, "the brief stays until midnight")
+        XCTAssertEqual(f.shown.count, 1)
     }
 
     func testATaskDueBubbleOnScreenKeepsTasksOutOfTheSummary() throws {
