@@ -81,13 +81,13 @@ final class IronPetPanel: NSPanel {
     init<Content: View>(model: IronPetWindowModel, session: ChatSession?, content: Content) {
         self.model = model
         self.session = session
-        // A titled window with a hidden title bar: native resizing from every edge and corner.
+        // A titled window with a transparent, title-less bar: native resizing from every edge and corner, and the
+        // standard close, minimize and zoom buttons over the sidebar.
         super.init(contentRect: CGRect(origin: .zero, size: Self.savedSize),
-                   styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+                   styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         title = Self.title
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
-        hideStandardWindowButtons()
         backgroundColor = .windowBackgroundColor
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -102,6 +102,13 @@ final class IronPetPanel: NSPanel {
         setContentSize(Self.savedSize)
         let center = NotificationCenter.default
         observers = [
+            // Minimizing hides the window without closing it; tell the pet, as close() does.
+            center.addObserver(forName: NSWindow.didMiniaturizeNotification, object: self, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onVisibilityChange?(false) }
+            },
+            center.addObserver(forName: NSWindow.didDeminiaturizeNotification, object: self, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onVisibilityChange?(true) }
+            },
             center.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: self, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let size = self?.frame.size else { return }
@@ -131,12 +138,6 @@ final class IronPetPanel: NSPanel {
     private var onChat: Bool { session != nil && model.section == .chat }
 
     override var canBecomeKey: Bool { true }
-
-    /// AppKit re-shows the buttons on layout, key and appearance changes. Hide them again each pass.
-    override func update() {
-        super.update()
-        hideStandardWindowButtons()
-    }
 
     /// The new key window is only known once AppKit has finished moving focus.
     override func resignKey() {
@@ -307,12 +308,17 @@ struct IronPetWindowView: View {
     /// Nil in previews, which cannot build the Automations section; its row is hidden then.
     var settings: SettingsModel?
     let actions: SessionActions
+    @ObservedObject private var config = ConfigStore.shared
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            Divider()
-            detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+        // One background under the sidebar and the page; the sidebar is glass over it.
+        ZStack {
+            ChatBackdrop()
+            HStack(spacing: 0) {
+                sidebar
+                Divider()
+                detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 
@@ -325,6 +331,7 @@ struct IronPetWindowView: View {
             ForEach(shown) { row($0) }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
         .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: 22) }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button(action: actions.onSettings) {
@@ -339,6 +346,8 @@ struct IronPetWindowView: View {
             .help("Open ironpet Settings (⌘,)")
         }
         .frame(width: 190)
+        // The whole column, insets included, is glass over the window background: a half-strength material, so the pattern stays visible through it.
+        .background { Rectangle().fill(.ultraThinMaterial).opacity(IronPetGlass.strength) }
     }
 
     private func row(_ section: IronPetSection) -> some View {
@@ -365,7 +374,7 @@ struct IronPetWindowView: View {
     @ViewBuilder private var detail: some View {
         if model.section == .chat, let chat {
             // The chat draws its own floating header up to the top edge.
-            ChatView(session: chat, close: actions.onClose)
+            ChatView(session: chat)
         } else {
             VStack(spacing: 0) {
                 switch model.section {
@@ -373,9 +382,9 @@ struct IronPetWindowView: View {
                 case .agents: AgentsSection(store: store, onJump: actions.onJump)
                 case .alerts: AlertsSection(signals: signals, onAsk: actions.onAsk)
                 case .tasks:
-                    PageHeader(title: IronPetSection.tasks.title) { EmptyView() }
                     TaskListView(tasks: tasks, onTellGhost: actions.onTellGhost, onOpenThread: actions.onOpenThread,
                                  onOpenSession: actions.onOpenSession)
+                        .pageHeader(IronPetSection.tasks.title)
                 case .transcripts:
                     if let meetings {
                         TranscriptsView(library: meetings, activeFolder: actions.meetingInProgress, onAsk: actions.onAskMeeting)
@@ -383,12 +392,13 @@ struct IronPetWindowView: View {
                 case .actions: ActionsSection(onTrick: actions.onTrick)
                 case .automations:
                     if let settings {
-                        PageHeader(title: IronPetSection.automations.title) { EmptyView() }
                         AutomationsSettings(model: settings).frame(maxHeight: .infinity)
+                            .pageHeader(IronPetSection.automations.title)
                     }
                 }
             }
-            .padding(.top, 10)
+            // A photo behind unfilled rows would hide their text; the built-in patterns are faint enough without it.
+            .background { if config.config.chat.background == ChatBackground.customID { Rectangle().fill(.thinMaterial) } }
         }
     }
 }
@@ -404,7 +414,6 @@ struct SessionActions {
     var onAskMeeting: ([URL]) -> Void = { _ in }
     /// The folder of the meeting being recorded or summarized, if any.
     var meetingInProgress: () -> URL? = { nil }
-    var onClose: () -> Void = {}
     var onSettings: () -> Void = {}
 
     static let none = SessionActions(onJump: { _ in }, onAsk: { _ in }, onTrick: { _ in }, onTellGhost: { _ in },
@@ -417,15 +426,43 @@ struct PageHeader<Trailing: View>: View {
     @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Text(title).font(.system(size: 15, weight: .semibold))
-                Spacer()
-                trailing()
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 32)
-            Divider()
+        HStack(spacing: 6) {
+            Text(title).font(.system(size: 15, weight: .semibold))
+            Spacer()
+            trailing()
         }
+        .padding(.horizontal, 16)
+        .frame(height: 32)
+    }
+}
+
+extension View {
+    /// Puts a glass panel at the top of a section, the width of the section, with the window background showing
+    /// through it. The section scrolls under the panel. The top padding covers the transparent title bar.
+    func pageHeader<Trailing: View>(_ title: String, @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) -> some View {
+        safeAreaInset(edge: .top, spacing: 0) {
+            GlassPanel { PageHeader(title: title, trailing: trailing).padding(.top, 10) }
+        }
+    }
+}
+
+/// How much of the material the sidebar and the headers use: half, so the pattern behind the window shows through the
+/// glass instead of blurring away.
+enum IronPetGlass {
+    static let strength = 0.5
+}
+
+/// The glass strip used by every section's header and by the chat header: a material with a hairline below it.
+struct GlassPanel<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .frame(maxWidth: .infinity)
+            .background { Rectangle().fill(.ultraThinMaterial).opacity(IronPetGlass.strength) }
+            .overlay(alignment: .bottom) {
+                // An explicit line: a Divider takes its direction from the container it lands in and turned vertical in the chat's bar.
+                Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
+            }
     }
 }

@@ -77,6 +77,7 @@ private struct AutomationList: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .sheet(isPresented: $asking) { NewAutomationSheet { text in asking = false; if let text { createWithAgent(text) } } }
         .sheet(item: $reviewing) { automation in ReviewSheet(service: service, opened: automation) { reviewing = nil } }
         .sheet(item: $editing) { automation in EditSheet(service: service, automation: automation) { editing = nil } }

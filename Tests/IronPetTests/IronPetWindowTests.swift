@@ -138,4 +138,188 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertEqual(library.meetings.last?.hasTranscript, true)
         XCTAssertEqual(library.meetings.last?.hasSummary, false)
     }
+
+    // MARK: Background and title bar
+
+    /// The preview renderer cannot show an active title bar, so the window chrome is checked here: the standard
+    /// buttons exist, are visible and enabled, and the title bar is transparent with no title.
+    func testTheWindowKeepsItsStandardButtonsOverTheSidebar() throws {
+        let panel = panel()
+        for style: NSWindow.StyleMask in [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView] {
+            XCTAssertTrue(panel.styleMask.contains(style), "missing \(style)")
+        }
+        XCTAssertTrue(panel.titlebarAppearsTransparent)
+        XCTAssertEqual(panel.titleVisibility, .hidden)
+        // AppKit re-lays the title bar on update; the buttons must survive that.
+        panel.update()
+        for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            let button = try XCTUnwrap(panel.standardWindowButton(type), "no \(type) button")
+            XCTAssertFalse(button.isHidden, "\(type) is hidden")
+            XCTAssertTrue(button.isEnabled, "\(type) is disabled")
+        }
+    }
+
+    func testMinimizingTellsTheWindowOwnerItIsHidden() {
+        let panel = panel()
+        var visibility: [Bool] = []
+        panel.onVisibilityChange = { visibility.append($0) }
+        NotificationCenter.default.post(name: NSWindow.didMiniaturizeNotification, object: panel)
+        NotificationCenter.default.post(name: NSWindow.didDeminiaturizeNotification, object: panel)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(visibility, [false, true])
+    }
+
+    func testTheCloseButtonHidesTheWindowLikeTheOldXDid() {
+        let panel = panel()
+        var closed = 0
+        var visibility: [Bool] = []
+        panel.onClose = { closed += 1 }
+        panel.onVisibilityChange = { visibility.append($0) }
+        panel.orderFront(nil)
+        panel.performClose(nil)
+        XCTAssertFalse(panel.isVisible)
+        XCTAssertEqual(closed, 1)
+        XCTAssertEqual(visibility, [false])
+    }
+
+    func testEscClosesAnIdleChat() {
+        let session = ChatSession(restore: false)
+        let panel = IronPetPanel.chat(session)
+        var closed = 0
+        panel.onClose = { closed += 1 }
+        panel.orderFront(nil)
+        panel.cancelOperation(nil)
+        XCTAssertFalse(panel.isVisible)
+        XCTAssertEqual(closed, 1)
+    }
+
+    private func render(section: IronPetSection, background: String, scheme: ColorScheme) -> NSBitmapImageRep? {
+        var config = ConfigStore.shared.config
+        config.chat.background = background
+        ConfigStore.shared.usePreview(config)
+        let model = IronPetWindowModel()
+        model.section = section
+        let store = SessionStore()
+        let view = IronPetWindowView(model: model, store: store, signals: SignalStore(), tasks: tasks(), chat: nil,
+                                     meetings: nil, actions: .none)
+        return bitmap(of: view, scheme: scheme)
+    }
+
+    /// Draws `view` at the window's minimum size under the given appearance, the way the preview renderer does.
+    private func bitmap(of view: some View, scheme: ColorScheme) -> NSBitmapImageRep? {
+        let sized = view
+            .frame(width: IronPetPanel.minimumSize.width, height: IronPetPanel.minimumSize.height)
+            .environment(\.colorScheme, scheme)
+        let host = NSHostingView(rootView: sized)
+        let window = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+        window.contentView = host
+        host.frame = CGRect(origin: .zero, size: host.fittingSize)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        return rep
+    }
+
+    /// Counts pixels in `region` (top-left origin) that differ between two renders.
+    private func differing(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, in region: CGRect) -> Int {
+        var count = 0
+        for y in Int(region.minY)..<Int(region.maxY) {
+            for x in Int(region.minX)..<Int(region.maxX) {
+                guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+                else { continue }
+                if abs(p.redComponent - q.redComponent) + abs(p.greenComponent - q.greenComponent) + abs(p.blueComponent - q.blueComponent) > 0.004 {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
+    func testEverySectionShowsTheChosenBackgroundInBothAppearances() throws {
+        let saved = ConfigStore.shared.config
+        defer { ConfigStore.shared.usePreview(saved) }
+        let pagePixels = { (rep: NSBitmapImageRep) in
+            // Right of the 190 pt sidebar, the page; pixels are at backing scale.
+            let scale = CGFloat(rep.pixelsWide) / IronPetPanel.minimumSize.width
+            return CGRect(x: 200 * scale, y: 0, width: CGFloat(rep.pixelsWide) - 200 * scale, height: CGFloat(rep.pixelsHigh))
+        }
+        for section in [IronPetSection.agents, .alerts, .tasks, .actions] {
+            for scheme in [ColorScheme.light, .dark] {
+                let plain = try XCTUnwrap(render(section: section, background: ChatBackground.defaultID, scheme: scheme))
+                let patterned = try XCTUnwrap(render(section: section, background: "paws", scheme: scheme))
+                XCTAssertGreaterThan(differing(plain, patterned, in: pagePixels(plain)), 1000,
+                                     "\(section) \(scheme) does not show the chosen background")
+            }
+        }
+    }
+
+    func testNoBackgroundLeavesThePageOnTheWindowColor() throws {
+        let saved = ConfigStore.shared.config
+        defer { ConfigStore.shared.usePreview(saved) }
+        let page = try XCTUnwrap(render(section: .alerts, background: ChatBackground.defaultID, scheme: .light))
+        // What the window color draws in the same host. Comparing with a reference render, not a constant, keeps the
+        // test independent of how the machine resolves windowBackgroundColor.
+        let reference = try XCTUnwrap(bitmap(of: Color(nsColor: .windowBackgroundColor), scheme: .light))
+        // The empty-state page has nothing in its lower right corner.
+        let scale = CGFloat(page.pixelsWide) / IronPetPanel.minimumSize.width
+        let (x, y) = (Int(700 * scale), Int(460 * scale))
+        let corner = try XCTUnwrap(page.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+        let expected = try XCTUnwrap(reference.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(corner.redComponent, expected.redComponent, accuracy: 0.01)
+        XCTAssertEqual(corner.greenComponent, expected.greenComponent, accuracy: 0.01)
+        XCTAssertEqual(corner.blueComponent, expected.blueComponent, accuracy: 0.01)
+    }
+
+    /// Captures a real window from the window server, which draws the sidebar's material over what is behind it.
+    private func capture(background: String, scheme: NSAppearance.Name) throws -> NSBitmapImageRep {
+        var config = ConfigStore.shared.config
+        config.chat.background = background
+        ConfigStore.shared.usePreview(config)
+        let model = IronPetWindowModel()
+        model.section = .alerts
+        let view = IronPetWindowView(model: model, store: SessionStore(), signals: SignalStore(), tasks: tasks(), chat: nil,
+                                     meetings: nil, actions: .none)
+        let panel = IronPetPanel(model: model, session: nil, content: view)
+        panel.appearance = NSAppearance(named: scheme)
+        panel.setContentSize(CGSize(width: 780, height: 560))
+        panel.setFrameOrigin(CGPoint(x: 60, y: 60))
+        panel.orderFrontRegardless()
+        defer { panel.orderOut(nil) }
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(panel.windowNumber),
+                                                  [.boundsIgnoreFraming, .bestResolution]) else {
+            throw XCTSkip("The window server gave no image of the window (no display).")
+        }
+        return NSBitmapImageRep(cgImage: image)
+    }
+
+    func testTheBackgroundShowsThroughTheGlassSidebar() throws {
+        let saved = ConfigStore.shared.config
+        defer { ConfigStore.shared.usePreview(saved) }
+        for scheme in [NSAppearance.Name.aqua, .darkAqua] {
+            let plain = try capture(background: ChatBackground.defaultID, scheme: scheme)
+            let patterned = try capture(background: "paws", scheme: scheme)
+            // The blank lower part of the sidebar: x 10 to 180 pt, y 260 to 500 pt.
+            let scale = CGFloat(plain.pixelsWide) / 780
+            let region = CGRect(x: 10 * scale, y: 260 * scale, width: 170 * scale, height: 240 * scale)
+            XCTAssertGreaterThan(differing(plain, patterned, in: region), Int(region.width * region.height) / 2,
+                                 "the sidebar does not show the chosen background in \(scheme.rawValue)")
+        }
+    }
+
+    func testTheBackgroundShowsThroughTheGlassHeader() throws {
+        let saved = ConfigStore.shared.config
+        defer { ConfigStore.shared.usePreview(saved) }
+        for scheme in [NSAppearance.Name.aqua, .darkAqua] {
+            let plain = try capture(background: ChatBackground.defaultID, scheme: scheme)
+            let patterned = try capture(background: "paws", scheme: scheme)
+            // The blank middle of the Alerts header, between its title and "Clear all": x 300 to 650 pt, y 8 to 36 pt.
+            let scale = CGFloat(plain.pixelsWide) / 780
+            let region = CGRect(x: 300 * scale, y: 8 * scale, width: 350 * scale, height: 28 * scale)
+            XCTAssertGreaterThan(differing(plain, patterned, in: region), Int(region.width * region.height) / 2,
+                                 "the header does not show the chosen background in \(scheme.rawValue)")
+        }
+    }
 }
