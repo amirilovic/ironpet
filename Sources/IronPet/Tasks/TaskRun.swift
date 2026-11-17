@@ -49,6 +49,9 @@ struct TaskRun: Identifiable, Equatable {
     /// The copy's git folder, resolved when git made the worktree. ironpet's git calls on the copy use it, and Open PR
     /// refuses when the copy's `.git` file no longer points there.
     var gitDir: URL? = nil
+    /// The copy's config that can redirect or authenticate a push (`GitWorktree.pushConfigPattern`), read in the copy
+    /// at Start. Open PR refuses when it changed, so an include or `insteadOf` the agent added cannot steer the push.
+    var pushConfig: String? = nil
 
     // Not stored: refreshed from git and the running turn.
     /// "Running `npm test`", "Thinking".

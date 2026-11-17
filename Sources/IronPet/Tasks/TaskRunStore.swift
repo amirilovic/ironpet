@@ -10,7 +10,8 @@ final class TaskRunStore {
         CREATE TABLE IF NOT EXISTS task_runs(task TEXT PRIMARY KEY, repo TEXT NOT NULL, worktree TEXT NOT NULL, branch TEXT NOT NULL,
                                              base TEXT NOT NULL, base_branch TEXT, agent TEXT NOT NULL, model TEXT, session TEXT,
                                              state TEXT NOT NULL, started REAL NOT NULL, ended REAL, summary TEXT, error TEXT,
-                                             cleanup TEXT NOT NULL DEFAULT 'none', push_url TEXT, push_remote TEXT, git_dir TEXT) WITHOUT ROWID;
+                                             cleanup TEXT NOT NULL DEFAULT 'none', push_url TEXT, push_remote TEXT, git_dir TEXT,
+                                             push_config TEXT) WITHOUT ROWID;
         """)
 
     private let database: Database
@@ -23,7 +24,7 @@ final class TaskRunStore {
         (try? database.read { db in
             try db.rows("""
                 SELECT task, repo, worktree, branch, base, base_branch, agent, model, session, state, started, ended, summary, error, cleanup,
-                       push_url, push_remote, git_dir
+                       push_url, push_remote, git_dir, push_config
                 FROM task_runs
                 """).compactMap(Self.run)
         }) ?? []
@@ -34,12 +35,12 @@ final class TaskRunStore {
             try database.write { db in
                 try db.execute("""
                     INSERT OR REPLACE INTO task_runs(task, repo, worktree, branch, base, base_branch, agent, model, session, state,
-                                                     started, ended, summary, error, cleanup, push_url, push_remote, git_dir)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                     started, ended, summary, error, cleanup, push_url, push_remote, git_dir, push_config)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, [run.task, run.repo.path, run.worktree.path, run.branch, run.base, run.baseBranch, run.agent, run.model,
                           run.session, run.state.rawValue, run.started.timeIntervalSince1970,
                           run.ended?.timeIntervalSince1970, run.summary, run.error, run.cleanup.rawValue, run.pushURL, run.pushRemote,
-                          run.gitDir?.path])
+                          run.gitDir?.path, run.pushConfig])
             }
         } catch {
             NSLog("ironpet: could not save the run of task \(run.task): \(error.localizedDescription)")
@@ -72,7 +73,8 @@ final class TaskRunStore {
                        state: state, started: Date(timeIntervalSince1970: started),
                        ended: (row[11] as? Double).map(Date.init(timeIntervalSince1970:)), summary: row[12] as? String,
                        error: row[13] as? String, cleanup: (row[14] as? String).flatMap(TaskRun.Cleanup.init(rawValue:)) ?? .none,
-                       pushURL: row[15] as? String, pushRemote: row[16] as? String, gitDir: (row[17] as? String).map(URL.init(fileURLWithPath:)))
+                       pushURL: row[15] as? String, pushRemote: row[16] as? String, gitDir: (row[17] as? String).map(URL.init(fileURLWithPath:)),
+                       pushConfig: row[18] as? String)
     }
 }
 
@@ -107,9 +109,7 @@ enum TaskRunUninstall {
     }
 
     private static func sync(_ git: String, _ repo: URL, _ arguments: [String]) -> CommandResult {
-        var env = LoginShell.environment()
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        return CommandRunner.runBlocking(executable: git, arguments: ["-C", repo.path] + GitWorktree.safety + arguments, timeout: 60,
-                                         environment: env, stdin: nil, maxBytes: 64 * 1024)
+        CommandRunner.runBlocking(executable: git, arguments: ["-C", repo.path] + GitWorktree.safety + arguments, timeout: 60,
+                                  environment: GitWorktree.environment(), stdin: nil, maxBytes: 64 * 1024)
     }
 }

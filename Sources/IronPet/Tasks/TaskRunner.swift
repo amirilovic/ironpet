@@ -134,6 +134,16 @@ final class TaskRunner: ObservableObject {
         names.dropLast().joined(separator: ", ") + (names.count > 1 ? " and " : "") + (names.last ?? "")
     }
 
+    /// A folder inside `~/.ironpet`, a task copy included, is not a project: a run there would work on ironpet's own
+    /// state or on another run's copy. Paths are compared with symlinks resolved.
+    func refusesIronpetFolder(_ folder: URL) -> String? {
+        let path = RunScope.resolve(folder.path)
+        for root in [ironpetRoot, worktreeRoot].map({ RunScope.resolve($0.path) }) where path == root || path.hasPrefix(root + "/") {
+            return "\(folder.lastPathComponent) is inside ironpet's own folder (\((root as NSString).abbreviatingWithTildeInPath)). Choose the project's own folder."
+        }
+        return nil
+    }
+
     /// The agents the Start popover offers.
     var runnableAgents: [ACPAgent] { agents().filter(canRun) }
 
@@ -192,17 +202,20 @@ final class TaskRunner: ObservableObject {
             fresh = false
         } else {
             guard let project else { return "Choose the project folder for this task." }
+            if let refusal = refusesIronpetFolder(project) { return refusal }
             var picked: (repo: URL, base: String, branch: String, folder: URL)?
             do {
                 let repo = try await git.repoRoot(of: project)
+                if let refusal = refusesIronpetFolder(repo) { return refusal }
                 let head = try await git.head(repo)
                 let slot = await git.freeSlot(repo, task: id, parent: GitWorktree.parent(for: repo, root: worktreeRoot))
                 picked = (repo, head.sha, slot.branch, slot.folder)
                 try await git.addWorktree(repo: repo, folder: slot.folder, branch: slot.branch, base: head.sha)
                 let gitDir = try await git.gitDir(ofNewWorktree: slot.folder)
+                let pushConfig = await git.pushConfig(GitWorktree.Copy(worktree: slot.folder, gitDir: gitDir))
                 run = TaskRun(task: id, repo: repo, worktree: slot.folder, branch: slot.branch, base: head.sha, baseBranch: head.branch,
                               agent: agent.id, model: model, session: nil, state: .starting, started: now(),
-                              ended: nil, summary: nil, error: nil, gitDir: gitDir)
+                              ended: nil, summary: nil, error: nil, gitDir: gitDir, pushConfig: pushConfig)
             } catch {
                 if let picked { await git.discardFailedStart(repo: picked.repo, folder: picked.folder, branch: picked.branch, base: picked.base) }
                 return error.localizedDescription
@@ -436,6 +449,13 @@ final class TaskRunner: ObservableObject {
             let now = pushURL ?? "nothing"
             return "The push URL of \(remote) changed since the task started (now \(now)), so ironpet did not push. Check the repository's remotes."
         }
+        let copyURL = await git.pushURL(copy, remote: remote)
+        guard copyURL == expected else {
+            return "In the task's copy, git pushes \(remote) to \(copyURL ?? "nothing") instead of \(expected), so ironpet did not push. Check the copy's git config and push \(run.branch) yourself."
+        }
+        guard let started = run.pushConfig, await git.pushConfig(copy) == started else {
+            return "The copy's git config for URL rewrites, includes, the SSH command or credentials changed since the task started, so ironpet did not push. Check it and push \(run.branch) yourself."
+        }
         let gh = LoginShell.find("gh")
         let prArguments = ["pr", "create", "--web", "--head", run.branch] + (run.baseBranch.map { ["--base", $0] } ?? [])
             + (GitWorktree.githubRepo(remote: expected).map { ["--repo", $0] } ?? [])
@@ -452,7 +472,7 @@ final class TaskRunner: ObservableObject {
         }
         onPushed?(run, remote)
         if let gh {
-            var env = LoginShell.environment().merging(GitWorktree.ghEnvironment(copy)) { _, new in new }
+            var env = GitWorktree.environment(GitWorktree.ghEnvironment(copy))
             env["GH_PROMPT_DISABLED"] = "1"
             // gh reads the repository from the folder it runs in, and CommandRunner has no working directory.
             let result = await CommandRunner.run(executable: "/bin/sh", arguments: ["-c", #"cd "$1" && shift && exec "$@""#, "sh",

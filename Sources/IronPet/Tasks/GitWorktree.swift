@@ -42,11 +42,25 @@ struct GitWorktree {
     }
 
     private func execute(_ arguments: [String], environment extra: [String: String] = [:], timeout: TimeInterval) async -> CommandResult {
-        var env = LoginShell.environment()
+        await CommandRunner.run(executable: git, arguments: arguments, timeout: timeout, environment: Self.environment(extra), maxBytes: 64 * 1024)
+    }
+
+    /// Variables that point git at another repository, index or object store, or add config, as the login shell or
+    /// ironpet's own environment may carry them. Every ironpet git call drops them, also the `GIT_CONFIG_KEY_n` and
+    /// `GIT_CONFIG_VALUE_n` pairs.
+    static let inheritedVariables = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                                     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CONFIG", "GIT_CONFIG_COUNT",
+                                     "GIT_CONFIG_PARAMETERS"]
+
+    /// The environment of every ironpet git (and `gh`) call: the login shell's without `inheritedVariables`, with
+    /// `GIT_TERMINAL_PROMPT=0` so a remote that wants a password fails instead of waiting, then `extra`.
+    static func environment(_ extra: [String: String] = [:], base: [String: String] = LoginShell.environment()) -> [String: String] {
+        var env = base.filter { key, _ in
+            !inheritedVariables.contains(key) && !key.hasPrefix("GIT_CONFIG_KEY_") && !key.hasPrefix("GIT_CONFIG_VALUE_")
+        }
         env["GIT_TERMINAL_PROMPT"] = "0"
-        for key in ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT"] { env[key] = nil }
         env.merge(extra) { _, new in new }
-        return await CommandRunner.run(executable: git, arguments: arguments, timeout: timeout, environment: env, maxBytes: 64 * 1024)
+        return env
     }
 
     private func output(_ arguments: [String], in folder: URL) async throws -> String {
@@ -157,6 +171,25 @@ struct GitWorktree {
     func pushURL(_ repo: URL, remote: String) async -> String? {
         let url = await run(["remote", "get-url", "--push", remote], in: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return url.isEmpty ? nil : url
+    }
+
+    /// The URL `git push <remote>` uses as the copy's git sees it: an include in the copy can change what the main
+    /// working copy reports.
+    func pushURL(_ copy: Copy, remote: String) async -> String? {
+        let url = await run(["remote", "get-url", "--push", remote], copy: copy).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return url.isEmpty ? nil : url
+    }
+
+    /// Config that can redirect a push or run a program during it: URL rewrites, includes, the SSH command and
+    /// credential helpers. Matched against git's canonical key names, which are lower case.
+    static let pushConfigPattern = #"^(url\..*\.(push)?insteadof|include(if)?\..*|core\.sshcommand|credential\..*)$"#
+
+    /// The copy's `pushConfigPattern` entries with the file each came from, includes followed. Empty when none is
+    /// set; nil when git could not read the config.
+    func pushConfig(_ copy: Copy) async -> String? {
+        let result = await run(["config", "--show-origin", "--get-regexp", Self.pushConfigPattern], copy: copy)
+        guard result.code == 0 || result.code == 1, !result.timedOut, result.spawnError == nil else { return nil }
+        return result.code == 0 ? result.stdout : ""
     }
 
     /// Commits on `ref` of the repository that `base` does not have.

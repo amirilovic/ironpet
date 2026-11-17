@@ -293,6 +293,55 @@ final class GitWorktreeTests: XCTestCase {
         XCTAssertNotEqual(a, b)
     }
 
+    func testTheCopysPushURLAndPushConfigAreReadInTheCopy() async throws {
+        try GitFixture.sh(["git", "remote", "add", "origin", "git@github.com:me/app.git"], in: repo)
+        let (copy, branch, _) = try await addWorktree("steer")
+        let beforeRead = await git.pushConfig(copy)
+        let before = try XCTUnwrap(beforeRead)
+        let copyURL = await git.pushURL(copy, remote: "origin")
+        XCTAssertEqual(copyURL, "git@github.com:me/app.git")
+
+        // An include only the copy's branch matches: the main copy's view stays the same.
+        let steer = dir.appendingPathComponent("steer.gitconfig")
+        try "[remote \"origin\"]\n\tpushurl = https://evil.example/app.git\n".write(to: steer, atomically: true, encoding: .utf8)
+        try GitFixture.sh(["git", "config", "includeIf.onbranch:\(branch).path", steer.path], in: repo)
+        let mainURL = await git.pushURL(repo, remote: "origin")
+        XCTAssertEqual(mainURL, "git@github.com:me/app.git", "the main copy is on another branch")
+        let steered = await git.pushURL(copy, remote: "origin")
+        XCTAssertEqual(steered, "https://evil.example/app.git", "the copy sees the include")
+        let withIncludeRead = await git.pushConfig(copy)
+        let withInclude = try XCTUnwrap(withIncludeRead)
+        XCTAssertNotEqual(withInclude, before)
+        XCTAssertTrue(withInclude.contains("includeif.onbranch:\(branch).path"), withInclude)
+
+        try GitFixture.sh(["git", "config", "--unset", "includeIf.onbranch:\(branch).path"], in: repo)
+        let restored = await git.pushConfig(copy)
+        XCTAssertEqual(restored, before)
+        try GitFixture.sh(["git", "config", "url.https://evil.example/.pushInsteadOf", "git@github.com:"], in: repo)
+        let rewrittenRead = await git.pushConfig(copy)
+        let rewritten = try XCTUnwrap(rewrittenRead)
+        XCTAssertTrue(rewritten.contains("url.https://evil.example/.pushinsteadof git@github.com:"), rewritten)
+        try GitFixture.sh(["git", "config", "--unset", "url.https://evil.example/.pushInsteadOf"], in: repo)
+        try GitFixture.sh(["git", "config", "core.sshCommand", "ssh -o ProxyCommand=evil"], in: repo)
+        let ssh = await git.pushConfig(copy)
+        XCTAssertNotEqual(ssh, before)
+        try GitFixture.sh(["git", "config", "--unset", "core.sshCommand"], in: repo)
+        try GitFixture.sh(["git", "config", "credential.helper", "!evil"], in: repo)
+        let credential = await git.pushConfig(copy)
+        XCTAssertNotEqual(credential, before)
+    }
+
+    func testGitsEnvironmentDropsInheritedRepositoryAndConfigVariables() {
+        let base = ["PATH": "/usr/bin", "HOME": "/Users/me", "GIT_DIR": "/elsewhere/.git", "GIT_WORK_TREE": "/elsewhere",
+                    "GIT_COMMON_DIR": "/c", "GIT_INDEX_FILE": "/i", "GIT_OBJECT_DIRECTORY": "/o", "GIT_CONFIG": "/cfg",
+                    "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.x.insteadOf", "GIT_CONFIG_VALUE_0": "y",
+                    "GIT_CONFIG_PARAMETERS": "'core.sshCommand'='evil'", "GIT_CONFIG_GLOBAL": "/Users/me/.gitconfig-work"]
+        let env = GitWorktree.environment(["GIT_DIR": "/copy/.git"], base: base)
+        XCTAssertEqual(env, ["PATH": "/usr/bin", "HOME": "/Users/me", "GIT_TERMINAL_PROMPT": "0", "GIT_DIR": "/copy/.git",
+                             "GIT_CONFIG_GLOBAL": "/Users/me/.gitconfig-work"],
+                       "the user's own global config file stays; what could point git elsewhere goes, then the extras apply")
+    }
+
     private func addWorktree(_ id: String) async throws -> (GitWorktree.Copy, String, String) {
         let head = try await git.head(repo)
         let slot = await git.freeSlot(repo, task: id, parent: GitWorktree.parent(for: repo, root: dir.appendingPathComponent("worktrees")))

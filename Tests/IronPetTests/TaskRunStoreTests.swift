@@ -18,7 +18,8 @@ final class TaskRunStoreTests: XCTestCase {
         TaskRun(task: task, repo: URL(fileURLWithPath: "/code/app"), worktree: URL(fileURLWithPath: "/w/app-1/\(task)"), branch: "ironpet/\(task)",
                 base: "abc123", baseBranch: "main", agent: "claude", model: "opus", session: "s-1", state: state,
                 started: Date(timeIntervalSince1970: 1_800_000_000), ended: nil, summary: "Edited 2 files", error: nil,
-                pushURL: "git@github.com:you/app.git", pushRemote: "origin", gitDir: URL(fileURLWithPath: "/code/app/.git/worktrees/\(task)"))
+                pushURL: "git@github.com:you/app.git", pushRemote: "origin", gitDir: URL(fileURLWithPath: "/code/app/.git/worktrees/\(task)"),
+                pushConfig: "file:/Users/me/.gitconfig\tcredential.helper osxkeychain\n")
     }
 
     func testMigratesAnExistingDatabaseAndAgain() throws {
