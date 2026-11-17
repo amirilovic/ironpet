@@ -92,12 +92,15 @@ final class TaskRunner: ObservableObject {
         .sorted { $0.run.started > $1.run.started }
     }
 
+    /// The folder of a watched agent session, for a task's session link.
+    var sessionWorkspace: (String) -> String? = { _ in nil }
+
     /// The agents the Start popover offers.
     var agents: () -> [ACPAgent] = { AgentCatalog.present() }
 
     /// The folders a task's Start popover offers, best first.
     func candidates(for task: TaskItem) -> [URL] {
-        TaskProject.candidates(for: task, threadWorkspace: { ThreadStore.load($0)?.workspace }, sessionWorkspace: { _ in nil },
+        TaskProject.candidates(for: task, threadWorkspace: { ThreadStore.load($0)?.workspace }, sessionWorkspace: sessionWorkspace,
                                lastRun: runs[task.id], ironpetRoot: ironpetRoot)
     }
 

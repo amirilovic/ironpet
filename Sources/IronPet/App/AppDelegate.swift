@@ -1032,6 +1032,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         taskRunner = runner
         runner.chatAgent = { [weak self] in self.map { ($0.chat.agent, $0.chat.model) } }
         runner.agents = { [weak self] in self?.chat.agents ?? AgentCatalog.present() }
+        runner.sessionWorkspace = { [weak self] id in self?.store.sessions[id]?.origin.workspace }
         if TestControl.isEnabled { runner.recordOpenPR = { TestControl.openPRCommands.append($0) } }
         let title = { [weak tasks] (run: TaskRun) in tasks?.task(run.task)?.title ?? run.task }
         runner.onApproval = { [weak self] run, approval in
