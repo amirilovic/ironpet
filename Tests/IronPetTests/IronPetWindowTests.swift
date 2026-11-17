@@ -498,8 +498,11 @@ final class IronPetWindowTests: XCTestCase {
                 rightmost = max(rightmost, frame.maxX)
             }
             XCTAssertGreaterThan(IronPetWindowModel.minSidebarWidth, rightmost, "the traffic lights do not fit the sidebar")
-            // The rail is exactly the traffic lights' row: the same margin on the right as on the left.
-            XCTAssertEqual(IronPetWindowModel.railWidth - rightmost, 9, accuracy: 1.5, "the rail is not as wide as the window buttons")
+            // The rail is the traffic lights' row plus a small margin on the right. The buttons end at x 69 on macOS 27
+            // (a 9 pt margin) and at x 61 on the macOS version CI runs (17 pt), so the margin is a range, not one number.
+            let margin = IronPetWindowModel.railWidth - rightmost
+            XCTAssertGreaterThanOrEqual(margin, 6, "the rail clips the window buttons")
+            XCTAssertLessThanOrEqual(margin, 20, "the rail is much wider than the window buttons")
         }
     }
 
