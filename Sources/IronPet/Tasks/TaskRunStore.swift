@@ -50,12 +50,13 @@ final class TaskRunStore {
     /// Runs that were working when ironpet quit. Their agent process went with it.
     @discardableResult
     func markInterrupted(now: Date = Date()) -> [TaskRun] {
-        let cut = all().filter { $0.state.isLive }
-        for var run in cut {
+        let cut = all().filter { $0.state.isLive }.map { run in
+            var run = run
             run.state = .interrupted
             run.ended = now
-            save(run)
+            return run
         }
+        cut.forEach(save)
         return cut
     }
 

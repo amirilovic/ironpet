@@ -111,6 +111,9 @@ final class ACPBackend {
     /// Where usage goes. Nil uses the app's `UsageStore.shared`.
     var usageStore: UsageStore?
 
+    /// Added to the agent process's environment. Read when the process starts, so set it before the first turn.
+    var extraEnvironment: [String: String] = [:]
+
     /// MCP servers every unrestricted session gets, as ACP `mcpServers` entries. ironpet's own automation tools go here.
     nonisolated(unsafe) static var defaultMCPServers: () -> [JSON] = { [] }
 
@@ -295,7 +298,8 @@ final class ACPBackend {
         sessionReady = false
         timedOut = false
         let launch = try Self.launch(for: agent)
-        let transport = ACPProcessTransport(executable: launch.executable, arguments: launch.arguments, environment: launch.environment,
+        let transport = ACPProcessTransport(executable: launch.executable, arguments: launch.arguments,
+                                            environment: launch.environment.merging(extraEnvironment) { _, extra in extra },
                                             directory: workspace)
         let client = ACPClient(transport: transport)
         client.onNotification = { [weak self] method, params in self?.notification(method, params) }

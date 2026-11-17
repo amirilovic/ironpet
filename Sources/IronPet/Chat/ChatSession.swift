@@ -79,6 +79,7 @@ final class ChatSession: ObservableObject {
 
     static let telegramOrigin = "telegram"
     static let automationOrigin = "automation"
+    static let taskRunOrigin = "task-run"
 
     struct Approval: Identifiable {
         let id = UUID()

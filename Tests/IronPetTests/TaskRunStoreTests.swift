@@ -52,6 +52,7 @@ final class TaskRunStoreTests: XCTestCase {
         store.save(Self.sampleRun("c", state: .finished))
         let cut = store.markInterrupted()
         XCTAssertEqual(Set(cut.map(\.task)), ["a", "b"])
+        XCTAssertEqual(Set(cut.map(\.state)), [.interrupted])
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: store.all().map { ($0.task, $0.state) }),
                        ["a": .interrupted, "b": .interrupted, "c": .finished])
     }
