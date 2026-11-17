@@ -42,6 +42,9 @@ final class TaskRunnerTests: XCTestCase {
                         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "cancelled"}}); break
                 continue
             if "ASK" in text: ask("touch x")
+            if "TWICE" in text:
+                ask("touch y")
+                ask("touch y")
             if "PUSH" in text: ask("git push origin HEAD")
             if "COMMIT" in text:
                 open("feature.txt", "w").write("done\n")
@@ -293,6 +296,68 @@ final class TaskRunnerTests: XCTestCase {
         XCTAssertNil(prError)
         XCTAssertEqual(commands.first?.suffix(4), ["push", "-u", "origin", "ironpet/\(id)"])
         XCTAssertEqual(commands.last?.suffix(7), ["pr", "create", "--web", "--head", "ironpet/\(id)", "--base", "main"])
+    }
+
+    func testOpenPRRefusesWhenThePushURLChangedSinceTheStart() async throws {
+        var commands: [[String]] = []
+        var refusals: [String] = []
+        runner.recordOpenPR = { commands.append($0) }
+        runner.onOpenPRFailed = { refusals.append($1) }
+        let id = try newTask("COMMIT then redirect")
+        await start(id)
+        await wait("finish") { finished == [id] }
+        XCTAssertEqual(runner.run(for: id)?.pushURL, "git@github.com:you/app.git")
+        XCTAssertEqual(TaskRunStore(database: database).all().first?.pushURL, "git@github.com:you/app.git")
+        _ = try git("config", "remote.origin.pushurl", "https://evil.example/app.git")
+        let error = await runner.openPR(task: id)
+        XCTAssertEqual(error, "The push URL of origin changed since the task started (now https://evil.example/app.git), so ironpet did not push. Check the repository's remotes.")
+        XCTAssertEqual(refusals, error.map { [$0] })
+        XCTAssertTrue(commands.isEmpty, "nothing is pushed")
+        _ = try git("config", "--unset", "remote.origin.pushurl")
+        let again = await runner.openPR(task: id)
+        XCTAssertNil(again)
+        XCTAssertEqual(commands.count, 2)
+    }
+
+    func testADoubleStartStartsOneAgent() async throws {
+        let id = try newTask("SLOW once")
+        async let first = start(id)
+        async let second = start(id)
+        let results = await [first, second]
+        XCTAssertEqual(results.filter { $0 == nil }.count, 1, "\(results)")
+        XCTAssertTrue(results.contains("An agent is already starting on this task."), "\(results)")
+        await wait("running") { logged().contains { $0["cwd"] != nil } }
+        XCTAssertEqual(runner.liveCount, 1)
+        XCTAssertEqual(logged().filter { $0["method"] as? String == "session/new" }.count, 1)
+        XCTAssertEqual(try git("worktree", "list").split(separator: "\n").count, 2, "one copy besides the user's")
+    }
+
+    func testStopDuringStartupCancelsIt() async throws {
+        let id = try newTask("COMMIT never")
+        let pending = Task { await start(id) }
+        for _ in 0..<1000 where !runner.starting.contains(id) { await Task.yield() }
+        XCTAssertTrue(runner.starting.contains(id))
+        XCTAssertEqual(runner.liveCount, 1, "a start in progress counts against the limit")
+        XCTAssertEqual(runner.row(for: try XCTUnwrap(tasks.task(id))), .running(activity: "Starting…"))
+        runner.stop(task: id)
+        let result = await pending.value
+        XCTAssertEqual(result, "Stopped before the agent started.")
+        XCTAssertNil(runner.run(for: id))
+        XCTAssertFalse(runner.starting.contains(id))
+        XCTAssertEqual(runner.liveCount, 0)
+        XCTAssertFalse(logged().contains { $0["cwd"] != nil }, "no agent turn ran")
+        XCTAssertEqual(try git("worktree", "list").split(separator: "\n").count, 1, "the new copy is removed")
+        XCTAssertThrowsError(try git("show-ref", "--verify", "refs/heads/ironpet/\(id)"))
+    }
+
+    func testIdenticalRequestsInARunAreAnsweredFromTheFirstDecision() async throws {
+        let id = try newTask("TWICE the same command")
+        await start(id)
+        await wait("approval") { approvals.count == 1 }
+        runner.decide(id: approvals[0].id, allow: true)
+        await wait("finish") { finished == [id] }
+        XCTAssertEqual(approvals.count, 1, "the repeat does not ask again")
+        XCTAssertEqual(logged().filter { $0["asked"] as? String == "touch y" }.map { $0["allowed"] as? Bool }, [true, true])
     }
 
     func testLaunchMarksRunsThatWereLiveAsInterrupted() async throws {

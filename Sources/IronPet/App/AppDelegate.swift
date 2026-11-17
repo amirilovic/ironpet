@@ -1046,6 +1046,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         runner.onFinished = ended
         runner.onFailed = ended
         runner.onPushed = { [weak self] run, remote in self?.announcer.taskRunPushed(run, remote: remote) }
+        runner.onOpenPRFailed = { [weak self] run, reason in
+            self?.announcer.taskRunOpenPRFailed(run, task: title(run), reason: reason, openTasks: { self?.showTasks() })
+        }
 
         // Allow and Deny on a bubble or notification go to whichever owns the approval.
         let decide = announcer.decide

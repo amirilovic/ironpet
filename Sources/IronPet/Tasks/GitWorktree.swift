@@ -82,6 +82,12 @@ struct GitWorktree {
         return all.count == 1 ? all[0] : nil
     }
 
+    /// The URL `git push <remote>` uses: its `pushurl` when one is set, else its `url`.
+    func pushURL(_ repo: URL, remote: String) async -> String? {
+        let url = await run(["remote", "get-url", "--push", remote], in: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return url.isEmpty ? nil : url
+    }
+
     func remoteURL(_ repo: URL, remote: String) async -> String? {
         let url = await run(["remote", "get-url", remote], in: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return url.isEmpty ? nil : url
@@ -149,14 +155,19 @@ struct GitWorktree {
         return root.appendingPathComponent("\(repo.lastPathComponent)-\(suffix)")
     }
 
-    /// Environment for the agent process: every remote's push URL points nowhere, so a `git push` the agent runs without
-    /// asking fails. ironpet's own push on Open PR runs without it.
+    static let noPushURL = "ironpet-no-push://task-runs-cannot-push"
+    /// URL prefixes rewritten for pushes only, so a push to a remote added later, or straight to a URL, fails too.
+    static let pushPrefixes = ["https://", "http://", "ssh://", "git@", "git://"]
+
+    /// Environment for the agent process: every remote's push URL points nowhere and every push URL is rewritten to
+    /// nowhere, so a `git push` the agent runs without asking fails. ironpet's own push on Open PR runs without it.
     static func pushBlockEnvironment(remotes: [String]) -> [String: String] {
-        guard !remotes.isEmpty else { return [:] }
-        var env = ["GIT_CONFIG_COUNT": String(remotes.count)]
-        for (index, remote) in remotes.enumerated() {
-            env["GIT_CONFIG_KEY_\(index)"] = "remote.\(remote).pushurl"
-            env["GIT_CONFIG_VALUE_\(index)"] = "ironpet-no-push://task-runs-cannot-push"
+        let entries = remotes.map { ("remote.\($0).pushurl", noPushURL) }
+            + pushPrefixes.map { ("url.ironpet-no-push://.pushInsteadOf", $0) }
+        var env = ["GIT_CONFIG_COUNT": String(entries.count)]
+        for (index, entry) in entries.enumerated() {
+            env["GIT_CONFIG_KEY_\(index)"] = entry.0
+            env["GIT_CONFIG_VALUE_\(index)"] = entry.1
         }
         return env
     }

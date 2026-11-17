@@ -43,6 +43,8 @@ struct TaskRun: Identifiable, Equatable {
     var summary: String?
     var error: String?
     var cleanup: Cleanup = .none
+    /// Where Open PR may push: the push URL of the push remote when the run was created. Open PR refuses when it changed.
+    var pushURL: String? = nil
 
     // Not stored: refreshed from git and the running turn.
     /// "Running `npm test`", "Thinking".
@@ -89,7 +91,8 @@ enum TaskRunRow: Equatable {
         let help: String
     }
 
-    static func state(task: TaskItem, run: TaskRun?, enabled: Bool, running: Int, limit: Int) -> TaskRunRow {
+    static func state(task: TaskItem, run: TaskRun?, enabled: Bool, running: Int, limit: Int, starting: Bool = false) -> TaskRunRow {
+        if starting, run?.state.isLive != true { return .running(activity: "Starting…") }
         if let run, run.cleanup != .removed {
             switch run.state {
             case .starting: return .running(activity: "Starting")

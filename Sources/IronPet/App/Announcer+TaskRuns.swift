@@ -45,6 +45,13 @@ extension Announcer {
                             actions: [], expires: Date().addingTimeInterval(15)))
     }
 
+    func taskRunOpenPRFailed(_ run: TaskRun, task: String, reason: String, openTasks: @escaping () -> Void) {
+        bubbles.show(Bubble(id: Self.taskRunID(run.task), symbol: "exclamationmark.triangle.fill", tint: .orange,
+                            title: "Did not open a PR: \(task)", subtitle: run.branch, body: reason,
+                            actions: [.init(title: "Show task", style: .primary, run: openTasks)], onTap: openTasks,
+                            expires: Date().addingTimeInterval(60)))
+    }
+
     static func taskRunApprovalID(_ id: UUID) -> String { "task-run-approval:\(id.uuidString)" }
     static func taskRunID(_ task: String) -> String { "task-run:\(task)" }
 

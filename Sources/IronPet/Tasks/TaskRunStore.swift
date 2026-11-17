@@ -10,7 +10,7 @@ final class TaskRunStore {
         CREATE TABLE IF NOT EXISTS task_runs(task TEXT PRIMARY KEY, repo TEXT NOT NULL, worktree TEXT NOT NULL, branch TEXT NOT NULL,
                                              base TEXT NOT NULL, base_branch TEXT, agent TEXT NOT NULL, model TEXT, session TEXT,
                                              auto INTEGER NOT NULL, state TEXT NOT NULL, started REAL NOT NULL, ended REAL,
-                                             summary TEXT, error TEXT, cleanup TEXT NOT NULL DEFAULT 'none') WITHOUT ROWID;
+                                             summary TEXT, error TEXT, cleanup TEXT NOT NULL DEFAULT 'none', push_url TEXT) WITHOUT ROWID;
         """)
 
     private let database: Database
@@ -22,7 +22,8 @@ final class TaskRunStore {
     func all() -> [TaskRun] {
         (try? database.read { db in
             try db.rows("""
-                SELECT task, repo, worktree, branch, base, base_branch, agent, model, session, auto, state, started, ended, summary, error, cleanup
+                SELECT task, repo, worktree, branch, base, base_branch, agent, model, session, auto, state, started, ended, summary, error, cleanup,
+                       push_url
                 FROM task_runs
                 """).compactMap(Self.run)
         }) ?? []
@@ -33,11 +34,11 @@ final class TaskRunStore {
             try database.write { db in
                 try db.execute("""
                     INSERT OR REPLACE INTO task_runs(task, repo, worktree, branch, base, base_branch, agent, model, session, auto, state,
-                                                     started, ended, summary, error, cleanup)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                     started, ended, summary, error, cleanup, push_url)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, [run.task, run.repo.path, run.worktree.path, run.branch, run.base, run.baseBranch, run.agent, run.model,
                           run.session, run.auto ? 1 : 0, run.state.rawValue, run.started.timeIntervalSince1970,
-                          run.ended?.timeIntervalSince1970, run.summary, run.error, run.cleanup.rawValue])
+                          run.ended?.timeIntervalSince1970, run.summary, run.error, run.cleanup.rawValue, run.pushURL])
             }
         } catch {
             NSLog("ironpet: could not save the run of task \(run.task): \(error.localizedDescription)")
@@ -69,7 +70,8 @@ final class TaskRunStore {
                        baseBranch: row[5] as? String, agent: agent, model: row[7] as? String, session: row[8] as? String,
                        auto: (row[9] as? Int64 ?? 0) != 0, state: state, started: Date(timeIntervalSince1970: started),
                        ended: (row[12] as? Double).map(Date.init(timeIntervalSince1970:)), summary: row[13] as? String,
-                       error: row[14] as? String, cleanup: (row[15] as? String).flatMap(TaskRun.Cleanup.init(rawValue:)) ?? .none)
+                       error: row[14] as? String, cleanup: (row[15] as? String).flatMap(TaskRun.Cleanup.init(rawValue:)) ?? .none,
+                       pushURL: row[16] as? String)
     }
 }
 

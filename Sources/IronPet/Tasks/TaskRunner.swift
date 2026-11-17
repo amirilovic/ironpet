@@ -11,6 +11,10 @@ final class TaskRunner: ObservableObject {
     static var shared: TaskRunner?
 
     @Published private(set) var runs: [String: TaskRun] = [:]
+    /// Tasks whose Start is still making the worktree or reading git, before the agent process exists.
+    @Published private(set) var starting: Set<String> = []
+    /// Starts that Stop, or closing the task, cancelled before the agent process existed.
+    private var cancelledStarts: Set<String> = []
 
     private let tasks: TaskStore
     private let store: TaskRunStore
@@ -32,6 +36,7 @@ final class TaskRunner: ObservableObject {
     var onFinished: ((TaskRun) -> Void)?
     var onFailed: ((TaskRun) -> Void)?
     var onPushed: ((TaskRun, String) -> Void)?
+    var onOpenPRFailed: ((TaskRun, String) -> Void)?
 
     private struct Live {
         let backend: ACPBackend
@@ -40,6 +45,8 @@ final class TaskRunner: ObservableObject {
         var items: [ChatSession.Item]
         var title: String
         var pending: [(approval: TaskRun.Approval, respond: (ApprovalDecision) -> Void)] = []
+        /// The user's answers in this turn, by `ChatSession.Approval.key`, so an identical request is answered the same way.
+        var decided: [String: Bool] = [:]
         var limit: Task<Void, Never>?
     }
 
@@ -58,14 +65,15 @@ final class TaskRunner: ObservableObject {
 
     // MARK: Reading
 
-    var liveCount: Int { runs.values.filter(\.state.isLive).count }
+    var liveCount: Int { runs.values.filter(\.state.isLive).count + starting.filter { runs[$0]?.state.isLive != true }.count }
 
     var limit: Int { config().maxConcurrent }
 
     func run(for task: String) -> TaskRun? { runs[task] }
 
     func row(for task: TaskItem) -> TaskRunRow {
-        TaskRunRow.state(task: task, run: runs[task.id], enabled: config().enabled, running: liveCount, limit: limit)
+        TaskRunRow.state(task: task, run: runs[task.id], enabled: config().enabled, running: liveCount, limit: limit,
+                         starting: starting.contains(task.id))
     }
 
     /// True while a run owns this chat thread, so the chat does not open it and start a second agent on the session.
@@ -121,8 +129,15 @@ final class TaskRunner: ObservableObject {
         guard config().enabled else { return "Task runs are turned off in taskRuns.enabled." }
         guard let task = tasks.task(id), task.status != .done else { return "That task is closed." }
         if let existing = runs[id], existing.state.isLive { return "An agent is already working on this task." }
+        guard !starting.contains(id) else { return "An agent is already starting on this task." }
         guard liveCount < limit else { return "\(liveCount) tasks are already running. The limit is taskRuns.maxConcurrent." }
         guard let git = git() else { return "git was not found. Install the Xcode command line tools, then try again." }
+        starting.insert(id)
+        cancelledStarts.remove(id)
+        defer {
+            starting.remove(id)
+            cancelledStarts.remove(id)
+        }
 
         var run: TaskRun
         let fresh: Bool
@@ -147,6 +162,18 @@ final class TaskRunner: ObservableObject {
             }
             fresh = true
         }
+        let remotes = await git.remotes(run.repo)
+        if fresh, let remote = await git.pushRemote(run.repo, baseBranch: run.baseBranch) {
+            run.pushURL = await git.pushURL(run.repo, remote: remote)
+        }
+        if cancelledStarts.contains(id) {
+            if fresh {
+                try? await git.removeWorktree(repo: run.repo, folder: run.worktree, force: false)
+                await git.deleteBranchIfEmpty(repo: run.repo, branch: run.branch, base: run.base)
+            }
+            return "Stopped before the agent started."
+        }
+        // No await from here until the run is in `live`, so a second Start or a Stop sees one consistent state.
         // A run started again after the task changed hands is live again; one that was cleaned up starts a new session.
         if fresh { run.session = nil }
         run.state = .starting
@@ -162,7 +189,7 @@ final class TaskRunner: ObservableObject {
 
         let backend = makeBackend(agent)
         backend.usageFeature = .taskRuns
-        backend.extraEnvironment = GitWorktree.pushBlockEnvironment(remotes: await git.remotes(run.repo))
+        backend.extraEnvironment = GitWorktree.pushBlockEnvironment(remotes: remotes)
         backend.onPermission = { [weak self] call, respond in self?.permission(id, call, respond) }
         backend.onBackground = { [weak self] event in self?.background(id, event) }
         if agent.id == "cursor", shareMCPSignIns() { MCPAuthSharing.prepare(workspace: run.worktree) }
@@ -187,6 +214,10 @@ final class TaskRunner: ObservableObject {
 
     /// Stops the agent. The worktree and branch stay, and the task goes back to the backlog.
     func stop(task id: String) {
+        if starting.contains(id), runs[id]?.state.isLive != true {
+            cancelledStarts.insert(id)
+            return
+        }
         guard runs[id]?.state.isLive == true else { return }
         end(id, state: .stopped, error: nil)
         setStatus(id, .backlog)
@@ -218,6 +249,7 @@ final class TaskRunner: ObservableObject {
         guard let task = live.first(where: { $0.value.pending.contains { $0.approval.id == id } })?.key,
               let index = live[task]?.pending.firstIndex(where: { $0.approval.id == id }),
               let entry = live[task]?.pending.remove(at: index) else { return }
+        live[task]?.decided[ChatSession.Approval.key(title: entry.approval.title, detail: entry.approval.detail)] = allow
         entry.respond(allow ? .allow : .deny())
         onApprovalResolved?(id)
         let next = live[task]?.pending.first?.approval
@@ -238,6 +270,9 @@ final class TaskRunner: ObservableObject {
         case .allow: respond(.allow)
         case .refuse(let message): respond(.deny(message))
         case .ask(let title, let detail):
+            if let previous = live[task]?.decided[ChatSession.Approval.key(title: title, detail: detail)] {
+                return respond(previous ? .allow : .deny())
+            }
             let approval = TaskRun.Approval(id: UUID(), title: title, detail: detail)
             live[task]?.pending.append((approval, respond))
             guard live[task]?.pending.count == 1 else { return }
@@ -333,12 +368,25 @@ final class TaskRunner: ObservableObject {
     /// Open PR: pushes the branch with ironpet's own git, then opens GitHub's new-PR page. Returns why it failed, or nil.
     @discardableResult
     func openPR(task id: String) async -> String? {
+        let failure = await pushAndOpenPR(id)
+        if let failure, let run = runs[id] { onOpenPRFailed?(run, failure) }
+        return failure
+    }
+
+    private func pushAndOpenPR(_ id: String) async -> String? {
         await refreshGit(id)
         guard let run = runs[id] else { return "There is no run for this task." }
         guard run.canOpenPR else { return run.openPRHint ?? "There is nothing to push yet." }
         guard let git = git() else { return "git was not found." }
         guard let remote = await git.pushRemote(run.repo, baseBranch: run.baseBranch) else {
             return "\(run.repo.lastPathComponent) has no remote to push to."
+        }
+        let pushURL = await git.pushURL(run.repo, remote: remote)
+        guard let expected = run.pushURL, pushURL == expected else {
+            let now = pushURL ?? "nothing"
+            return run.pushURL == nil
+                ? "\(run.repo.lastPathComponent) had no remote when the task started, so ironpet does not push \(run.branch). Push it yourself."
+                : "The push URL of \(remote) changed since the task started (now \(now)), so ironpet did not push. Check the repository's remotes."
         }
         let gh = LoginShell.find("gh")
         let prArguments = ["pr", "create", "--web", "--head", run.branch] + (run.baseBranch.map { ["--base", $0] } ?? [])
@@ -379,6 +427,7 @@ final class TaskRunner: ObservableObject {
         for id in ids where runs[id] != nil {
             let task = tasks.task(id)
             guard task == nil || task?.status == .done else { continue }
+            if starting.contains(id) { cancelledStarts.insert(id) }
             if runs[id]?.state.isLive == true { end(id, state: .stopped, error: nil, notify: false) }
             Task { [weak self] in await self?.tidy(id) }
         }
@@ -466,13 +515,13 @@ final class TaskRunner: ObservableObject {
 
     private func setStatus(_ task: String, _ status: TaskStatus) {
         guard let item = tasks.task(task), item.status != .done, item.status != status else { return }
-        try? tasks.update(task, status: status, by: Self.author)
+        _ = try? tasks.update(task, status: status, by: Self.author)
     }
 
     private func link(_ task: String, thread: String) {
         guard let item = tasks.task(task), !item.links.contains(where: { $0.kind == .thread && $0.ref == thread }),
               item.links.count < TaskValidator.maxLinks else { return }
-        try? tasks.update(task, links: item.links + [TaskLink(kind: .thread, ref: thread, label: "Agent run")], by: Self.author)
+        _ = try? tasks.update(task, links: item.links + [TaskLink(kind: .thread, ref: thread, label: "Agent run")], by: Self.author)
     }
 
     private func saveThread(_ task: String, items: [ChatSession.Item]? = nil, title: String? = nil) {

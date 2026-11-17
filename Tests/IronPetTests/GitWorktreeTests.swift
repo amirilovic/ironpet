@@ -131,6 +131,34 @@ final class GitWorktreeTests: XCTestCase {
         XCTAssertTrue(try GitFixture.sh(["git", "branch", "--list"], in: bare).contains("ironpet/push"))
     }
 
+    func testPushBlockEnvironmentRewritesPushesToURLsAndRemotesAddedLater() async throws {
+        let env = GitWorktree.pushBlockEnvironment(remotes: [])
+        XCTAssertEqual(env["GIT_CONFIG_COUNT"], "5")
+        XCTAssertEqual(Set((0..<5).compactMap { env["GIT_CONFIG_VALUE_\($0)"] }), Set(GitWorktree.pushPrefixes))
+        XCTAssertTrue((0..<5).allSatisfy { env["GIT_CONFIG_KEY_\($0)"] == "url.ironpet-no-push://.pushInsteadOf" })
+        try GitFixture.sh(["git", "remote", "add", "later", "git@example.invalid:me/app.git"], in: repo)
+        for target in ["later", "https://example.invalid/me/app.git", "http://example.invalid/app.git",
+                       "ssh://git@example.invalid/me/app.git", "git://example.invalid/app.git"] {
+            let result = await git.run(["push", target, "main"], in: repo, environment: env, timeout: 20)
+            XCTAssertNotEqual(result.code, 0, target)
+            XCTAssertTrue(result.stderr.contains("ironpet-no-push"), "\(target): \(result.stderr)")
+        }
+        let listed = GitWorktree.pushBlockEnvironment(remotes: ["origin"])
+        XCTAssertEqual(listed["GIT_CONFIG_COUNT"], "6")
+        XCTAssertEqual(listed["GIT_CONFIG_KEY_0"], "remote.origin.pushurl")
+    }
+
+    func testPushURLFollowsAPushurlSetting() async throws {
+        try GitFixture.sh(["git", "remote", "add", "origin", "https://example.com/origin.git"], in: repo)
+        let plain = await git.pushURL(repo, remote: "origin")
+        XCTAssertEqual(plain, "https://example.com/origin.git")
+        try GitFixture.sh(["git", "config", "remote.origin.pushurl", "https://evil.example/app.git"], in: repo)
+        let redirected = await git.pushURL(repo, remote: "origin")
+        XCTAssertEqual(redirected, "https://evil.example/app.git")
+        let missing = await git.pushURL(repo, remote: "nope")
+        XCTAssertNil(missing)
+    }
+
     func testCompareURL() {
         XCTAssertEqual(GitWorktree.compareURL(remote: "git@github.com:me/app.git", base: "main", branch: "ironpet/x")?.absoluteString,
                        "https://github.com/me/app/compare/main...ironpet/x?expand=1")
