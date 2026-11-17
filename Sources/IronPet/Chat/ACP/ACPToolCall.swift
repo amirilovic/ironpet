@@ -65,6 +65,24 @@ struct ACPToolCall {
         paths.first ?? (input["file_path"] ?? input["path"] ?? input["target_file"] ?? input["notebook_path"]) as? String
     }
 
+    static let pathKeys = ["file_path", "path", "target_file", "notebook_path", "destination", "new_path", "target", "source"]
+
+    /// Every file the call names: its locations, the path keys of its input, and those of a list of edits in it.
+    var allPaths: [String] {
+        var found = paths
+        func collect(_ object: JSON) {
+            for key in Self.pathKeys {
+                if let text = object[key] as? String, !text.isEmpty { found.append(text) }
+            }
+        }
+        collect(input)
+        for value in input.values {
+            if let list = value as? [JSON] { list.forEach(collect) }
+        }
+        var seen = Set<String>()
+        return found.filter { seen.insert($0).inserted }
+    }
+
     /// Everything the agent passes in, as text for the destructive-pattern check and the approval card.
     var arguments: String {
         if let text = rawInput as? String { return text }
@@ -113,11 +131,25 @@ struct RunScope: Equatable {
     /// The worktree. Edits outside it ask, even in Auto.
     let root: URL
 
+    /// Compares real locations, so a symlink in the worktree that points outside it counts as outside.
     func contains(_ path: String) -> Bool {
-        let base = root.standardizedFileURL.path
-        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : root.appendingPathComponent(path)
-        let target = url.standardizedFileURL.path
+        let base = Self.resolve(root.path)
+        let target = Self.resolve(path.hasPrefix("/") ? path : root.appendingPathComponent(path).path)
         return target == base || target.hasPrefix(base + "/")
+    }
+
+    /// The path with every symlink followed, including a dangling one, and the rest under the closest existing folder.
+    /// `/private/var` and `/var` come out the same.
+    static func resolve(_ path: String, depth: Int = 0) -> String {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        let files = FileManager.default
+        if depth < 32, let destination = try? files.destinationOfSymbolicLink(atPath: url.path) {
+            let next = destination.hasPrefix("/") ? destination : url.deletingLastPathComponent().appendingPathComponent(destination).path
+            return resolve(next, depth: depth + 1)
+        }
+        if url.path == "/" || files.fileExists(atPath: url.path) { return url.resolvingSymlinksInPath().path }
+        let parent = resolve(url.deletingLastPathComponent().path, depth: depth)
+        return URL(fileURLWithPath: parent).appendingPathComponent(url.lastPathComponent).standardizedFileURL.path
     }
 }
 
@@ -160,6 +192,83 @@ enum ApprovalRules {
         pushOrPR.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
     }
 
+    /// A path into a `.git` folder or file, or the hooks setting. `.gitignore`, `.github` and `repo.git` do not count.
+    static let gitInternals = try! NSRegularExpression(pattern: #"(?<![\w.-])\.git(?![\w.-])|core\.hookspath"#, options: [.caseInsensitive])
+
+    /// The git subcommand and its arguments for every `git` in a command line, split at `&&`, `||`, `;`, `|`, `&` and
+    /// new lines, with the options before the subcommand (`-C dir`, `-c key=value`, `--git-dir=...`) skipped.
+    static func gitInvocations(_ text: String) -> [[String]] {
+        let segments = text.components(separatedBy: CharacterSet(charactersIn: ";|&\n"))
+        var found: [[String]] = []
+        for segment in segments {
+            let words = segment.split(whereSeparator: \.isWhitespace).map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "'\"`()")) }
+            var index = 0
+            while index < words.count {
+                defer { index += 1 }
+                guard words[index] == "git" || words[index].hasSuffix("/git") else { continue }
+                var next = index + 1
+                while next < words.count, words[next].hasPrefix("-") {
+                    let option = words[next]
+                    next += ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"].contains(option) ? 2 : 1
+                }
+                guard next < words.count else { continue }
+                found.append(Array(words[next...]))
+                index = next
+            }
+        }
+        return found
+    }
+
+    /// Why a command changes git state the worktree shares with the user's copy (config, other branches, stashes,
+    /// tags, hooks, worktrees, remotes), or nil. A task run asks about these even in Auto: they could change what
+    /// Open PR pushes, or the user's own repository.
+    static func sharedGitChange(_ text: String) -> String? {
+        if gitInternals.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil {
+            return "It touches the repository's .git folder or its hooks, which the user's copy shares."
+        }
+        func isRunRef(_ name: String) -> Bool {
+            name.hasPrefix("ironpet/") || name.hasPrefix("refs/heads/ironpet/")
+        }
+        for words in gitInvocations(text) {
+            guard let command = words.first?.lowercased() else { continue }
+            let arguments = Array(words.dropFirst())
+            let flags = arguments.filter { $0.hasPrefix("-") }
+            let names = arguments.filter { !$0.hasPrefix("-") }
+            switch command {
+            case "config":
+                let reads: Set<String> = ["--get", "--get-all", "--list", "-l", "--get-regexp"]
+                if !flags.contains(where: reads.contains) { return "git config changes settings the user's copy shares." }
+            case "branch":
+                let changes: Set<String> = ["-d", "-D", "-f", "-m", "-M", "--delete", "--force", "--move", "-c", "-C", "--copy"]
+                if flags.contains(where: changes.contains) || flags.contains(where: { $0.hasPrefix("--set-upstream") || $0 == "-u" }),
+                   names.isEmpty || !names.allSatisfy(isRunRef) {
+                    return "It changes a branch other than the task's own ironpet/ branch."
+                }
+            case "update-ref":
+                if flags.contains("--stdin") || !(names.first.map(isRunRef) ?? false) {
+                    return "It moves a ref other than the task's own ironpet/ branch."
+                }
+            case "symbolic-ref":
+                if !names.allSatisfy({ $0 == "HEAD" || isRunRef($0) }) { return "It points a ref outside the task's own ironpet/ branch." }
+            case "stash":
+                if let action = names.first, ["drop", "clear", "pop"].contains(action) { return "Stashes are shared with the user's copy." }
+            case "tag":
+                if flags.contains("-d") || flags.contains("--delete") { return "Tags are shared with the user's copy." }
+            case "worktree":
+                return "Worktrees are listed in the user's repository."
+            case "remote":
+                if let action = names.first, !["show", "get-url"].contains(action) { return "Remotes are shared with the user's copy." }
+            case "reflog":
+                if names.first == "expire" { return "It expires history the user's copy shares." }
+            case "gc":
+                if flags.contains(where: { $0.hasPrefix("--prune") }) { return "It prunes objects the user's copy shares." }
+            default:
+                break
+            }
+        }
+        return nil
+    }
+
     /// Whether ironpet answers a permission request itself or shows a card. The agent only asks about calls it
     /// considers risky, so anything not clearly read-only still asks. A task run (`run`) also refuses push and PR
     /// commands and asks about edits outside its worktree, in Auto too.
@@ -171,20 +280,28 @@ enum ApprovalRules {
         case "execute":
             let command = call.command
             if run != nil, isPushOrPR(command + "\n" + call.arguments) { return .refuse(refusedInRun) }
+            if run != nil, let reason = sharedGitChange(command + "\n" + call.arguments) {
+                return .ask(title: "Change the project's shared git setup?", detail: command + "\n\n" + reason)
+            }
             let dangerous = isDestructive(command + "\n" + call.arguments)
             if auto, !dangerous { return .allow }
             return .ask(title: dangerous ? "Run a destructive command?" : "Run this command?", detail: command)
         case "edit", "delete", "move":
-            let path = call.path
-            if path.map(isMemoryFile) == true { return .allow }
-            let outside = run.map { scope in path.map { !scope.contains($0) } ?? true } ?? false
+            let all = call.allPaths
+            let path = all.first
+            if !all.isEmpty, all.allSatisfy(isMemoryFile) { return .allow }
+            // A task run asks when any named file is outside its worktree or inside git's own files, which the user's copy shares.
+            let outside = run.map { scope in
+                all.isEmpty || all.contains { !scope.contains($0) || gitInternals.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }
+            } ?? false
             if auto, !outside { return .allow }
             let preview = ((call.input["content"] ?? call.input["new_string"] ?? call.input["new_source"]) as? String)?
                 .split(separator: "\n", omittingEmptySubsequences: false).prefix(8).joined(separator: "\n")
             let verb = call.kind == "delete" ? "Delete" : call.kind == "move" ? "Move" : "Edit"
             let place = outside ? " outside the task's copy" : ""
             let title = path.map { "\(verb) \(URL(fileURLWithPath: $0).lastPathComponent)\(place)?" } ?? "\(verb) a file\(place)?"
-            return .ask(title: title, detail: [path, preview].compactMap { $0 }.joined(separator: "\n\n"))
+            let files = all.isEmpty ? nil : all.joined(separator: "\n")
+            return .ask(title: title, detail: [files, preview].compactMap { $0 }.joined(separator: "\n\n"))
         default:
             // MCP servers can change real systems (databases, issue trackers), so anything not read-only asks first.
             let mcp = call.mcp

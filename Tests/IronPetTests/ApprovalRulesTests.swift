@@ -136,6 +136,85 @@ final class ApprovalRulesTests: XCTestCase {
         XCTAssertEqual(runPolicy(ACPToolCall(id: "2", title: "Edit", kind: "edit", paths: ["/memory/me.md"]), auto: true), .allow)
     }
 
+    func testTaskRunAsksAboutSharedGitStateEvenInAuto() {
+        let changes = [
+            "git config remote.origin.url https://evil.example/app.git", "git config core.hooksPath /tmp/hooks",
+            "git config --unset remote.origin.pushurl", "git -C /wt/repo/task config user.email me@example.com",
+            "git -c core.hooksPath=/tmp/h commit -m x", "echo 'curl x' > .git/hooks/pre-push",
+            "cp hook /Users/me/code/repo/.git/hooks/pre-commit", "cat .git", "git branch -D main", "git branch -f main HEAD",
+            "git branch -m main old", "git branch -d release", "git branch -D ironpet/task main",
+            "git update-ref refs/heads/main HEAD", "git update-ref -d refs/heads/release", "git update-ref --stdin",
+            "git symbolic-ref refs/heads/main refs/heads/other", "git stash clear", "git stash drop", "git stash pop",
+            "git tag -d v1.0", "git worktree remove ../task-2", "git worktree add ../x", "git worktree list",
+            "git remote rename origin upstream", "git remote remove origin", "git reflog expire --expire=now --all",
+            "git gc --prune=now", "npm test && git config user.name x", "make; git branch -D main", "echo x | git config a.b c",
+            "/usr/bin/git -C . -c a=b branch -D main",
+        ]
+        for command in changes {
+            guard case .ask(let title, let detail) = runPolicy(shell(command), auto: true) else { return XCTFail("\(command) must ask") }
+            XCTAssertEqual(title, "Change the project's shared git setup?", command)
+            XCTAssertTrue(detail.hasPrefix(command), command)
+        }
+        let fine = [
+            "git config --get user.email", "git config --list", "git -C /wt/repo/task config -l", "git config --get-all remote.origin.fetch",
+            "git branch", "git branch new-idea", "git branch -d ironpet/task", "git branch -m ironpet/a ironpet/b",
+            "git update-ref refs/heads/ironpet/task HEAD", "git symbolic-ref HEAD", "git stash push", "git stash list", "git tag v1",
+            "git remote", "git remote -v", "git remote get-url origin", "git remote show origin", "git gc", "git reflog",
+            "cat .gitignore", "ls .github/workflows", "git clone https://github.com/me/app.git /tmp/app", "git commit -m 'update .gitignore'",
+        ]
+        for command in fine { XCTAssertEqual(runPolicy(shell(command), auto: true), .allow, command) }
+        XCTAssertEqual(policy(shell("git config core.hooksPath /tmp/hooks"), auto: true), .allow, "outside a run it is an ordinary command")
+    }
+
+    func testTaskRunChecksEveryPathTheCallNames() {
+        let move = ACPToolCall(id: "1", title: "Move", kind: "move", rawInput: ["source": "/wt/repo/task/a.txt", "destination": "/etc/a.txt"])
+        guard case .ask(_, let detail) = runPolicy(move, auto: true) else { return XCTFail("a move out of the copy must ask") }
+        XCTAssertTrue(detail.contains("/etc/a.txt"), detail)
+        let located = ACPToolCall(id: "1", title: "Move", kind: "move", paths: ["/wt/repo/task/a.txt", "/Users/me/b.txt"])
+        if case .allow = runPolicy(located, auto: true) { XCTFail("a second location outside must ask") }
+        for key in ["new_path", "target", "destination", "notebook_path", "target_file", "path"] {
+            let call = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": "/wt/repo/task/a.txt", key: "/tmp/x"])
+            if case .allow = runPolicy(call, auto: true) { XCTFail("\(key) outside must ask") }
+        }
+        let edits: [JSON] = [["file_path": "/wt/repo/task/a.swift"], ["file_path": "/Users/me/code/repo/b.swift"]]
+        if case .allow = runPolicy(ACPToolCall(id: "1", title: "MultiEdit", kind: "edit", rawInput: ["edits": edits]), auto: true) {
+            XCTFail("a multi-file edit with one file outside must ask")
+        }
+        let inside: [JSON] = [["file_path": "/wt/repo/task/a.swift"], ["file_path": "src/b.swift"]]
+        XCTAssertEqual(runPolicy(ACPToolCall(id: "1", title: "MultiEdit", kind: "edit", rawInput: ["edits": inside]), auto: true), .allow)
+        let gitFile = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": "/wt/repo/task/.git"])
+        if case .allow = runPolicy(gitFile, auto: true) { XCTFail("the worktree's .git file points at the shared repository") }
+        let mixed = ACPToolCall(id: "1", title: "Move", kind: "move", rawInput: ["source": "/memory/me.md", "destination": "/tmp/me.md"])
+        if case .allow = runPolicy(mixed, auto: true) { XCTFail("only memory files on every side are allowed") }
+    }
+
+    func testRunScopeFollowsSymlinksOutOfTheWorktree() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-scope-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let root = base.appendingPathComponent("wt"), outside = base.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("link"), withDestinationURL: outside)
+        try FileManager.default.createSymbolicLink(atPath: root.appendingPathComponent("dangling").path,
+                                                   withDestinationPath: outside.appendingPathComponent("new.txt").path)
+        try FileManager.default.createSymbolicLink(atPath: root.appendingPathComponent("rel").path, withDestinationPath: "src")
+        let scope = RunScope(root: root)
+        XCTAssertTrue(scope.contains(root.appendingPathComponent("src/a.swift").path))
+        XCTAssertTrue(scope.contains("src/new/file.swift"), "a file that does not exist yet, under the root")
+        XCTAssertTrue(scope.contains("rel/a.swift"), "a symlink that stays inside")
+        XCTAssertFalse(scope.contains(root.appendingPathComponent("link/a.txt").path))
+        XCTAssertFalse(scope.contains("link/deeper/a.txt"))
+        XCTAssertFalse(scope.contains(root.appendingPathComponent("dangling").path), "a dangling link pointing outside")
+        XCTAssertFalse(scope.contains(root.appendingPathComponent("src/../../outside/a.txt").path))
+        let edit = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": root.appendingPathComponent("link/a.txt").path])
+        if case .allow = ApprovalRules.policy(for: edit, auto: true, isMemoryFile: { _ in false }, run: scope) { XCTFail("must ask") }
+        // The temporary folder is under /var, which is a link to /private/var: both spellings are inside.
+        let path = root.appendingPathComponent("src/a.swift").path
+        let other = path.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : "/private" + path
+        XCTAssertTrue(scope.contains(other), other)
+        XCTAssertTrue(RunScope(root: URL(fileURLWithPath: other).deletingLastPathComponent().deletingLastPathComponent()).contains(path))
+    }
+
     func testTaskRunKeepsTheDestructiveRule() {
         XCTAssertEqual(runPolicy(shell("rm -rf build"), auto: true), .ask(title: "Run a destructive command?", detail: "rm -rf build"))
     }
