@@ -156,9 +156,9 @@ enum ApprovalPolicy: Equatable {
     case refuse(String)
 }
 
-/// What a task run adds to the rules: it works in its own git worktree and never pushes.
+/// What a task run adds to the rules: it works in its own git worktree, asks before every change and never pushes.
 struct RunScope: Equatable {
-    /// The worktree. Edits outside it ask, even in Auto.
+    /// The worktree. A card for a change outside it says so.
     let root: URL
 
     /// Compares real locations, so a symlink in the worktree that points outside it counts as outside. `~` and `$HOME`
@@ -181,26 +181,6 @@ struct RunScope: Equatable {
         if target == base { return [] }
         guard target.hasPrefix(base + "/") else { return nil }
         return target.dropFirst(base.count + 1).split(separator: "/").map(String.init)
-    }
-
-    /// Folders, anywhere in the worktree, whose files an agent or git obeys in a later session.
-    static let protectedFolders: Set<String> = [".git", ".claude", ".cursor", ".codex", ".gemini", ".vscode", ".husky"]
-    /// Files at the top of the worktree that configure agents or git hooks.
-    static let protectedRootFiles: Set<String> = [".mcp.json", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml",
-                                                  ".pre-commit-config.yaml"]
-    static let hookFolders: Set<String> = [".git", ".husky"]
-
-    enum Protection { case gitFiles, hooks, agentSettings }
-
-    /// Why an edit inside the worktree still asks: it writes git's files, git hooks, or settings an agent reads. Nil otherwise.
-    func protection(_ path: String) -> Protection? {
-        guard let parts = relative(path) else { return nil }
-        if parts.contains(".git") { return .gitFiles }
-        if parts.contains(where: Self.hookFolders.contains) { return .hooks }
-        if parts.count == 1, Self.protectedRootFiles.contains(parts[0]) {
-            return parts[0] == ".mcp.json" ? .agentSettings : .hooks
-        }
-        return parts.contains(where: Self.protectedFolders.contains) ? .agentSettings : nil
     }
 
     /// The path with every symlink followed, including a dangling one, and the rest under the closest existing folder.
@@ -335,10 +315,10 @@ enum ApprovalRules {
     }
 
     /// Whether ironpet answers a permission request itself or shows a card. The agent only asks about calls it
-    /// considers risky, so anything not clearly read-only still asks. A task run (`run`) has its own rules.
+    /// considers risky, so anything not clearly read-only still asks. A task run (`run`) has its own rules, where Auto does not apply.
     static func policy(for call: ACPToolCall, auto: Bool, isMemoryFile: (String) -> Bool = Memory.contains,
                        run: RunScope? = nil) -> ApprovalPolicy {
-        if let run { return runPolicy(for: call, auto: auto, run: run) }
+        if let run { return runPolicy(for: call, run: run) }
         switch call.kind {
         case "read", "search", "think", "fetch":
             return .allow
@@ -368,54 +348,50 @@ enum ApprovalRules {
         }
     }
 
-    /// ironpet's own tools that only read.
-    static let ownReadTools: Set<String> = ["tasks_list", "tasks_get", "automations_list", "automations_get", "automations_history"]
+    /// Arguments that carry new content or a destination. A call with one may write, whatever kind it claims.
+    static let writeArguments: Set<String> = ["content", "new_string", "old_string", "new_source", "newText", "edits", "changes",
+                                              "destination", "new_path", "newPath", "patch", "diff"]
 
-    /// A task run. Auto skips the card only for edits whose every path is inside the worktree and outside `.git`, and for
-    /// read-only tools. Every command, and every tool that is not read-only, asks in Auto too. Commands that match
-    /// `pushOrPR` are refused and `sharedGitChange` ones ask with the reason, but the rule does not rest on those patterns.
-    static func runPolicy(for call: ACPToolCall, auto: Bool, run: RunScope) -> ApprovalPolicy {
-        // A command, extra sandbox permissions or network access is judged as a command, whatever kind the call claims.
-        let command = runCommand(call)
-        if command != nil || grantsAccess(call) { return commandPolicy(call, command: command) }
+    /// A read, search, think or fetch call that names nothing it could write: no diff in its content, no write arguments,
+    /// and for think and fetch no file at all. Gemini's `save_memory` is a think call with a diff of `~/.gemini/GEMINI.md`.
+    static func isReadOnlyInRun(_ call: ACPToolCall) -> Bool {
+        guard call.contentPaths.isEmpty, !call.input.keys.contains(where: writeArguments.contains) else { return false }
         switch call.kind {
-        case "read", "search", "think", "fetch":
-            return .allow
-        case "edit", "delete", "move":
-            let all = call.allPaths
-            let outside = all.isEmpty || all.contains { !run.contains($0) } || destinationUnknown(call)
-            let protection = outside ? nil : all.lazy.compactMap(run.protection).first
-            if auto, !outside, protection == nil { return .allow }
-            let preview = ((call.input["content"] ?? call.input["new_string"] ?? call.input["new_source"]) as? String)?
-                .split(separator: "\n", omittingEmptySubsequences: false).prefix(8).joined(separator: "\n")
-            let verb = call.kind == "delete" ? "Delete" : call.kind == "move" ? "Move" : "Edit"
-            let title: String
-            switch protection {
-            case .gitFiles: title = "Edit git's own files in the task's copy?"
-            case .hooks: title = "Edit the project's git hooks in the task's copy?"
-            case .agentSettings: title = "Edit the agent's settings in the task's copy?"
-            case nil:
-                let place = outside ? " outside the task's copy" : ""
-                title = all.first.map { "\(verb) \(URL(fileURLWithPath: $0).lastPathComponent)\(place)?" } ?? "\(verb) a file\(place)?"
-            }
-            let files = all.isEmpty ? nil : all.joined(separator: "\n")
-            return .ask(title: title, detail: [files, preview].compactMap { $0 }.joined(separator: "\n\n"))
-        default:
-            let mcp = call.mcp
-            let tool = mcp?.tool ?? call.toolName ?? call.title
-            if isReadOnlyMCP(tool) || ownReadTools.contains(tool) && (mcp == nil || mcp?.server == "ironpet") { return .allow }
-            let target = mcp.map { " (\($0.server))" } ?? ""
-            let dangerous = isDestructive(call.arguments)
-            return .ask(title: (dangerous ? "Run a destructive tool: " : "Use ") + tool + target + "?", detail: String(call.arguments.prefix(600)))
+        case "read", "search": return true
+        case "think", "fetch": return call.allPaths.isEmpty
+        default: return false
         }
     }
 
-    /// A move without a known destination, or an edit whose only paths are its `locations`: codex-acp lists a rename's
-    /// sources there and its destination only in `content`, which a large diff leaves empty.
-    static func destinationUnknown(_ call: ACPToolCall) -> Bool {
-        if call.kind == "move" { return Set(call.allPaths).count < 2 }
-        let named = ACPToolCall(rawInput: call.rawInput).allPaths
-        return call.kind == "edit" && !call.paths.isEmpty && call.contentPaths.isEmpty && named.isEmpty
+    /// A task run asks before every call that could change anything, whatever the Auto setting: only `isReadOnlyInRun`
+    /// calls skip the card. Commands that match `pushOrPR` are refused and `sharedGitChange` ones ask with the reason.
+    static func runPolicy(for call: ACPToolCall, run: RunScope) -> ApprovalPolicy {
+        // A command, extra sandbox permissions or network access is judged as a command, whatever kind the call claims.
+        let command = runCommand(call)
+        if command != nil || grantsAccess(call) { return commandPolicy(call, command: command) }
+        if isReadOnlyInRun(call) { return .allow }
+        let all = call.allPaths
+        let place = all.contains { !run.contains($0) } ? " outside the task's copy" : ""
+        let files = all.isEmpty ? nil : all.joined(separator: "\n")
+        switch call.kind {
+        case "edit", "delete", "move":
+            let preview = ((call.input["content"] ?? call.input["new_string"] ?? call.input["new_source"]) as? String)?
+                .split(separator: "\n", omittingEmptySubsequences: false).prefix(8).joined(separator: "\n")
+            let verb = call.kind == "delete" ? "Delete" : call.kind == "move" ? "Move" : "Edit"
+            let title = all.first.map { "\(verb) \(URL(fileURLWithPath: $0).lastPathComponent)\(place)?" } ?? "\(verb) a file?"
+            return .ask(title: title, detail: [files, preview].compactMap { $0 }.joined(separator: "\n\n"))
+        case "read", "search", "think", "fetch":
+            let name = call.title.isEmpty ? "this tool" : call.title
+            return .ask(title: "Let \(name) write files\(place)?",
+                        detail: [files, String(call.arguments.prefix(600))].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n"))
+        default:
+            let mcp = call.mcp
+            let tool = mcp?.tool ?? call.toolName ?? (call.title.isEmpty ? "a tool" : call.title)
+            let target = mcp.map { " (\($0.server))" } ?? ""
+            let dangerous = isDestructive(call.arguments)
+            return .ask(title: (dangerous ? "Run a destructive tool: " : "Use ") + tool + target + "?",
+                        detail: [files, String(call.arguments.prefix(600))].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n"))
+        }
     }
 
     /// Extra sandbox permissions or network access, as codex-acp asks for them.
