@@ -13,12 +13,6 @@ final class TranscriptBlankTests: XCTestCase {
 
     private func scrollView(_ panel: NSPanel) -> NSScrollView? { HugeTranscriptTests.scrollView(in: panel.contentView) }
 
-    private func render(_ panel: NSPanel) -> NSBitmapImageRep? {
-        guard let view = panel.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        return rep
-    }
-
     private func make(_ items: [ChatSession.Item]) -> (ChatSession, IronPetPanel) {
         ChatView.blankRepairsForTesting = 0
         let session = ChatSession(restore: false)
@@ -51,11 +45,6 @@ final class TranscriptBlankTests: XCTestCase {
         return count
     }
 
-    private func ink(_ panel: NSPanel) -> Double { visibleRows(panel) > 0 ? 1 : 0 }
-
-    private func captureBaseline() {
-    }
-
     private func thread() -> [ChatSession.Item] {
         var items: [ChatSession.Item] = []
         let long = (0..<40).map { "Reply line \($0) with **bold** and `code`." }.joined(separator: "\n")
@@ -85,20 +74,17 @@ final class TranscriptBlankTests: XCTestCase {
                   let event = NSEvent(cgEvent: cg) else { return }
             scroll.scrollWheel(with: event)
             spin(0.03)
-            let share = ink(panel)
-            if share < 0.01 { samples.append("blank while scrolling toward \(f): ink \(share)") }
+            if visibleRows(panel) == 0 { samples.append("blank while scrolling toward \(f)") }
         }
         spin(0.5)
     }
 
     private func expectContent(_ panel: NSPanel, _ label: String, _ failures: inout [String]) {
         spin(0.3)
-        let share = ink(panel)
-        if share < 0.01 { failures.append("\(label): ink \(share)") }
+        if visibleRows(panel) == 0 { failures.append("\(label): no rows visible") }
     }
 
     func testPinnedPasteThenStreamKeepsMessagesVisible() throws {
-        captureBaseline()
         let (session, panel) = make(thread())
         var failures: [String] = []
         expectContent(panel, "open", &failures)
@@ -119,7 +105,6 @@ final class TranscriptBlankTests: XCTestCase {
     }
 
     func testReaderInHistoryWithPasteStaysVisible() throws {
-        captureBaseline()
         var items = thread()
         items.insert(.init(kind: .user(paste())), at: 60)
         let (session, panel) = make(items)
@@ -137,7 +122,6 @@ final class TranscriptBlankTests: XCTestCase {
     }
 
     func testSendingLongPasteFromHistoryShowsMessages() throws {
-        captureBaseline()
         let (session, panel) = make(thread())
         var failures: [String] = []
         wheel(panel, toFraction: 0.4, samples: &failures)
@@ -189,6 +173,33 @@ final class TranscriptBlankTests: XCTestCase {
         XCTAssertGreaterThan(visibleRows(panel), 0, "rows did not come back")
         XCTAssertGreaterThanOrEqual(ChatView.blankRepairsForTesting, 1)
         XCTAssertLessThanOrEqual(ChatView.blankRepairsForTesting, 2, "the repair kept firing")
+        panel.close()
+    }
+
+    /// Programmatic jumps to the top, the middle and back leave rows on screen, and a healthy transcript must not be
+    /// repaired. Only the jump past the end is blank, and that one is repaired.
+    func testJumpsInsideTheContentAreLeftAloneAndOneBeyondItIsRepaired() throws {
+        let session = ChatSession(restore: false)
+        session.items = HugeTranscriptTests.hugeThread(screenshotDir: nil)
+        ChatView.blankRepairsForTesting = 0
+        let panel = IronPetPanel.chat(session)
+        panel.setContentSize(CGSize(width: 520, height: 640))
+        panel.orderFrontRegardless()
+        spin(3)
+        let scroll = try XCTUnwrap(scrollView(panel))
+        let doc = try XCTUnwrap(scroll.documentView)
+        for y in [CGFloat(0), doc.bounds.height * 0.5, 0] {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            spin(2)
+            XCTAssertGreaterThan(visibleRows(panel), 0, "no rows at y=\(y)")
+        }
+        XCTAssertEqual(ChatView.blankRepairsForTesting, 0, "a transcript with rows on screen was repaired")
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: doc.bounds.height))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        spin(2.5)
+        XCTAssertGreaterThan(visibleRows(panel), 0, "the jump past the end stayed blank")
+        XCTAssertGreaterThanOrEqual(ChatView.blankRepairsForTesting, 1)
         panel.close()
     }
 }

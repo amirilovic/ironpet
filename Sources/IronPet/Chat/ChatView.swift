@@ -427,11 +427,22 @@ struct ChatView: View {
     /// first, because rows report their visibility a pass after the offset changes.
     private func checkBlank(_ proxy: ScrollViewProxy) {
         blankCheck?.cancel()
+        scheduleBlankCheck(proxy, confirming: false, after: 0.15)
+    }
+
+    /// A first look finds the viewport empty; a second one 0.4 s later must find it still empty, or it was only the
+    /// initial layout or a scroll in flight, when rows have not yet reported their visibility.
+    private func scheduleBlankCheck(_ proxy: ScrollViewProxy, confirming: Bool, after delay: TimeInterval) {
         let work = DispatchWorkItem {
             if visibleRows.hasVisible { blankGuard.rowsVisible(); return }
-            guard visibleRows.attached, !resizing else { return }
-            guard blankGuard.shouldReanchor(visibleRows: visibleRows.count, hasRows: !session.items.isEmpty,
-                                            contentHeight: lastContentHeight, viewportHeight: lastViewportHeight) else { return }
+            guard visibleRows.attached, !resizing, !session.items.isEmpty,
+                  lastViewportHeight > 0, lastContentHeight > lastViewportHeight else { return }
+            guard confirming else {
+                scheduleBlankCheck(proxy, confirming: true, after: 0.4)
+                return
+            }
+            guard blankGuard.shouldReanchor(visibleRows: 0, hasRows: true, contentHeight: lastContentHeight,
+                                            viewportHeight: lastViewportHeight, distanceFromBottom: lastGap) else { return }
             ChatView.blankRepairsForTesting += 1
             NSLog("IronPet: chat transcript viewport was blank (content %.0f, viewport %.0f, pinned %d); re-anchoring",
                   lastContentHeight, lastViewportHeight, follow.pinned ? 1 : 0)
@@ -443,7 +454,7 @@ struct ChatView: View {
             }
         }
         blankCheck = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     /// Scrolling realizes rows, which changes the estimated height, which would scroll again. So this jumps once after
@@ -1811,7 +1822,6 @@ private struct SlashPopup: View {
         .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
     }
 }
-
 
 /// The rows that currently intersect the transcript viewport. A class so that changes do not invalidate the view.
 final class VisibleRows {
