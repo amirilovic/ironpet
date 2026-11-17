@@ -271,7 +271,7 @@ All in `~/.ironpet/`:
 | `threads/` | Saved chats |
 | `screenshots/` | Last 30 captures |
 | `config.json` | Your settings |
-| `ironpet.db` | Tasks, automation state and logs, usage, and the activity log behind the welcome back summary (`activity_events`, 30 days) |
+| `ironpet.db` | Tasks, automation state and logs, usage, and the activity log behind the welcome back summary (`activity_events`, 30 days, kept whether or not the summary is on): what ironpet announced, with an agent's one-line summary or waiting request but never your prompt. See [SECURITY.md](SECURITY.md) for the exact fields |
 | `pets/` | Your pet library: every valid sprite sheet here shows in Settings → Pet |
 | `pet/spritesheet.png` | Optional custom pet art (overrides the bundled Ghost) |
 | `bin/ironpet-hook`, `port`, `token` | Hook bridge |
