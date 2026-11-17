@@ -30,13 +30,14 @@ final class BriefSource {
         Publishers.Merge3(tasks.objectWillChange, sessions.objectWillChange, signals.objectWillChange).eraseToAnyPublisher()
     }
 
-    /// `weekdays` are the brief trigger's, so Monday's brief reaches back to Friday's meetings.
-    func build(_ kind: Brief.Kind, weekdays: [String]? = nil) -> Brief {
+    /// `weekdays` are the brief trigger's, so Monday's brief reaches back to Friday's meetings. `day` is the recap's day,
+    /// today when nil.
+    func build(_ kind: Brief.Kind, weekdays: [String]? = nil, day: Date? = nil) -> Brief {
         let now = now()
         let since = BriefBuilder.meetingsSince(weekdays: weekdays, now: now, calendar: calendar)
-        let today = DateInterval(start: calendar.startOfDay(for: now), end: now)
+        let today = DateInterval(start: min(calendar.startOfDay(for: day ?? now), now), end: now)
         let live = Array(sessions.sessions.values)
-        let input = BriefInput(now: now, calendar: calendar, tasks: tasks.tasks, sessions: live, alerts: signals.signals,
+        let input = BriefInput(now: now, calendar: calendar, day: day, tasks: tasks.tasks, sessions: live, alerts: signals.signals,
                                meetings: meetings(since: min(since, today.start), until: now),
                                activity: activity?.briefActivity(in: today) ?? Self.finishedSessions(live, in: today))
         return BriefBuilder.build(kind, input, meetingsSince: since)

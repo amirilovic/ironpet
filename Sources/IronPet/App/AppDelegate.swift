@@ -296,7 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         brief = source
         pet.brief = model
-        service.digest = { kind, a in source.build(kind, weekdays: kind == .brief ? a.trigger.weekdays : nil) }
+        service.digest = { kind, a, slot in source.build(kind, weekdays: kind == .brief ? a.trigger.weekdays : nil, day: slot) }
         service.showDigest = { [weak self] brief, a, _ in
             self?.announcer.brief(brief, automation: a) { [weak self] in
                 self?.announcer.bubbles.dismiss(Announcer.briefID(brief.kind))

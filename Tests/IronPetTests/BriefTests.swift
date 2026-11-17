@@ -100,6 +100,18 @@ final class BriefBuilderTests: XCTestCase {
                                      "Still open: 2 tasks, 1 alert, 1 agent"])
     }
 
+    func testARecapAfterMidnightCoversItsSlotsDay() {
+        var input = BriefInput(now: F.tuesday(hour: 25), calendar: F.calendar,
+                               tasks: [F.task("closed", .done, closed: F.tuesday(hour: 11))],
+                               activity: [F.turn("a", .sessionDone, at: F.tuesday(hour: 10))])
+        XCTAssertTrue(BriefBuilder.recap(input).isEmpty, "without a day it recaps Wednesday so far")
+        input.day = F.tuesday(hour: 18)
+        let recap = BriefBuilder.recap(input)
+        XCTAssertEqual(recap.window.start, F.startOfTuesday)
+        XCTAssertEqual(section(recap, "closed").map(\.target), [.task("closed")])
+        XCTAssertEqual(section(recap, "agents").map(\.title), ["repo-a"])
+    }
+
     func testAnEmptyDayIsEmpty() {
         let input = BriefInput(now: F.tuesday(hour: 18), calendar: F.calendar, tasks: [F.task("later")])
         XCTAssertTrue(BriefBuilder.brief(input).isEmpty)
@@ -369,6 +381,7 @@ final class DailyClockChangeTests: AutomationTestCase {
 final class DigestAutomationTests: AutomationTestCase {
     private typealias F = BriefFixture
     private var shown: [(kind: Brief.Kind, manual: Bool)] = []
+    private var slots: [Date?] = []
     private var next = Brief(kind: .brief, window: DateInterval(start: .distantPast, end: .distantPast), sections: [], lines: [])
 
     private var nonEmpty: Brief {
@@ -380,7 +393,8 @@ final class DigestAutomationTests: AutomationTestCase {
     private func wired(_ automations: [Automation]) -> Rig {
         let rig = makeRig(automations)
         shown = []
-        rig.service.digest = { [unowned self] kind, _ in var b = next; b.kind = kind; return b }
+        slots = []
+        rig.service.digest = { [unowned self] kind, _, slot in slots.append(slot); var b = next; b.kind = kind; return b }
         rig.service.showDigest = { [unowned self] brief, _, manual in shown.append((brief.kind, manual)) }
         return rig
     }
@@ -438,6 +452,19 @@ final class DigestAutomationTests: AutomationTestCase {
         let rig = wired([AutomationDefaults.dayRecap(enabled: true)])
         run(rig, minutes: 31)
         XCTAssertEqual(shown.map(\.kind), [.recap])
+    }
+
+    func testARecapCaughtUpAfterMidnightIsBuiltForItsSlot() async {
+        next = nonEmpty
+        clock.now = AutomationTestClock.monday(hour: 17)
+        var recap = AutomationDefaults.dayRecap(enabled: true)
+        recap.trigger.catchUpMinutes = 720
+        let rig = wired([recap])
+        clock.now = AutomationTestClock.monday(plus: 1, hour: 1)
+        rig.engine.tick()
+        XCTAssertEqual(slots, [AutomationTestClock.monday(hour: 18)])
+        _ = await rig.service.call("run_now", ["id": AutomationDefaults.dayRecapID], by: "user")
+        XCTAssertEqual(slots.last, .some(nil), "Run now has no slot, so it recaps today")
     }
 
     func testValidation() {

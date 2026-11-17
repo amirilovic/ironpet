@@ -85,6 +85,8 @@ struct BriefMeeting: Equatable {
 struct BriefInput {
     var now: Date
     var calendar: Calendar = .current
+    /// The day the recap covers, from its start to `now`. Nil is the day of `now`.
+    var day: Date? = nil
     var tasks: [TaskItem] = []
     var sessions: [AgentSession] = []
     var alerts: [Signal] = []
@@ -173,7 +175,7 @@ enum BriefBuilder {
 
     static func recap(_ input: BriefInput) -> Brief {
         let now = input.now, calendar = input.calendar
-        let window = DateInterval(start: calendar.startOfDay(for: now), end: now)
+        let window = DateInterval(start: min(calendar.startOfDay(for: input.day ?? now), now), end: now)
         let today = input.activity.filter { window.contains($0.at) }.sorted { $0.at > $1.at }
 
         let turns = today.filter { $0.kind == .sessionDone || $0.kind == .sessionFailed }
