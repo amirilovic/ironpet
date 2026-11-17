@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var capture: CaptureService?
     private lazy var captureInspector = CaptureInspectorWindow(service: { [weak self] in self?.capture })
     private var dueReminders: TaskDueReminders?
+    /// Nil until the database is open, a moment after launch.
+    private var activity: ActivityLog?
     private lazy var logWindow = AutomationLogWindow(service: { [weak self] in self?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
@@ -68,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Resolving the login-shell PATH runs the user's shell, so do it before the first chat needs it.
         Task.detached { _ = LoginShell.path }
         store.onAttention = { [weak self] session in
+            if let event = ActivityEvent.session(session) { self?.activity?.record(event) }
             self?.announcer.session(session)
             self?.testControl?.recordAttention(session)
         }
@@ -111,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         announcer.bubbles.onDismissed = { [weak self] id in self?.meetingBubbleClosed(id) }
         pet.onRecordingClick = { [weak self] in self?.showMeetingBubble() }
         meeting.onSummaryReady = { [weak self] url in
+            self?.activity?.record(.meetingSummary(url))
             self?.announcer.meetingSummary(url)
             self?.meetings.reload()
             self?.testControl?.recordMeetingNotified(url)
@@ -133,7 +137,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             meeting.confirmConsent = { true }
         }
         startCallMonitor()
-        chat.onAttention = { [weak self] title in self?.announcer.chat(title) }
+        chat.onAttention = { [weak self] title in
+            self?.activity?.record(.chatFinished(title))
+            self?.announcer.chat(title)
+        }
         telegram.onPairingRequest = { [weak self] request in
             self?.announcer.telegramPairing(request, allow: { self?.telegram.allow(request.id) },
                                             deny: { self?.telegram.deny(request.id) })
@@ -206,6 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The app's one database. Features add their migrations to this list, in version order.
         let database = Database.open(path: Paths.root.appendingPathComponent("ironpet.db"), migrations: AppMigrations.all).database
         UsageStore.shared = UsageStore(database: database)
+        activity = ActivityLog(database: database)
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
         pet.tasks = tasks
@@ -214,10 +222,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.onSettings = { [weak self] in self?.showSettings(tab: nil) }
         setUpScreenCapture(database)
         let service = AutomationService(store: store, engine: engine, database: database)
-        service.notice = { [weak self] notice in self?.announcer.automation(notice) }
+        service.notice = { [weak self, store] notice in
+            let reminder = notice.automationIDs.contains { id in
+                store.automations.first { $0.id == id }.map { $0.trigger.type == "interval" && $0.trigger.clock != "wall" } ?? false
+            }
+            if let event = ActivityEvent.automationNotice(notice, isReminder: reminder) { self?.activity?.record(event) }
+            self?.announcer.automation(notice)
+        }
         service.dismissNotice = { [weak self] id in self?.announcer.bubbles.dismiss(id) }
-        service.alert = { [weak self] signal, notify in self?.signals.add(signal, notify: notify) }
-        service.resolveAlert = { [weak self] id in self?.signals.dismiss(id) }
+        service.alert = { [weak self] signal, notify in
+            if notify { self?.activity?.record(.alertOpened(signal)) }
+            self?.signals.add(signal, notify: notify)
+        }
+        service.resolveAlert = { [weak self] id in
+            guard let self else { return }
+            if let signal = signals.signals.first(where: { $0.id == id }) { activity?.record(.alertResolved(signal)) }
+            signals.dismiss(id)
+        }
         // Alerts the user has not dismissed come back after a restart, quietly. Dismissing one clears its stored payload.
         signals.restore(service.engine.state.openAlerts())
         signals.onDismiss = { [state = service.engine.state] id in state.closeAlert(signalID: id) }
@@ -884,6 +905,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// One bubble for suggestions that just arrived. Add all adds the ones it lists that are still waiting.
     private func offerSuggestions(_ added: [TaskSuggestion]) {
         guard !added.isEmpty, let tasks = TaskStore.shared else { return }
+        for suggestion in added { activity?.record(.taskSuggested(suggestion)) }
         announcer.taskSuggestions(added, addAll: { [weak self] in
             let accepted = added.filter { s in tasks.suggestions.contains(s) && (try? tasks.accept(s.id)) != nil }.count
             self?.announcer.tasksAdded(accepted)
@@ -900,6 +922,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reminders.isShowing = { bubbles.bubbles.contains { $0.id == Announcer.tasksDueID } }
         reminders.hide = { bubbles.dismiss(Announcer.tasksDueID) }
         reminders.show = { [weak self, weak reminders] list, isNew in
+            if isNew { for task in list { self?.activity?.record(.taskDue(task)) } }
             let ids = list.map(\.id)
             self?.announcer.tasksDue(list, chime: isNew, done: { reminders?.done(ids) }, snooze: { reminders?.snooze(ids) },
                                      open: { self?.showTasks() })

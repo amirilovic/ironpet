@@ -23,6 +23,8 @@ struct AutomationNotice {
     var systemNotification = false
     /// The automation this belongs to, so a notification's Done and Snooze can find it.
     var automationIDs: [String] = []
+    /// What the bubble's Open button opens, kept so the activity log can offer it later.
+    var url: URL?
 }
 
 struct AutomationError: Error, LocalizedError {
@@ -466,7 +468,7 @@ final class AutomationService {
                                 symbol: text(action, "symbol") ?? "bell.fill", tint: tint, title: title, subtitle: text(action, "subtitle"),
                                 body: text(action, "body") == title ? nil : text(action, "body"), buttons: buttons,
                                 expires: (action["expiresSeconds"] as? Double) ?? 45,
-                                systemNotification: action["notification"] as? Bool ?? false, automationIDs: [a.id]))
+                                systemNotification: action["notification"] as? Bool ?? false, automationIDs: [a.id], url: url))
         nudge([mood(for: level)])
         return nil
     }
