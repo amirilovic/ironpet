@@ -138,7 +138,6 @@ final class PetController: NSObject {
 
     /// Opens the Today page on the brief or the recap.
     func showBrief(_ kind: Brief.Kind) {
-        windowModel.todayShown = true
         windowModel.briefKind = kind
         showWindow(.today)
     }
