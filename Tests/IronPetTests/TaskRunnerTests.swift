@@ -13,15 +13,21 @@ final class TaskRunnerTests: XCTestCase {
     sid = None
     def update(u): send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": u}})
     def say(t): update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": t}})
-    def ask(command):
-        update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "`%s`" % command, "kind": "execute", "status": "pending", "rawInput": {"command": command}})
-        send({"jsonrpc": "2.0", "id": 900, "method": "session/request_permission", "params": {"sessionId": sid,
-              "toolCall": {"toolCallId": "t1", "title": "`%s`" % command, "kind": "execute", "rawInput": {"command": command}},
-              "options": [{"optionId": "yes", "name": "Allow", "kind": "allow_once"}, {"optionId": "no", "name": "Reject", "kind": "reject_once"}]}})
+    ONCE = [{"optionId": "yes", "name": "Allow", "kind": "allow_once"}, {"optionId": "no", "name": "Reject", "kind": "reject_once"}]
+    def request(command, rid=900, options=ONCE):
+        update({"sessionUpdate": "tool_call", "toolCallId": "t%d" % rid, "title": "`%s`" % command, "kind": "execute", "status": "pending", "rawInput": {"command": command}})
+        send({"jsonrpc": "2.0", "id": rid, "method": "session/request_permission", "params": {"sessionId": sid,
+              "toolCall": {"toolCallId": "t%d" % rid, "title": "`%s`" % command, "kind": "execute", "rawInput": {"command": command}},
+              "options": options}})
+    def answered(command):
         reply = json.loads(sys.stdin.readline())
-        ok = reply.get("result", {}).get("outcome", {}).get("optionId") == "yes"
-        note({"asked": command, "allowed": ok})
-        update({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed" if ok else "failed"})
+        picked = reply.get("result", {}).get("outcome", {}).get("optionId")
+        ok = picked in ("yes", "always")
+        note({"asked": command, "allowed": ok, "picked": picked, "rid": reply.get("id")})
+        update({"sessionUpdate": "tool_call_update", "toolCallId": "t%s" % reply.get("id"), "status": "completed" if ok else "failed"})
+    def ask(command, options=ONCE):
+        request(command, options=options)
+        answered(command)
     for line in sys.stdin:
         m = json.loads(line)
         method, mid, p = m.get("method"), m.get("id"), m.get("params", {})
@@ -42,6 +48,13 @@ final class TaskRunnerTests: XCTestCase {
                     if c.get("method") == "session/cancel":
                         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "cancelled"}}); break
                 continue
+            if "BOTH" in text:
+                request("touch a", rid=901)
+                request("touch b", rid=902)
+                answered("touch a")
+                answered("touch b")
+            if "ALWAYS" in text:
+                ask("touch z", options=[{"optionId": "always", "name": "Always allow", "kind": "allow_always"}, {"optionId": "no", "name": "Reject", "kind": "reject_once"}])
             if "ASK" in text: ask("touch x")
             if "TWICE" in text:
                 ask("touch y")
@@ -404,6 +417,111 @@ final class TaskRunnerTests: XCTestCase {
 
         let fresh = TaskRunner(tasks: tasks, store: TaskRunStore(database: database))
         XCTAssertFalse(fresh.canRun(agent), "without the test's opt-in, an agent outside the list cannot run")
+    }
+
+    func testASecondPendingApprovalSurfacesWhenTheFirstIsAnswered() async throws {
+        let id = try newTask("BOTH at once")
+        await start(id)
+        await wait("first approval") { approvals.count == 1 }
+        await wait("second request queued") { runner.pendingApprovals(for: id).count == 2 }
+        XCTAssertEqual(approvals.map(\.detail), ["touch a"], "one bubble while the first waits")
+        runner.decide(id: approvals[0].id, allow: true)
+        XCTAssertEqual(approvals.count, 2, "the next pending approval gets its own bubble and notification")
+        XCTAssertEqual(approvals[1].detail, "touch b")
+        XCTAssertEqual(runner.run(for: id)?.approval, approvals[1])
+        XCTAssertEqual(runner.run(for: id)?.state, .needsApproval)
+        XCTAssertEqual(tasks.task(id)?.status, .needsYou, "still waiting on the user")
+        runner.decide(id: approvals[1].id, allow: false)
+        await wait("finish") { finished == [id] }
+        XCTAssertEqual(logged().filter { $0["asked"] != nil }.map { $0["allowed"] as? Bool }, [true, false])
+    }
+
+    func testARequestOfferingOnlyAlwaysAllowCanOnlyBeDenied() async throws {
+        let id = try newTask("ALWAYS please")
+        await start(id)
+        await wait("approval") { approvals.count == 1 }
+        let approval = approvals[0]
+        XCTAssertFalse(approval.canAllow)
+        XCTAssertTrue(approval.detail.hasSuffix(ApprovalRules.onlyAlwaysAllow), approval.detail)
+        let bubble = Announcer.taskRunApprovalBubble(approval, task: "ALWAYS please", decide: { _ in }, openTasks: {})
+        XCTAssertEqual(bubble.actions.map(\.title), ["Deny", "Show task"])
+        runner.decide(id: approval.id, allow: true)
+        await wait("finish") { finished == [id] }
+        XCTAssertEqual(logged().first { $0["asked"] != nil }?["picked"] as? String, "no", "never allow_always in a run")
+    }
+
+    func testOpenPRRefusesWhenTheCopySeesAnotherPushURLOrPushConfig() async throws {
+        var commands: [[String]] = []
+        runner.recordOpenPR = { commands.append($0) }
+        let id = try newTask("COMMIT then steer")
+        await start(id)
+        await wait("finish") { finished == [id] }
+        let run = try XCTUnwrap(runner.run(for: id))
+        XCTAssertNotNil(run.pushConfig, "the copy's push config is recorded at Start")
+        XCTAssertEqual(TaskRunStore(database: database).all().first?.pushConfig, run.pushConfig)
+
+        let steer = dir.appendingPathComponent("steer.gitconfig")
+        try "[remote \"origin\"]\n\tpushurl = https://evil.example/app.git\n".write(to: steer, atomically: true, encoding: .utf8)
+        _ = try git("config", "includeIf.onbranch:\(run.branch).path", steer.path)
+        let steered = await runner.openPR(task: id)
+        XCTAssertEqual(steered, "In the task's copy, git pushes origin to https://evil.example/app.git instead of git@github.com:you/app.git, so ironpet did not push. Check the copy's git config and push \(run.branch) yourself.")
+        _ = try git("config", "--unset", "includeIf.onbranch:\(run.branch).path")
+
+        _ = try git("config", "url.https://evil.example/.pushInsteadOf", "git@github.com:")
+        let rewritten = await runner.openPR(task: id)
+        XCTAssertEqual(rewritten, "The copy's git config for URL rewrites, includes, the SSH command or credentials changed since the task started, so ironpet did not push. Check it and push \(run.branch) yourself.")
+        XCTAssertTrue(commands.isEmpty, "nothing is pushed")
+        _ = try git("config", "--unset", "url.https://evil.example/.pushInsteadOf")
+
+        let clean = await runner.openPR(task: id)
+        XCTAssertNil(clean)
+        XCTAssertEqual(commands.count, 2)
+    }
+
+    func testAProjectInsideIronpetsOwnFolderIsRefused() async throws {
+        for root in [dir.appendingPathComponent("ironpet"), dir.appendingPathComponent("worktrees")] {
+            let inside = root.appendingPathComponent("app-1234/copy")
+            try FileManager.default.createDirectory(at: inside, withIntermediateDirectories: true)
+            try GitFixture.initRepo(inside)
+            let id = try newTask("COMMIT inside \(root.lastPathComponent)")
+            let refused = await start(id, project: inside)
+            XCTAssertEqual(refused, "copy is inside ironpet's own folder (\((RunScope.resolve(root.path) as NSString).abbreviatingWithTildeInPath)). Choose the project's own folder.")
+            XCTAssertNil(runner.run(for: id))
+        }
+        let link = dir.appendingPathComponent("looks-like-a-project")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: dir.appendingPathComponent("ironpet/app-1234/copy"))
+        let id = try newTask("COMMIT through a symlink")
+        let refused = await start(id, project: link)
+        XCTAssertNotNil(refused, "a symlink into ironpet's folder is resolved first")
+        XCTAssertNil(runner.run(for: id))
+        XCTAssertNil(runner.refusesIronpetFolder(repo))
+    }
+
+    func testABubbleOrNotificationOffersAllowOnlyForAShortRequest() {
+        func approval(_ detail: String, canAllow: Bool = true) -> TaskRun.Approval {
+            TaskRun.Approval(id: UUID(), title: "Run this command?", detail: detail, canAllow: canAllow)
+        }
+        func titles(_ approval: TaskRun.Approval) -> [String] {
+            Announcer.taskRunApprovalBubble(approval, task: "Fix login", decide: { _ in }, openTasks: {}).actions.map(\.title)
+        }
+        let short = approval("npm test")
+        XCTAssertTrue(short.allowableAtAGlance)
+        XCTAssertEqual(titles(short), ["Allow", "Deny", "Show task"])
+        XCTAssertEqual(Announcer.taskRunApprovalBody(short), "npm test")
+
+        let long = approval(String(repeating: "a", count: 241))
+        XCTAssertFalse(long.allowableAtAGlance)
+        XCTAssertEqual(titles(long), ["Deny", "Show task"])
+        XCTAssertTrue(Announcer.taskRunApprovalBody(long).hasSuffix("Too long to show here: open the task to read all of it before you allow."))
+        XCTAssertLessThan(Announcer.taskRunApprovalBody(long).count, 320)
+
+        let tall = approval("1\n2\n3\n4\n5")
+        XCTAssertFalse(tall.allowableAtAGlance, "more than four lines")
+        XCTAssertEqual(titles(tall), ["Deny", "Show task"])
+        XCTAssertTrue(approval("1\n2\n3\n4").allowableAtAGlance)
+        XCTAssertTrue(approval(String(repeating: "a", count: 240)).allowableAtAGlance)
+
+        XCTAssertEqual(titles(approval("npm test", canAllow: false)), ["Deny", "Show task"])
     }
 
     func testOpenPRRefusesWhenTheCopysGitFileWasRewritten() async throws {

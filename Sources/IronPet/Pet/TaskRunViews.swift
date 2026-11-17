@@ -36,6 +36,7 @@ struct TaskRunControls: View {
                 actions {
                     Button("Allow") { decide(run, true) }
                         .buttonStyle(.borderedProminent)
+                        .disabled(run?.approval?.canAllow == false)
                         .keyboardShortcut(runner.waiting.first?.task == task.id ? KeyboardShortcut(.return, modifiers: .command) : nil)
                         .help(runner.waiting.first?.task == task.id ? "Allow (⌘↩)" : "Allow")
                     Button("Deny") { decide(run, false) }
@@ -152,10 +153,13 @@ struct TaskRunControls: View {
     }
 }
 
-/// The approval a run is waiting on, in the row and the chat strip.
+/// The approval a run is waiting on, in the row, the Agents list and the chat strip. The whole detail shows, scrolling
+/// past `maxDetailHeight`, because these are the places a long request can be allowed.
 struct TaskRunApprovalCard: View {
     let title: String
     let detail: String
+
+    static let maxDetailHeight: CGFloat = 160
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -163,11 +167,16 @@ struct TaskRunApprovalCard: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AgentStatus.needsInput.tint)
             if !detail.isEmpty {
-                Text(detail)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.primary.opacity(0.85))
-                    .lineLimit(3)
-                    .textSelection(.enabled)
+                ScrollView {
+                    Text(detail)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.primary.opacity(0.85))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: Self.maxDetailHeight)
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.horizontal, 8)
@@ -454,6 +463,7 @@ private struct TaskRunAgentRow: View {
                         TaskRunApprovalCard(title: approval.title, detail: approval.detail)
                         HStack(spacing: 6) {
                             Button("Allow") { runner.decide(id: approval.id, allow: true) }.buttonStyle(.borderedProminent)
+                                .disabled(!approval.canAllow)
                             Button("Deny") { runner.decide(id: approval.id, allow: false) }.buttonStyle(.bordered)
                         }
                         .controlSize(.small)
@@ -527,6 +537,7 @@ struct TaskRunApprovalStrip: View {
                     HStack(spacing: 6) {
                         Button("Deny") { runner.decide(id: approval.id, allow: false) }
                         Button("Allow") { runner.decide(id: approval.id, allow: true) }.buttonStyle(.borderedProminent)
+                            .disabled(!approval.canAllow)
                     }
                     if waiting.count > 1 {
                         Button("\(waiting.count - 1) more in Tasks", action: onOpenTasks).buttonStyle(.link).font(.caption)

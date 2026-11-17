@@ -69,6 +69,18 @@ struct TaskRun: Identifiable, Equatable {
         let id: UUID
         let title: String
         let detail: String
+        /// False when the agent offered no allow-once answer: the request can only be denied.
+        var canAllow = true
+
+        /// Whether a bubble or notification, which show only the start of the detail, may offer Allow. A longer detail
+        /// is allowed only where all of it shows: the task row, the Agents list or the chat strip.
+        var allowableAtAGlance: Bool { canAllow && Self.fitsAtAGlance(detail) }
+
+        static let glanceLimit = 240
+
+        static func fitsAtAGlance(_ detail: String) -> Bool {
+            detail.count <= glanceLimit && detail.split(separator: "\n", omittingEmptySubsequences: false).count <= 4
+        }
     }
 
     var agentName: String { AgentCatalog.agent(id: agent)?.name ?? agent }

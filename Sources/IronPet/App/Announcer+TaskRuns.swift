@@ -4,15 +4,31 @@ import SwiftUI
 /// Bubbles for agents working on tasks. Each run has its own approval bubble and one bubble for how it ended.
 extension Announcer {
     func taskRunApproval(_ approval: TaskRun.Approval, task: String, openTasks: @escaping () -> Void) {
-        bubbles.show(Bubble(id: Self.taskRunApprovalID(approval.id), symbol: "hand.raised.fill", tint: .orange,
-                            title: "Task agent wants to: \(approval.title)", subtitle: task, body: String(approval.detail.prefix(240)),
-                            actions: [
-                                .init(title: "Allow", style: .primary) { [weak self] in self?.decide(approval.id, true) },
-                                .init(title: "Deny", style: .destructive) { [weak self] in self?.decide(approval.id, false) },
-                                .init(title: "Show task", run: openTasks),
-                            ]))
+        bubbles.show(Self.taskRunApprovalBubble(approval, task: task, decide: { [weak self] in self?.decide(approval.id, $0) }, openTasks: openTasks))
         NSSound(named: "Pop")?.play()
-        if alsoSystemNotifications { notifier.announceApproval(id: approval.id, title: approval.title, detail: approval.detail) }
+        if alsoSystemNotifications {
+            notifier.announceApproval(id: approval.id, title: approval.title, detail: Self.taskRunApprovalBody(approval),
+                                      canAllow: approval.allowableAtAGlance)
+        }
+    }
+
+    /// Allow only when the whole request fits: a longer one is answered in Tasks, where all of it shows.
+    static func taskRunApprovalBubble(_ approval: TaskRun.Approval, task: String, decide: @escaping (Bool) -> Void,
+                                      openTasks: @escaping () -> Void) -> Bubble {
+        var actions: [Bubble.Action] = []
+        if approval.allowableAtAGlance { actions.append(.init(title: "Allow", style: .primary) { decide(true) }) }
+        actions.append(.init(title: "Deny", style: .destructive) { decide(false) })
+        actions.append(.init(title: "Show task", style: approval.allowableAtAGlance ? .normal : .primary, run: openTasks))
+        return Bubble(id: taskRunApprovalID(approval.id), symbol: "hand.raised.fill", tint: .orange,
+                      title: "Task agent wants to: \(approval.title)", subtitle: task, body: taskRunApprovalBody(approval), actions: actions)
+    }
+
+    /// The detail when it fits, else its start and where to read the rest.
+    static func taskRunApprovalBody(_ approval: TaskRun.Approval) -> String {
+        if !approval.canAllow { return ApprovalRules.onlyAlwaysAllow }
+        guard !TaskRun.Approval.fitsAtAGlance(approval.detail) else { return approval.detail }
+        let start = approval.detail.split(separator: "\n", omittingEmptySubsequences: false).prefix(3).joined(separator: "\n")
+        return String(start.prefix(TaskRun.Approval.glanceLimit - 60)) + "…\nToo long to show here: open the task to read all of it before you allow."
     }
 
     func clearTaskRunApproval(id: UUID) {

@@ -309,18 +309,28 @@ final class TaskRunner: ObservableObject {
 
     // MARK: Approvals
 
+    /// Answers a pending approval. An approval the agent offered no allow-once answer for is always denied.
     func decide(id: UUID, allow: Bool) {
         guard let task = live.first(where: { $0.value.pending.contains { $0.approval.id == id } })?.key,
               let index = live[task]?.pending.firstIndex(where: { $0.approval.id == id }),
               let entry = live[task]?.pending.remove(at: index) else { return }
-        entry.respond(allow ? .allow : .deny())
+        entry.respond(allow && entry.approval.canAllow ? .allow : .deny())
         onApprovalResolved?(id)
         let next = live[task]?.pending.first?.approval
         update(task) {
             $0.approval = next
             if next == nil, $0.state == .needsApproval { $0.state = .running }
         }
-        if next == nil { setStatus(task, .inProgress) }
+        if let next, let run = runs[task] {
+            onApproval?(run, next)
+        } else {
+            setStatus(task, .inProgress)
+        }
+    }
+
+    /// The approvals a run waits on, oldest first. `TaskRun.approval` is the first.
+    func pendingApprovals(for task: String) -> [TaskRun.Approval] {
+        live[task]?.pending.map(\.approval) ?? []
     }
 
     func hasPendingApproval(_ id: UUID) -> Bool {
@@ -333,7 +343,7 @@ final class TaskRunner: ObservableObject {
         case .allow: respond(.allow)
         case .refuse(let message): respond(.deny(message))
         case .ask(let title, let detail):
-            let approval = TaskRun.Approval(id: UUID(), title: title, detail: detail)
+            let approval = TaskRun.Approval(id: UUID(), title: title, detail: detail, canAllow: call.offersAllowOnce)
             live[task]?.pending.append((approval, respond))
             guard live[task]?.pending.count == 1 else { return }
             update(task) { $0.state = .needsApproval; $0.approval = approval }
