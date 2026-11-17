@@ -22,10 +22,10 @@ final class TaskRunStoreTests: XCTestCase {
 
     func testMigratesAnExistingDatabaseAndAgain() throws {
         let file = dir.appendingPathComponent("ironpet.db")
-        // A database that already ran the migrations numbered before 402, including 400 and 401 from other features.
-        let older = AppMigrations.all.filter { $0.version < 402 }
+        // A database that already ran the migrations numbered before 420, including 400 and 410 from other features.
+        let older = AppMigrations.all.filter { $0.version < 420 }
         let (existing, _) = Database.open(path: file, migrations: older)
-        try existing.write { try $0.script("PRAGMA user_version = 401") }
+        try existing.write { try $0.script("PRAGMA user_version = 410") }
         XCTAssertFalse(try existing.read { try TaskStore.columns($0, "task_runs") }.contains("cleanup"))
         let (database, error) = Database.open(path: file, migrations: AppMigrations.all)
         XCTAssertNil(error)
