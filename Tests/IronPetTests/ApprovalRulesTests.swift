@@ -282,6 +282,88 @@ final class ApprovalRulesTests: XCTestCase {
         if case .allow = runPolicy(mixed, auto: true) { XCTFail("only memory files on every side are allowed") }
     }
 
+    func testTaskRunReadsCodexRenameDestinationsFromContent() {
+        // codex-acp: the started tool_call carries the diff with the destination; the permission lists only sources.
+        var call = ACPToolCall(json: ["toolCallId": "c1", "title": "Editing files", "kind": "edit",
+                                      "locations": [["path": "/wt/repo/task/a.txt"]],
+                                      "content": [["type": "diff", "path": "/Users/me/.zshrc", "oldText": "", "newText": "x"]]])
+        call.merge(["toolCallId": "c1", "title": "Editing files", "kind": "edit", "locations": [["path": "/wt/repo/task/a.txt"]]])
+        XCTAssertEqual(call.contentPaths, ["/Users/me/.zshrc"], "content paths survive the permission's merge")
+        XCTAssertEqual(call.allPaths, ["/wt/repo/task/a.txt", "/Users/me/.zshrc"])
+        guard case .ask(let title, let detail) = runPolicy(call, auto: true) else { return XCTFail("a rename out of the copy must ask") }
+        XCTAssertTrue(title.hasSuffix("outside the task's copy?"), title)
+        XCTAssertTrue(detail.contains("/Users/me/.zshrc"), detail)
+
+        let patch = ACPToolCall(json: ["toolCallId": "c2", "kind": "edit", "locations": [["path": "/wt/repo/task/a.txt"]],
+                                       "content": [["type": "diff", "path": "/wt/repo/task/b.txt", "oldText": NSNull(), "newText": "",
+                                                    "_meta": ["kind": "move", "diffGitPatch": ["oldPath": "/tmp/a.txt", "text": "..."]]]]])
+        XCTAssertEqual(patch.contentPaths, ["/wt/repo/task/b.txt", "/tmp/a.txt"])
+        if case .allow = runPolicy(patch, auto: true) { XCTFail("an old path in the patch's _meta outside must ask") }
+
+        let inside = ACPToolCall(json: ["toolCallId": "c3", "kind": "edit", "locations": [["path": "/wt/repo/task/a.txt"]],
+                                        "content": [["type": "diff", "path": "/wt/repo/task/b.txt", "oldText": "a", "newText": "b"]]])
+        XCTAssertEqual(runPolicy(inside, auto: true), .allow)
+
+        let noDiff = ACPToolCall(json: ["toolCallId": "c4", "title": "Editing files", "kind": "edit",
+                                        "locations": [["path": "/wt/repo/task/a.txt"]]])
+        if case .allow = runPolicy(noDiff, auto: true) { XCTFail("an edit known only by its locations may hide a rename's destination") }
+        let move = ACPToolCall(id: "1", title: "Move", kind: "move", paths: ["/wt/repo/task/a.txt"])
+        if case .allow = runPolicy(move, auto: true) { XCTFail("a move without a destination must ask") }
+    }
+
+    func testTaskRunAsksBeforeEditingAgentSettingsAndHooksInTheCopy() {
+        let settings = ["/wt/repo/task/.claude/settings.local.json", ".claude/settings.json", ".cursor/rules/x.mdc", ".codex/config.toml",
+                        ".gemini/settings.json", ".vscode/settings.json", "packages/app/.claude/settings.json", ".mcp.json"]
+        for path in settings {
+            let call = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": path])
+            XCTAssertEqual(runPolicy(call, auto: true), .ask(title: "Edit the agent's settings in the task's copy?", detail: path), path)
+        }
+        for path in [".husky/pre-commit", "lefthook.yml", ".pre-commit-config.yaml"] {
+            let call = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": path])
+            XCTAssertEqual(runPolicy(call, auto: true), .ask(title: "Edit the project's git hooks in the task's copy?", detail: path), path)
+        }
+        for path in [".git", ".git/hooks/pre-push", "/wt/repo/task/.git/config"] {
+            let call = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": path])
+            XCTAssertEqual(runPolicy(call, auto: true), .ask(title: "Edit git's own files in the task's copy?", detail: path), path)
+        }
+        for path in ["src/lefthook.yml", "docs/.mcp.json", "src/claude/a.swift", ".github/workflows/ci.yml", ".gitignore"] {
+            let call = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": path])
+            XCTAssertEqual(runPolicy(call, auto: true), .allow, path)
+        }
+        let outside = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": "/Users/me/.claude/settings.json"])
+        guard case .ask(let title, _) = runPolicy(outside, auto: true) else { return XCTFail("must ask") }
+        XCTAssertEqual(title, "Edit settings.json outside the task's copy?", "outside the copy wins over protected")
+    }
+
+    func testTaskRunJudgesACommandWhateverKindTheCallClaims() {
+        let read = ACPToolCall(id: "1", title: "Read", kind: "read",
+                               rawInput: ["command": "cat a", "additionalPermissions": ["fileSystem": ["write": ["/Users/me"]]]])
+        XCTAssertEqual(runPolicy(read, auto: true), .ask(title: "Run this command?", detail: "cat a"))
+        XCTAssertEqual(runPolicy(ACPToolCall(id: "1", title: "Search", kind: "search", rawInput: ["command": "git push"]), auto: true),
+                       .refuse(ApprovalRules.refusedInRun))
+        XCTAssertEqual(runPolicy(ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["cmd": "rm -rf src"]), auto: true),
+                       .ask(title: "Run a destructive command?", detail: "rm -rf src"))
+        let sandbox = ACPToolCall(id: "1", title: "Additional sandbox permissions", kind: "other",
+                                  rawInput: ["permissions": ["network": ["enabled": true]], "cwd": "/wt/repo/task"])
+        guard case .ask(let title, _) = runPolicy(sandbox, auto: true) else { return XCTFail("extra permissions must ask") }
+        XCTAssertEqual(title, "Give the agent extra permissions?")
+        let network = ACPToolCall(id: "1", title: "https network access to evil.example", kind: "think", rawInput: ["url": "https://evil.example"])
+        guard case .ask(let netTitle, _) = runPolicy(network, auto: true) else { return XCTFail("network access must ask") }
+        XCTAssertEqual(netTitle, "Allow network access?")
+        XCTAssertEqual(runPolicy(ACPToolCall(id: "1", title: "WebFetch", kind: "fetch", rawInput: ["url": "https://example.com"]), auto: true),
+                       .allow, "a fetch tool reads its url")
+    }
+
+    func testRunScopeRefusesPathsAShellOrURLWouldPlaceElsewhere() {
+        for path in ["~root/.ssh/x", "~me", "$PWD/a", "src/$X/a", "${HOME}/a", "file:///wt/repo/task/a.txt", "https://x/a", "C:x"] {
+            XCTAssertFalse(scope.contains(path), path)
+            let call = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": path])
+            if case .allow = runPolicy(call, auto: true) { XCTFail("\(path) must ask") }
+        }
+        XCTAssertTrue(scope.contains("src/a~b.swift"))
+        XCTAssertTrue(scope.contains("/wt/repo/task/src/a:b.swift"))
+    }
+
     func testRunScopeFollowsSymlinksOutOfTheWorktree() throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-scope-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: base) }

@@ -8,6 +8,9 @@ struct ACPToolCall {
     var kind: String
     var rawInput: Any?
     var paths: [String]
+    /// Paths named in `content` entries (`path`, `oldPath`, `newPath`, also inside their `_meta`), kept across updates.
+    /// codex-acp puts a rename's destination only here: its `locations` list the sources.
+    var contentPaths: [String] = []
     /// The agent's own tool name when it gives one (the Claude adapter sends `_meta.claudeCode.toolName`).
     var toolName: String?
     /// The tool call of the subagent this call runs under. The Claude adapter stamps `_meta.claudeCode.parentToolUseId`
@@ -46,6 +49,9 @@ struct ACPToolCall {
             let found = locations.compactMap { $0["path"] as? String }
             if !found.isEmpty { paths = found }
         }
+        if let content = json["content"] as? [JSON] {
+            for path in Self.paths(inContent: content) where !contentPaths.contains(path) { contentPaths.append(path) }
+        }
         if let name = ((json["_meta"] as? JSON)?["claudeCode"] as? JSON)?["toolName"] as? String { toolName = name }
         if let parent = Self.parentID(in: json) { parentToolUseID = parent }
     }
@@ -67,10 +73,30 @@ struct ACPToolCall {
 
     static let pathKeys = ["file_path", "path", "target_file", "notebook_path", "destination", "new_path", "target", "source"]
 
+    static let contentPathKeys = ["path", "oldPath", "newPath"]
+
+    /// The paths in `content` entries and one level into their `_meta` (codex-acp's git patch keeps `oldPath` there).
+    static func paths(inContent content: [JSON]) -> [String] {
+        var found: [String] = []
+        func collect(_ object: JSON) {
+            for key in contentPathKeys {
+                if let text = object[key] as? String, !text.isEmpty, !found.contains(text) { found.append(text) }
+            }
+        }
+        for entry in content {
+            collect(entry)
+            if let meta = entry["_meta"] as? JSON {
+                collect(meta)
+                for case let nested as JSON in meta.values { collect(nested) }
+            }
+        }
+        return found
+    }
+
     /// Every file the call names: its locations, the path keys of its input and of a list of edits in it, and the keys
     /// of a map keyed by path (Codex's `changes`; elsewhere only keys that look like absolute or home paths).
     var allPaths: [String] {
-        var found = paths
+        var found = paths + contentPaths
         func collect(_ object: JSON) {
             for key in Self.pathKeys {
                 if let text = object[key] as? String, !text.isEmpty { found.append(text) }
@@ -137,13 +163,44 @@ struct RunScope: Equatable {
 
     /// Compares real locations, so a symlink in the worktree that points outside it counts as outside. `~` and `$HOME`
     /// mean the home folder, as in a shell, not a folder of that name in the worktree.
+    /// A path a shell would expand differently (`~user`, `$VAR`) or a URL counts as outside.
     func contains(_ path: String) -> Bool {
+        relative(path) != nil
+    }
+
+    /// The path's components under the worktree, after resolving it. Nil when it is outside or cannot be placed.
+    func relative(_ path: String) -> [String]? {
         var path = path
         if path == "~" || path.hasPrefix("~/") { path = (path as NSString).expandingTildeInPath }
         if path == "$HOME" || path.hasPrefix("$HOME/") { path = NSHomeDirectory() + path.dropFirst("$HOME".count) }
+        if path.hasPrefix("~") || path.contains("$") || path.range(of: #"^[A-Za-z][A-Za-z0-9+.-]*:"#, options: .regularExpression) != nil {
+            return nil
+        }
         let base = Self.resolve(root.path)
         let target = Self.resolve(path.hasPrefix("/") ? path : root.appendingPathComponent(path).path)
-        return target == base || target.hasPrefix(base + "/")
+        if target == base { return [] }
+        guard target.hasPrefix(base + "/") else { return nil }
+        return target.dropFirst(base.count + 1).split(separator: "/").map(String.init)
+    }
+
+    /// Folders, anywhere in the worktree, whose files an agent or git obeys in a later session.
+    static let protectedFolders: Set<String> = [".git", ".claude", ".cursor", ".codex", ".gemini", ".vscode", ".husky"]
+    /// Files at the top of the worktree that configure agents or git hooks.
+    static let protectedRootFiles: Set<String> = [".mcp.json", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml",
+                                                  ".pre-commit-config.yaml"]
+    static let hookFolders: Set<String> = [".git", ".husky"]
+
+    enum Protection { case gitFiles, hooks, agentSettings }
+
+    /// Why an edit inside the worktree still asks: it writes git's files, git hooks, or settings an agent reads. Nil otherwise.
+    func protection(_ path: String) -> Protection? {
+        guard let parts = relative(path) else { return nil }
+        if parts.contains(".git") { return .gitFiles }
+        if parts.contains(where: Self.hookFolders.contains) { return .hooks }
+        if parts.count == 1, Self.protectedRootFiles.contains(parts[0]) {
+            return parts[0] == ".mcp.json" ? .agentSettings : .hooks
+        }
+        return parts.contains(where: Self.protectedFolders.contains) ? .agentSettings : nil
     }
 
     /// The path with every symlink followed, including a dangling one, and the rest under the closest existing folder.
@@ -318,39 +375,70 @@ enum ApprovalRules {
     /// read-only tools. Every command, and every tool that is not read-only, asks in Auto too. Commands that match
     /// `pushOrPR` are refused and `sharedGitChange` ones ask with the reason, but the rule does not rest on those patterns.
     static func runPolicy(for call: ACPToolCall, auto: Bool, run: RunScope) -> ApprovalPolicy {
+        // A command, extra sandbox permissions or network access is judged as a command, whatever kind the call claims.
+        let command = runCommand(call)
+        if command != nil || grantsAccess(call) { return commandPolicy(call, command: command) }
         switch call.kind {
         case "read", "search", "think", "fetch":
             return .allow
         case "edit", "delete", "move":
             let all = call.allPaths
-            let outside = all.isEmpty || all.contains { !run.contains($0) || gitInternals.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }
-            if auto, !outside { return .allow }
+            let outside = all.isEmpty || all.contains { !run.contains($0) } || destinationUnknown(call)
+            let protection = outside ? nil : all.lazy.compactMap(run.protection).first
+            if auto, !outside, protection == nil { return .allow }
             let preview = ((call.input["content"] ?? call.input["new_string"] ?? call.input["new_source"]) as? String)?
                 .split(separator: "\n", omittingEmptySubsequences: false).prefix(8).joined(separator: "\n")
             let verb = call.kind == "delete" ? "Delete" : call.kind == "move" ? "Move" : "Edit"
-            let place = outside ? " outside the task's copy" : ""
-            let title = all.first.map { "\(verb) \(URL(fileURLWithPath: $0).lastPathComponent)\(place)?" } ?? "\(verb) a file\(place)?"
+            let title: String
+            switch protection {
+            case .gitFiles: title = "Edit git's own files in the task's copy?"
+            case .hooks: title = "Edit the project's git hooks in the task's copy?"
+            case .agentSettings: title = "Edit the agent's settings in the task's copy?"
+            case nil:
+                let place = outside ? " outside the task's copy" : ""
+                title = all.first.map { "\(verb) \(URL(fileURLWithPath: $0).lastPathComponent)\(place)?" } ?? "\(verb) a file\(place)?"
+            }
             let files = all.isEmpty ? nil : all.joined(separator: "\n")
             return .ask(title: title, detail: [files, preview].compactMap { $0 }.joined(separator: "\n\n"))
         default:
             let mcp = call.mcp
             let tool = mcp?.tool ?? call.toolName ?? call.title
-            let command = runCommand(call)
-            if command == nil, isReadOnlyMCP(tool) || ownReadTools.contains(tool) && (mcp == nil || mcp?.server == "ironpet") {
-                return .allow
-            }
-            guard let command else {
-                let target = mcp.map { " (\($0.server))" } ?? ""
-                let dangerous = isDestructive(call.arguments)
-                return .ask(title: (dangerous ? "Run a destructive tool: " : "Use ") + tool + target + "?", detail: String(call.arguments.prefix(600)))
-            }
-            let text = command + "\n" + call.arguments
-            if isPushOrPR(text) { return .refuse(refusedInRun) }
-            if let reason = sharedGitChange(text) {
-                return .ask(title: "Change the project's shared git setup?", detail: command + "\n\n" + reason)
-            }
-            return .ask(title: isDestructive(text) ? "Run a destructive command?" : "Run this command?", detail: command)
+            if isReadOnlyMCP(tool) || ownReadTools.contains(tool) && (mcp == nil || mcp?.server == "ironpet") { return .allow }
+            let target = mcp.map { " (\($0.server))" } ?? ""
+            let dangerous = isDestructive(call.arguments)
+            return .ask(title: (dangerous ? "Run a destructive tool: " : "Use ") + tool + target + "?", detail: String(call.arguments.prefix(600)))
         }
+    }
+
+    /// A move without a known destination, or an edit whose only paths are its `locations`: codex-acp lists a rename's
+    /// sources there and its destination only in `content`, which a large diff leaves empty.
+    static func destinationUnknown(_ call: ACPToolCall) -> Bool {
+        if call.kind == "move" { return Set(call.allPaths).count < 2 }
+        let named = ACPToolCall(rawInput: call.rawInput).allPaths
+        return call.kind == "edit" && !call.paths.isEmpty && call.contentPaths.isEmpty && named.isEmpty
+    }
+
+    /// Extra sandbox permissions or network access, as codex-acp asks for them.
+    static func grantsAccess(_ call: ACPToolCall) -> Bool {
+        let input = call.input
+        if input["additionalPermissions"] != nil || input["permissions"] != nil { return true }
+        guard call.kind != "fetch", let url = input["url"] as? String else { return false }
+        return url.lowercased().hasPrefix("http://") || url.lowercased().hasPrefix("https://")
+    }
+
+    /// A shell command or an access request in a task run: always a card, refused when it plainly pushes or opens a PR.
+    static func commandPolicy(_ call: ACPToolCall, command: String?) -> ApprovalPolicy {
+        let text = (command ?? "") + "\n" + call.arguments
+        if isPushOrPR(text) { return .refuse(refusedInRun) }
+        if let reason = sharedGitChange(text) {
+            return .ask(title: "Change the project's shared git setup?", detail: (command ?? call.title) + "\n\n" + reason)
+        }
+        guard let command else {
+            let network = call.input["url"] != nil && call.input["additionalPermissions"] == nil && call.input["permissions"] == nil
+            return .ask(title: network ? "Allow network access?" : "Give the agent extra permissions?",
+                        detail: [call.title, String(call.arguments.prefix(600))].filter { !$0.isEmpty }.joined(separator: "\n\n"))
+        }
+        return .ask(title: isDestructive(text) ? "Run a destructive command?" : "Run this command?", detail: command)
     }
 
     /// The shell command of an execute call, or of a call of another kind that carries one. Nil for other tools.
