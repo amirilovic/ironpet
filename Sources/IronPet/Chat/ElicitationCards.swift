@@ -4,6 +4,9 @@ import SwiftUI
 struct ElicitationCard: View {
     @ObservedObject var session: ChatSession
     let pending: ChatSession.PendingForm
+    @State private var pager: ElicitationPager?
+
+    private var current: ElicitationPager { pager ?? ElicitationPager(pageCount: pending.form.pages.count) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -11,16 +14,39 @@ struct ElicitationCard: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
-            ForEach(pending.form.fields) { field in
+            let pages = pending.form.pages
+            let page = current
+            ForEach(page.isPaged ? pages[min(page.index, pages.count - 1)] : pending.form.fields) { field in
                 fieldView(field)
             }
             HStack {
-                Button { session.submitForm(pending.id) } label: {
-                    Label("Submit", systemImage: "checkmark").frame(minWidth: 70)
+                if page.isPaged {
+                    Button { move { $0.back() } } label: { Image(systemName: "chevron.left") }
+                        .buttonStyle(.bordered)
+                        .disabled(!page.canGoBack)
+                        .keyboardShortcut(.leftArrow, modifiers: [])
+                        .help("Previous question")
+                        .pointerCursor()
+                    Text(page.label)
+                        .font(.system(size: 11.5).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    if !page.isLast {
+                        Button { move { $0.forward() } } label: { Image(systemName: "chevron.right") }
+                            .buttonStyle(.bordered)
+                            .keyboardShortcut(.rightArrow, modifiers: [])
+                            .help("Next question")
+                            .pointerCursor()
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!pending.form.canSubmit(pending.answers))
-                .pointerCursor()
+                if !page.isPaged || page.isLast {
+                    Button { submit() } label: {
+                        Label("Submit", systemImage: "checkmark").frame(minWidth: 70)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!page.isPaged && !pending.form.canSubmit(pending.answers))
+                    .keyboardShortcut(.defaultAction)
+                    .pointerCursor()
+                }
                 Button { session.skipForm(pending.id) } label: {
                     Label("Skip", systemImage: "forward").frame(minWidth: 70)
                 }
@@ -32,6 +58,21 @@ struct ElicitationCard: View {
         .padding(12)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.orange.opacity(0.5)))
+    }
+
+    private func move(_ change: (inout ElicitationPager) -> Void) {
+        var next = current
+        change(&next)
+        pager = next
+    }
+
+    /// Sends the answers, or jumps to the first question that still needs one.
+    private func submit() {
+        if let page = pending.form.firstIncompletePage(pending.answers) {
+            move { $0.show(page) }
+        } else {
+            session.submitForm(pending.id)
+        }
     }
 
     @ViewBuilder
