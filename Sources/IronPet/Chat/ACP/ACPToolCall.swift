@@ -104,6 +104,21 @@ struct ACPToolCall {
 enum ApprovalPolicy: Equatable {
     case allow
     case ask(title: String, detail: String)
+    /// Answered with a refusal and no card, whatever the user's Auto setting. Only task runs get it.
+    case refuse(String)
+}
+
+/// What a task run adds to the rules: it works in its own git worktree and never pushes.
+struct RunScope: Equatable {
+    /// The worktree. Edits outside it ask, even in Auto.
+    let root: URL
+
+    func contains(_ path: String) -> Bool {
+        let base = root.standardizedFileURL.path
+        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : root.appendingPathComponent(path)
+        let target = url.standardizedFileURL.path
+        return target == base || target.hasPrefix(base + "/")
+    }
 }
 
 enum ApprovalRules {
@@ -133,24 +148,42 @@ enum ApprovalRules {
         destructive.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
     }
 
+    /// Commands that publish work or change where it goes. A task run never runs them: the user pushes with Open PR.
+    /// `git -C dir push` counts; `git stash push` does not.
+    static let pushOrPR = try! NSRegularExpression(pattern: #"""
+        \bgit\s+(?:-[cC]\s+\S+\s+|--?[a-z-]+(?:=\S+)?\s+)*(?:push|remote\s+(?:add|set-url))\b|\bgh\s+pr\s+(?:create|merge)\b
+        """#, options: [.caseInsensitive])
+
+    static let refusedInRun = "ironpet does not let a task run push, open a PR or change remotes. The user pushes with Open PR in ironpet. Commit your work and stop."
+
+    static func isPushOrPR(_ text: String) -> Bool {
+        pushOrPR.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
     /// Whether ironpet answers a permission request itself or shows a card. The agent only asks about calls it
-    /// considers risky, so anything not clearly read-only still asks.
-    static func policy(for call: ACPToolCall, auto: Bool, isMemoryFile: (String) -> Bool = Memory.contains) -> ApprovalPolicy {
+    /// considers risky, so anything not clearly read-only still asks. A task run (`run`) also refuses push and PR
+    /// commands and asks about edits outside its worktree, in Auto too.
+    static func policy(for call: ACPToolCall, auto: Bool, isMemoryFile: (String) -> Bool = Memory.contains,
+                       run: RunScope? = nil) -> ApprovalPolicy {
         switch call.kind {
         case "read", "search", "think", "fetch":
             return .allow
         case "execute":
             let command = call.command
+            if run != nil, isPushOrPR(command + "\n" + call.arguments) { return .refuse(refusedInRun) }
             let dangerous = isDestructive(command + "\n" + call.arguments)
             if auto, !dangerous { return .allow }
             return .ask(title: dangerous ? "Run a destructive command?" : "Run this command?", detail: command)
         case "edit", "delete", "move":
             let path = call.path
-            if auto || path.map(isMemoryFile) == true { return .allow }
+            if path.map(isMemoryFile) == true { return .allow }
+            let outside = run.map { scope in path.map { !scope.contains($0) } ?? true } ?? false
+            if auto, !outside { return .allow }
             let preview = ((call.input["content"] ?? call.input["new_string"] ?? call.input["new_source"]) as? String)?
                 .split(separator: "\n", omittingEmptySubsequences: false).prefix(8).joined(separator: "\n")
             let verb = call.kind == "delete" ? "Delete" : call.kind == "move" ? "Move" : "Edit"
-            let title = path.map { "\(verb) \(URL(fileURLWithPath: $0).lastPathComponent)?" } ?? "\(verb) a file?"
+            let place = outside ? " outside the task's copy" : ""
+            let title = path.map { "\(verb) \(URL(fileURLWithPath: $0).lastPathComponent)\(place)?" } ?? "\(verb) a file\(place)?"
             return .ask(title: title, detail: [path, preview].compactMap { $0 }.joined(separator: "\n\n"))
         default:
             // MCP servers can change real systems (databases, issue trackers), so anything not read-only asks first.

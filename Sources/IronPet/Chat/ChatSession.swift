@@ -814,6 +814,8 @@ final class ChatSession: ObservableObject {
             respond(.allow)
         case .ask(let title, let detail):
             ask(title: title, detail: detail, respond: respond)
+        case .refuse(let message):
+            respond(.deny(message))
         }
     }
 

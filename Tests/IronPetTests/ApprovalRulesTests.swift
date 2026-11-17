@@ -101,6 +101,52 @@ final class ApprovalRulesTests: XCTestCase {
         XCTAssertEqual((ACPBackend.outcome(.deny(), options: [])["outcome"] as? JSON)?["outcome"] as? String, "cancelled")
     }
 
+    // MARK: Task runs
+
+    private let scope = RunScope(root: URL(fileURLWithPath: "/wt/repo/task"))
+
+    private func runPolicy(_ call: ACPToolCall, auto: Bool = false) -> ApprovalPolicy {
+        ApprovalRules.policy(for: call, auto: auto, isMemoryFile: { $0.hasPrefix("/memory/") }, run: scope)
+    }
+
+    func testTaskRunRefusesPushAndPRCommandsEvenInAuto() {
+        for command in ["git push", "git push origin ironpet/x", "git -C /wt/repo/task push -u origin HEAD", "gh pr create --fill",
+                        "gh pr merge 12", "git remote add fork git@github.com:me/x.git", "git remote set-url origin x",
+                        "npm test && git push"] {
+            XCTAssertEqual(runPolicy(shell(command), auto: true), .refuse(ApprovalRules.refusedInRun), command)
+            XCTAssertEqual(runPolicy(shell(command)), .refuse(ApprovalRules.refusedInRun), command)
+        }
+        for command in ["git status", "git commit -m 'push the button'", "git stash push", "gh pr view 3"] {
+            XCTAssertEqual(runPolicy(shell(command), auto: true), .allow, command)
+        }
+    }
+
+    func testTaskRunEditsOutsideTheWorktreeAskEvenInAuto() {
+        let inside = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": "/wt/repo/task/src/a.swift"])
+        XCTAssertEqual(runPolicy(inside, auto: true), .allow)
+        let relative = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": "src/a.swift"])
+        XCTAssertEqual(runPolicy(relative, auto: true), .allow)
+        for path in ["/Users/me/code/repo/src/a.swift", "../other/a.swift", "/wt/repo/task-2/a.swift"] {
+            let call = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": path])
+            guard case .ask(let title, _) = runPolicy(call, auto: true) else { return XCTFail("\(path) must ask") }
+            XCTAssertTrue(title.hasSuffix("outside the task's copy?"), title)
+        }
+        let noPath = ACPToolCall(id: "1", title: "Write", kind: "edit")
+        if case .allow = runPolicy(noPath, auto: true) { XCTFail("an edit with no path must ask in a run") }
+        XCTAssertEqual(runPolicy(ACPToolCall(id: "2", title: "Edit", kind: "edit", paths: ["/memory/me.md"]), auto: true), .allow)
+    }
+
+    func testTaskRunKeepsTheDestructiveRule() {
+        XCTAssertEqual(runPolicy(shell("rm -rf build"), auto: true), .ask(title: "Run a destructive command?", detail: "rm -rf build"))
+    }
+
+    func testWithoutARunPushIsAnOrdinaryCommand() {
+        XCTAssertEqual(policy(shell("git push origin main"), auto: true), .allow)
+        XCTAssertEqual(policy(shell("gh pr create")), .ask(title: "Run this command?", detail: "gh pr create"))
+        let outside = ACPToolCall(id: "1", title: "Edit", kind: "edit", rawInput: ["file_path": "/anywhere/a.swift"])
+        XCTAssertEqual(policy(outside, auto: true), .allow)
+    }
+
     func testToolSummaries() {
         XCTAssertEqual(shell("npm test").summary, "Ran `npm test`")
         XCTAssertEqual(ACPToolCall(id: "1", title: "", kind: "read", paths: ["/a/b/c.ts"]).summary, "Read c.ts")
