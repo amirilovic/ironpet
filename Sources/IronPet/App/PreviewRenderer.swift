@@ -40,7 +40,7 @@ enum PreviewRenderer {
         let meetings = MeetingLibrary(root: sampleMeetings())
         meetings.reload()
         func list(_ sessions: SessionStore, tasks: TaskStore, on section: IronPetSection? = nil) -> some View {
-            let model = IronPetWindowModel()
+            let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.section = section ?? IronPetSection.needingAttention(store: sessions, signals: signals, tasks: tasks)
             return IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: chat,
                                      meetings: meetings, actions: .none)
@@ -69,11 +69,16 @@ enum PreviewRenderer {
         ConfigStore.shared.usePreview(patterned)
         for section in IronPetSection.allCases {
             for (suffix, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
-                let model = IronPetWindowModel()
-                model.section = section
-                let view = IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: chat,
-                                             meetings: meetings, settings: settingsModel, actions: .none)
-                renderWindow(model: model, session: chat, content: view, to: dir, "real-\(section.rawValue)-\(suffix)", scheme: scheme)
+                for collapsed in [false, true] {
+                    // A throwaway suite, so rendering never changes the user's saved sidebar state.
+                    let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
+                    model.sidebarCollapsed = collapsed
+                    model.section = section
+                    let view = IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: chat,
+                                                 meetings: meetings, settings: settingsModel, actions: .none)
+                    renderWindow(model: model, session: chat, content: view, to: dir,
+                                 "real-\(section.rawValue)-\(suffix)\(collapsed ? "-collapsed" : "")", scheme: scheme)
+                }
             }
         }
         ConfigStore.shared.usePreview(config)

@@ -74,6 +74,7 @@ macOS will ask for these permissions as you use the features:
 | Allow an action | **Allow** or <kbd>⌘↩</kbd> on the approval card |
 | Move Ghost | Drag him; he stays where you leave him |
 | Switch section | <kbd>⌘1</kbd> to <kbd>⌘7</kbd> in the ironpet window select the Nth sidebar row (Chat, Agents, Alerts, Tasks, Transcripts, Actions, Automations), also while the chat field has focus |
+| Collapse the sidebar | <kbd>⌃⌘S</kbd> or the sidebar button next to the traffic lights shrinks the sidebar to a 72 pt rail of section icons (tooltip with name and ⌘N, count badge on the icon) and back; the choice is remembered |
 | Settings | <kbd>⌘,</kbd>, the Settings row in the ironpet window, right-click Ghost → Settings…, or the Dock icon menu. A separate window with General, Integrations, Voice, Meetings and Usage in a sidebar; it reopens on the last page |
 | Make Ghost do tricks (wave, dance, zoomies, nap, say something…) | Right-click Ghost → Actions |
 
