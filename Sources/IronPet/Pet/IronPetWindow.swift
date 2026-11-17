@@ -46,6 +46,12 @@ enum IronPetSection: String, CaseIterable, Identifiable {
         return sections[digit - 1]
     }
 
+    /// The shortcut that selects this section, such as "⌘4"; nil past the ninth row.
+    func shortcutLabel(in sections: [IronPetSection]) -> String? {
+        guard let index = sections.firstIndex(of: self), index < 9 else { return nil }
+        return "⌘\(index + 1)"
+    }
+
     /// The tooltip of a sidebar row or rail icon: the name and its ⌘N shortcut.
     func hint(in sections: [IronPetSection]) -> String {
         guard let index = sections.firstIndex(of: self), index < 9 else { return title }
@@ -70,9 +76,24 @@ enum IronPetSection: String, CaseIterable, Identifiable {
 @MainActor
 final class IronPetWindowModel: ObservableObject {
     static let sidebarCollapsedKey = "ironpetSidebarCollapsed"
-    /// Width of the full sidebar and of the icon rail. The rail is as wide as the traffic lights above it.
-    static let sidebarWidth: CGFloat = 190
-    static let railWidth: CGFloat = 72
+    static let sidebarWidthKey = "ironpetSidebarWidth"
+    /// The expanded sidebar is 156 to 300 pt wide, 156 by default. At 156 the longest row ("Transcripts" or
+    /// "Automations") fits with a badge.
+    static let minSidebarWidth: CGFloat = 156
+    static let maxSidebarWidth: CGFloat = 300
+    /// The rail is as wide as the row of traffic lights: they span x 9 to 69, so it keeps the same 9 pt on the right.
+    static let railWidth: CGFloat = 78
+    /// Dragging the sidebar's edge below this width collapses it to the rail (halfway between rail and minimum);
+    /// dragging a rail past it expands the sidebar.
+    static let snapWidth: CGFloat = (railWidth + minSidebarWidth) / 2
+
+    /// The width the sidebar has while the edge is dragged: where the pointer is, between the rail and the maximum.
+    static func dragWidth(start: CGFloat, delta: CGFloat) -> CGFloat {
+        min(max(start + delta, railWidth), maxSidebarWidth)
+    }
+
+    /// Whether a sidebar of this width shows the rail instead of the rows.
+    static func showsRail(atWidth width: CGFloat) -> Bool { width < snapWidth }
 
     @Published var section: IronPetSection = .chat
     /// Whether the Today row is listed: a brief or recap automation is on. Leaving it hidden moves off the page.
@@ -86,16 +107,74 @@ final class IronPetWindowModel: ObservableObject {
     @Published var focusMeeting: String?
     /// True when the sidebar shows only the section icons. Saved, so it survives closing the window and restarting.
     @Published var sidebarCollapsed: Bool {
-        didSet { defaults.set(sidebarCollapsed, forKey: Self.sidebarCollapsedKey) }
+        didSet {
+            defaults.set(sidebarCollapsed, forKey: Self.sidebarCollapsedKey)
+            clearRailTip()
+        }
+    }
+    /// Width of the expanded sidebar; what the user last dragged it to. Saved.
+    @Published var sidebarWidth: CGFloat {
+        didSet { defaults.set(Double(sidebarWidth), forKey: Self.sidebarWidthKey) }
     }
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         sidebarCollapsed = defaults.bool(forKey: Self.sidebarCollapsedKey)
+        let saved = defaults.double(forKey: Self.sidebarWidthKey)
+        sidebarWidth = saved == 0 ? Self.minSidebarWidth : min(max(CGFloat(saved), Self.minSidebarWidth), Self.maxSidebarWidth)
     }
 
     func toggleSidebar() { sidebarCollapsed.toggle() }
+
+    /// The width of the column as it is now: the rail's, or the sidebar's own.
+    var columnWidth: CGFloat { sidebarCollapsed ? Self.railWidth : sidebarWidth }
+
+    /// The drag ended with the edge at `width`: collapse to the rail below the snap width, otherwise expand to it.
+    func endDrag(atWidth width: CGFloat) {
+        if Self.showsRail(atWidth: width) {
+            sidebarCollapsed = true
+        } else {
+            sidebarWidth = min(max(width, Self.minSidebarWidth), Self.maxSidebarWidth)
+            sidebarCollapsed = false
+        }
+    }
+
+    // MARK: Rail labels
+
+    /// How long the pointer rests on a rail icon before its label shows.
+    static var railTipDelay: Duration = .milliseconds(400)
+    /// The label to draw beside a rail icon, or nil. A native `.help` tooltip does not show while ironpet is not the
+    /// active app, which is the usual state of this floating window, so the rail draws its own label.
+    @Published private(set) var railTip: RailTip?
+    private var railTipTask: Task<Void, Never>?
+
+    /// The pointer entered or left a rail icon. Entering shows the label after `railTipDelay`; leaving hides it.
+    func hoverRail(_ tip: RailTip, hovering: Bool) {
+        railTipTask?.cancel()
+        guard hovering else {
+            railTip = nil
+            return
+        }
+        railTipTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.railTipDelay)
+            guard !Task.isCancelled else { return }
+            self?.railTip = tip
+        }
+    }
+
+    /// Hides the label and cancels one that is still waiting: a click, or the sidebar changing state.
+    func clearRailTip() {
+        railTipTask?.cancel()
+        railTip = nil
+    }
+}
+
+/// The text of a rail label and where its icon is, in the window's coordinates.
+struct RailTip: Equatable {
+    let name: String
+    let shortcut: String?
+    let frame: CGRect
 }
 
 /// The one ironpet window: chat, agents, alerts, tasks, transcripts, actions and automations in a floating
@@ -135,8 +214,16 @@ final class IronPetPanel: NSPanel {
         host.sizingOptions = []
         contentViewController = host
         setContentSize(Self.savedSize)
+        centerWindowButtons()
         let center = NotificationCenter.default
         observers = [
+            // AppKit puts the title bar back to its normal height on resize and on becoming key.
+            center.addObserver(forName: NSWindow.didResizeNotification, object: self, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.centerWindowButtons() } // queue: .main
+            },
+            center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: self, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.centerWindowButtons() } // queue: .main
+            },
             // Minimizing hides the window without closing it; tell the pet, as close() does.
             center.addObserver(forName: NSWindow.didMiniaturizeNotification, object: self, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.onVisibilityChange?(false) }
@@ -157,6 +244,17 @@ final class IronPetPanel: NSPanel {
                 }
             },
         ]
+    }
+
+    /// Resizes the title bar so the close, minimize and zoom buttons sit in the middle of the section headers. AppKit
+    /// keeps the buttons a fixed distance above the bottom of the bar, so the bar is as tall as the header's half
+    /// height plus that distance. The buttons' own frames are not touched.
+    func centerWindowButtons() {
+        guard let button = standardWindowButton(.closeButton), let bar = button.superview?.superview,
+              let host = bar.superview else { return }
+        let height = PageHeaderMetrics.height / 2 + button.convert(button.bounds, to: bar).midY
+        let frame = CGRect(x: bar.frame.minX, y: host.bounds.height - height, width: bar.frame.width, height: height)
+        if bar.frame != frame { bar.frame = frame }
     }
 
     private static var savedSize: CGSize {
@@ -366,10 +464,36 @@ struct IronPetWindowView: View {
             ChatBackdrop()
             HStack(spacing: 0) {
                 sidebarColumn
-                Divider()
+                // The edge is a drag handle, wider than the line it sits on.
+                Divider().overlay {
+                    SidebarResizeHandle(
+                        onBegin: { dragStart = liveWidth ?? model.columnWidth; model.clearRailTip() },
+                        onDrag: { delta in
+                            guard let start = dragStart else { return }
+                            liveWidth = IronPetWindowModel.dragWidth(start: start, delta: delta)
+                        },
+                        onEnd: {
+                            if let width = liveWidth { model.endDrag(atWidth: width) }
+                            liveWidth = nil
+                            dragStart = nil
+                        })
+                    .frame(width: 9)
+                }
                 detail.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .coordinateSpace(name: RailHover.space)
+        // Over the page, outside the rail, which clips its own content.
+        .overlay(alignment: .topLeading) {
+            if collapsed, let tip = model.railTip {
+                RailLabel(tip: tip)
+                    .offset(x: IronPetWindowModel.railWidth - 2, y: tip.frame.minY)
+                    .frame(height: tip.frame.height, alignment: .leading)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: model.railTip)
     }
 
     private var shown: [IronPetSection] {
@@ -377,27 +501,23 @@ struct IronPetWindowView: View {
     }
 
     private var collapsed: Bool { model.sidebarCollapsed }
+    /// The column's width while its edge is being dragged; nil otherwise.
+    @State private var liveWidth: CGFloat?
+    @State private var dragStart: CGFloat?
+    /// Whether the column shows the rail: while dragging, whichever side of the snap width the edge is on.
+    private var showsRail: Bool { liveWidth.map(IronPetWindowModel.showsRail(atWidth:)) ?? collapsed }
 
     /// The full sidebar or the icon rail, one glass column whose width animates between the two.
     private var sidebarColumn: some View {
         ZStack {
-            if collapsed { rail.transition(.opacity) } else { sidebar.transition(.opacity) }
+            if showsRail { rail.transition(.opacity) } else { sidebar.transition(.opacity) }
         }
-        .frame(width: collapsed ? IronPetWindowModel.railWidth : IronPetWindowModel.sidebarWidth)
+        .frame(width: liveWidth ?? model.columnWidth)
         .clipped()
         // The whole column, insets included, is glass over the window background: a half-strength material, so the pattern stays visible through it.
         .background { Rectangle().fill(.ultraThinMaterial).opacity(IronPetGlass.strength) }
-        .animation(.easeInOut(duration: 0.2), value: collapsed)
-    }
-
-    private var toggleButton: some View {
-        Button { model.toggleSidebar() } label: {
-            Image(systemName: "sidebar.left").font(.system(size: 14)).frame(width: 28, height: 22).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .help(collapsed ? "Show sidebar (⌃⌘S)" : "Hide sidebar (⌃⌘S)")
-        .accessibilityLabel(collapsed ? "Show sidebar" : "Hide sidebar")
+        .animation(.easeInOut(duration: 0.2), value: showsRail)
+        .animation(.easeInOut(duration: 0.2), value: model.sidebarWidth)
     }
 
     private var sidebar: some View {
@@ -407,8 +527,8 @@ struct IronPetWindowView: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .safeAreaInset(edge: .top, spacing: 0) {
-            // The traffic lights sit at the left of this strip, the toggle at the right.
-            HStack { Spacer(); toggleButton }.padding(.horizontal, 10).frame(height: 28, alignment: .top)
+            // Room for the traffic lights, which the window draws over this strip.
+            Color.clear.frame(height: PageHeaderMetrics.height)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button(action: actions.onSettings) {
@@ -427,15 +547,14 @@ struct IronPetWindowView: View {
     /// Only the section icons, in the sidebar's order, under the traffic lights.
     private var rail: some View {
         VStack(spacing: 4) {
-            toggleButton.padding(.top, 28)
             ForEach(shown) { section in
-                Button { model.section = section } label: {
+                Button { model.clearRailTip(); model.section = section } label: {
                     Image(systemName: section.symbol)
-                        .font(.system(size: 16))
-                        .frame(width: 44, height: 34)
+                        .font(.system(size: 21))
+                        .frame(width: 40, height: 38)
                         .background {
                             if model.section == section {
-                                RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.28))
+                                RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.28))
                             }
                         }
                         .overlay(alignment: .topTrailing) { railBadge(count(section)) }
@@ -443,20 +562,20 @@ struct IronPetWindowView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(model.section == section ? Color.accentColor : Color.primary)
-                .help(shortcutHint(section))
+                .railHover(model, name: section.title, shortcut: section.shortcutLabel(in: shown))
                 .accessibilityLabel(section.title)
             }
             Spacer(minLength: 0)
-            Button(action: actions.onSettings) {
-                Image(systemName: "gearshape").font(.system(size: 16)).frame(width: 44, height: 34).contentShape(Rectangle())
+            Button(action: { model.clearRailTip(); actions.onSettings() }) {
+                Image(systemName: "gearshape").font(.system(size: 21)).frame(width: 40, height: 38).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help("Open ironpet Settings (⌘,)")
+            .railHover(model, name: "Settings", shortcut: "⌘,")
             .accessibilityLabel("Settings")
             .padding(.bottom, 10)
         }
-        .padding(.top, 4)
+        .padding(.top, PageHeaderMetrics.height + 4)
     }
 
     @ViewBuilder private func railBadge(_ count: Int) -> some View {
@@ -545,10 +664,11 @@ struct SessionActions {
                                      onOpenThread: { _ in }, onOpenSession: { _ in })
 }
 
-/// Size of every section header and where its title sits. The height puts the title's vertical center level with the
-/// traffic lights, which sit about 15 pt below the top of the window.
+/// Size of every section header and where its title sits. 52 pt is the height of a macOS unified toolbar (it was 30).
+/// The window moves the traffic lights down to the middle of this band (`IronPetPanel.centerWindowButtons`), so the
+/// title and the traffic lights share one center line.
 enum PageHeaderMetrics {
-    static let height: CGFloat = 30
+    static let height: CGFloat = 52
 }
 
 /// The title of a section, with the actions that apply to all of it on the right. Every section, and the chat, uses it,
@@ -634,5 +754,98 @@ struct GlassPanel<Content: View>: View {
                 // An explicit line: a Divider takes its direction from the container it lands in and turned vertical in the chat's bar.
                 Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
             }
+    }
+}
+
+/// Reports a rail icon's hover and position to the model, which shows the label.
+private struct RailHover: ViewModifier {
+    static let space = "ironpetWindow"
+    let model: IronPetWindowModel
+    let name: String
+    let shortcut: String?
+    @State private var frame = CGRect.zero
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { frame = proxy.frame(in: .named(Self.space)) }
+                        .onChange(of: proxy.frame(in: .named(Self.space))) { _, new in frame = new }
+                }
+            }
+            .onHover { hovering in
+                model.hoverRail(RailTip(name: name, shortcut: shortcut, frame: frame), hovering: hovering)
+            }
+    }
+}
+
+private extension View {
+    func railHover(_ model: IronPetWindowModel, name: String, shortcut: String?) -> some View {
+        modifier(RailHover(model: model, name: name, shortcut: shortcut))
+    }
+}
+
+/// The small rounded label beside a collapsed rail icon: the name, then its shortcut.
+struct RailLabel: View {
+    let tip: RailTip
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(tip.name).font(.system(size: 13, weight: .medium))
+            if let shortcut = tip.shortcut {
+                Text(shortcut).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+        }
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1) }
+        .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
+    }
+}
+
+/// The sidebar's draggable edge. An AppKit view, not a SwiftUI gesture: the window moves when dragged by its background,
+/// and this view says a press on it must not.
+struct SidebarResizeHandle: NSViewRepresentable {
+    var onBegin: () -> Void
+    var onDrag: (CGFloat) -> Void
+    var onEnd: () -> Void
+
+    func makeNSView(context: Context) -> HandleView { HandleView() }
+
+    func updateNSView(_ view: HandleView, context: Context) {
+        view.onBegin = onBegin
+        view.onDrag = onDrag
+        view.onEnd = onEnd
+    }
+
+    final class HandleView: NSView {
+        var onBegin: () -> Void = {}
+        var onDrag: (CGFloat) -> Void = { _ in }
+        var onEnd: () -> Void = {}
+        private var startX: CGFloat = 0
+
+        override var mouseDownCanMoveWindow: Bool { false }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.cursorUpdate, .activeAlways, .inVisibleRect], owner: self))
+        }
+
+        override func cursorUpdate(with event: NSEvent) { NSCursor.resizeLeftRight.set() }
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeLeftRight) }
+
+        override func mouseDown(with event: NSEvent) {
+            startX = event.locationInWindow.x
+            onBegin()
+        }
+
+        override func mouseDragged(with event: NSEvent) { onDrag(event.locationInWindow.x - startX) }
+        override func mouseUp(with event: NSEvent) { onEnd() }
     }
 }
