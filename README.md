@@ -352,7 +352,7 @@ Turn it on under **Settings → Screen**. macOS asks for Accessibility then. Scr
 | --- | --- | --- |
 | Screen capture | `screenCapture.enabled` | Default off |
 | Decision model | `screenCapture.decision.baseUrl`, `.model`, `.api` | `systemone` (H2O-Lightning-4B) or `openai`. The address must be localhost, or nothing is sent |
-| Secret threshold | `screenCapture.decision.secretThreshold` | Default 0.2. The model scores the text after redaction. An item still at or above it stays on the Mac and its text is dropped |
+| Secret threshold | `screenCapture.decision.secretThreshold` | Default 0.6. The model scores the text after redaction. An item at or above it stays on the Mac and its text is dropped |
 | Calendar threshold | `screenCapture.decision.calendarThreshold` | Default 0.2. Only matters with a skip threshold: an item at or above it is never skipped as a possible calendar event |
 | Skip threshold | `screenCapture.decision.skipThreshold` | Default 0, which skips nothing. The follow-up and new-task answers of 4B models were unreliable in the evaluation |
 | Agent and model | `screenCapture.agent`, `.model` | An ACP agent id. Its only tools are `tasks_list` and `tasks_get` (read-only), it looks existing tasks up itself, every other permission request is refused, and it runs in `~/.ironpet/capture/agent`, not in your chat folder |

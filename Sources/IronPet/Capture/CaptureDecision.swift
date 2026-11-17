@@ -220,6 +220,8 @@ final class CaptureDecisionFilter {
     }
 
     static let flaggedReason = "still flagged after redaction, kept local"
+    /// How the inspector words a flagged item when the rules redacted nothing.
+    static let flaggedByModelReason = "flagged by the model as possibly secret, kept local"
 
     /// Filters every `new` item in the store. Items the model cannot be asked about stay `new`.
     @discardableResult
