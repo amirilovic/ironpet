@@ -119,11 +119,13 @@ final class UsageTests: XCTestCase {
         chat("claude-opus-5-5", cost: nil, hour: 3)
         chat("claude-opus-5-5", cost: 168.5, hour: 4, feature: .automations)
         chat("unpriced-model", cost: 168.5, hour: 5)
+        // A long uncached first turn: 12M cache write tokens can explain $30 whatever the cache read and output tokens cost.
+        store.record(UsageEvent(at: daysAgo(0, hour: 6), feature: .chat, model: "claude-opus-5-5", outputTokens: 100, cacheWriteTokens: 12_000_000, cost: 30, currency: "USD"))
         store.flush()
         func costs(_ database: Database) throws -> [Double?] {
             try database.read { try $0.rows("SELECT cost FROM usage_events ORDER BY at").map { $0[0] as? Double } }
         }
-        XCTAssertEqual(try costs(old).compactMap { $0 }.count, 4)
+        XCTAssertEqual(try costs(old).compactMap { $0 }.count, 5)
 
         let migrated = try Database(path: url, migrations: AppMigrations.all)
         let after = try costs(migrated)
@@ -132,6 +134,7 @@ final class UsageTests: XCTestCase {
         XCTAssertNil(after[2], "a missing cost stays missing")
         XCTAssertEqual(after[3], 168.5, "only chat rows change")
         XCTAssertEqual(after[4], 168.5, "a model without a price is left alone")
+        XCTAssertEqual(after[5], 30, "unpriced input or cache write tokens can explain the cost, so it stays")
 
         // Running the same statements again changes nothing.
         try migrated.write { try $0.script(UsagePricing.correctionSQL) }

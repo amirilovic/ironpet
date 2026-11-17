@@ -629,6 +629,8 @@ final class ACPBackendTests: XCTestCase {
         XCTAssertNil(UsagePricing.cost(for: event))
         event.model = "claude-opus-5-5"
         XCTAssertEqual(UsagePricing.cost(for: event) ?? 0, 0.0002, accuracy: 1e-9)
+        // Tokens in a component with no confirmed price do not make a $0 turn.
+        XCTAssertNil(UsagePricing.cost(for: UsageEvent(feature: .chat, model: "claude-opus-5-5", inputTokens: 5)))
     }
 
     func testTurnWithReportedUsageStoresOneChatRecord() async throws {

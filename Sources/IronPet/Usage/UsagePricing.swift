@@ -21,15 +21,20 @@ enum UsagePricing {
         table.first { model.hasPrefix($0.prefix) }?.prices
     }
 
-    /// Dollars for the turn's reported tokens, or nil when the model has no price or no token count was reported.
+    /// Dollars for the turn's reported tokens, or nil when the model has no price or no priced token count was reported.
     static func cost(for event: UsageEvent) -> Double? {
         guard let prices = prices(for: event.model) else { return nil }
         let counts = [event.inputTokens, event.outputTokens, event.cacheReadTokens, event.cacheWriteTokens]
         guard counts.contains(where: { $0 != nil }) else { return nil }
         let sum = Double(event.inputTokens ?? 0) * prices.input + Double(event.outputTokens ?? 0) * prices.output
             + Double(event.cacheReadTokens ?? 0) * prices.cacheRead + Double(event.cacheWriteTokens ?? 0) * prices.cacheWrite
-        return sum / 1_000_000
+        // Only unpriced components were reported (an input-only turn, say). That is no price, not a free turn.
+        return sum > 0 ? sum / 1_000_000 : nil
     }
+
+    /// Dollars per million tokens that no input or cache write token costs more than. Prices for those two components are not
+    /// known, so the migration leaves a row alone when its input and cache write tokens could account for the cost.
+    static let generousUnpricedRate = 15.0
 
     /// SQL that sets a chat row's cost to its token-implied value when the recorded cost is over 20 times that value.
     /// One statement per priced model, so the rule and the table cannot drift apart.
@@ -37,7 +42,7 @@ enum UsagePricing {
         table.map { entry in
             let p = entry.prices
             let implied = "((COALESCE(input_tokens, 0) * \(p.input) + COALESCE(output_tokens, 0) * \(p.output) + COALESCE(cache_read_tokens, 0) * \(p.cacheRead) + COALESCE(cache_write_tokens, 0) * \(p.cacheWrite)) / 1000000.0)"
-            return "UPDATE usage_events SET cost = \(implied) WHERE feature = 'chat' AND model LIKE '\(entry.prefix)%' AND cost IS NOT NULL AND \(implied) > 0 AND cost > 20 * \(implied);"
+            return "UPDATE usage_events SET cost = \(implied) WHERE feature = 'chat' AND model LIKE '\(entry.prefix)%' AND cost IS NOT NULL AND \(implied) > 0 AND cost > 20 * \(implied) AND cost > \(implied) + (COALESCE(input_tokens, 0) + COALESCE(cache_write_tokens, 0)) * \(Self.generousUnpricedRate) / 1000000.0;"
         }.joined(separator: "\n")
     }
 }
