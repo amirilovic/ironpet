@@ -236,13 +236,27 @@ final class ChatSession: ObservableObject {
     /// Where task runs keep their copies. A test points it elsewhere.
     var taskWorktrees = Paths.worktrees
 
-    /// A thread a task run made, still in its copy: the run's rules hold here too (every change asks, Auto or not, and
-    /// push and PR commands are refused). Nil for every other thread.
+    /// A chat in a task run's copy, its thread or a new chat left in that folder: the run's rules hold here too (every
+    /// change asks, Auto or not, push and PR commands are refused, and only `taskRunAgents` get a turn). Nil elsewhere.
     var taskRunScope: RunScope? {
-        guard threadTask != nil, let workspace else { return nil }
+        guard let workspace else { return nil }
         let root = RunScope.resolve(taskWorktrees.path)
         let folder = RunScope.resolve(workspace.path)
         return folder.hasPrefix(root + "/") ? RunScope(root: workspace) : nil
+    }
+
+    /// The agents that may work in a task run's copy, as for Start. A test adds its scripted agent.
+    var taskRunAgents = TaskRunner.agentsThatAsk
+
+    /// In a task run's copy, an agent that is not known to ask before each change gets no turn: it could change the
+    /// copy unasked. Says so in the chat and returns true.
+    private func refusesRunAgent(telegram: Int64? = nil) -> Bool {
+        guard taskRunScope != nil, !taskRunAgents.contains(agent.id) else { return false }
+        let message = "\(agent.name) cannot work in a task run's copy: only \(TaskRunner.askingAgentNames) are known to ask before each change. Pick one of them, or choose another folder."
+        items.removeAll { if case .error(message) = $0.kind { return true } else { return false } }
+        items.append(Item(kind: .error(message)))
+        if let telegram { onTelegram?(telegram, .failed(message)) }
+        return true
     }
 
     /// The remotes of the open run thread's copy, read once per copy before its first turn.
@@ -608,6 +622,7 @@ final class ChatSession: ObservableObject {
             needsWorkspace = true
             return false
         }
+        if refusesRunAgent(telegram: telegram) { return false }
         if telegram != nil || automation != nil, state == .done || state == .failed { state = .idle }
         if prompt.isEmpty { prompt = telegram == nil ? "Help me with what's on my screen." : "Help me with the attached file." }
         let origin = telegram != nil ? Self.telegramOrigin : automation != nil ? Self.automationOrigin : nil
@@ -879,6 +894,7 @@ final class ChatSession: ObservableObject {
     func retryAfterFix() {
         guard let turn = lastTurn, !isRunning else { return }
         items.removeAll { if case .error = $0.kind { return true } else { return false } }
+        if refusesRunAgent() { return }
         run(turn)
     }
 

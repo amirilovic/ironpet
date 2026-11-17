@@ -95,15 +95,14 @@ final class ThreadRestoreTests: XCTestCase {
         ask(shell("git push origin HEAD"))
         XCTAssertEqual(answers.last?.allow, false)
         XCTAssertEqual(answers.last?.message, ApprovalRules.refusedInRun)
-        ask(ACPToolCall(id: "i", title: "Edit", kind: "edit", rawInput: ["file_path": copy.appendingPathComponent("a.swift").path]))
-        XCTAssertEqual(answers.last?.allow, true, "Auto still edits inside the copy")
         let count = answers.count
+        ask(ACPToolCall(id: "i", title: "Edit", kind: "edit", rawInput: ["file_path": copy.appendingPathComponent("a.swift").path]))
         ask(shell("npm test"))
         ask(shell("git config remote.origin.url https://evil.example/app.git"))
         ask(ACPToolCall(id: "e", title: "Edit", kind: "edit", rawInput: ["file_path": base.appendingPathComponent("elsewhere.txt").path]))
-        XCTAssertEqual(answers.count, count, "commands and edits outside the copy wait on a card, even in Auto")
+        XCTAssertEqual(answers.count, count, "edits and commands wait on a card, even in Auto")
         XCTAssertEqual(session.approvals.map(\.title),
-                       ["Run this command?", "Change the project's shared git setup?", "Edit elsewhere.txt outside the task's copy?"])
+                       ["Edit a.swift?", "Run this command?", "Change the project's shared git setup?", "Edit elsewhere.txt outside the task's copy?"])
         session.stop()
 
         await session.loadRunRemotes()
@@ -123,7 +122,67 @@ final class ThreadRestoreTests: XCTestCase {
         session.open(ChatThread(id: "t-moved", title: "Task: Fix login", workspace: base.path, updatedAt: Date(), items: [], agent: "none", task: "fix-login"))
         XCTAssertNil(session.taskRunScope, "after the copy is removed the thread points at the user's own folder")
         session.open(ChatThread(id: "t-chat", title: "Chat", workspace: copy.path, updatedAt: Date(), items: [], agent: "none"))
-        XCTAssertNil(session.taskRunScope, "a chat that is not a task's thread")
+        XCTAssertEqual(session.taskRunScope, RunScope(root: copy), "any chat in a copy, such as a new chat left in its folder")
+        session.newChat()
+        XCTAssertEqual(session.taskRunScope, RunScope(root: copy), "a new chat keeps the folder, so it keeps the rules")
+        session.open(ChatThread(id: "t-elsewhere", title: "Chat", workspace: base.path, updatedAt: Date(), items: [], agent: "none"))
+        XCTAssertNil(session.taskRunScope, "a chat outside the copies")
+    }
+
+    @MainActor
+    func testOnlyAgentsThatAskWorkInATaskRunsCopy() async throws {
+        let savedAgent = UserDefaults.standard.string(forKey: "chatAgent")
+        defer { UserDefaults.standard.set(savedAgent, forKey: "chatAgent") }
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-chat-run-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let worktrees = base.appendingPathComponent("worktrees")
+        let copy = worktrees.appendingPathComponent("app-1a2b3c4d/fix-login")
+        try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
+        let session = ChatSession(restore: false)
+        session.taskWorktrees = worktrees
+        var turns: [ACPTurn] = []
+        session.turnRunner = { turn, _ in turns.append(turn) }
+        var telegram: [ChatSession.TelegramEvent] = []
+        session.onTelegram = { _, event in telegram.append(event) }
+        func settle() async { for _ in 0..<5 { await Task.yield() } }
+        let pi = try XCTUnwrap(AgentCatalog.agent(id: "pi"))
+        let claude = try XCTUnwrap(AgentCatalog.agent(id: "claude"))
+        let refusal = "Pi cannot work in a task run's copy: only \(TaskRunner.askingAgentNames) are known to ask before each change. Pick one of them, or choose another folder."
+        func errors() -> [String] { session.items.compactMap { if case .error(let m) = $0.kind { m } else { nil } } }
+
+        session.open(ChatThread(id: "t-run", title: "Task: Fix login", workspace: copy.path, updatedAt: Date(), items: [], agent: "pi", task: "fix-login"))
+        session.setAgent(pi)
+        XCTAssertEqual(session.agent.id, "pi")
+        session.input = "keep going"
+        session.send()
+        await settle()
+        XCTAssertTrue(turns.isEmpty, "Pi gets no turn in the copy")
+        XCTAssertEqual(session.input, "keep going", "the draft stays for another agent")
+        XCTAssertEqual(errors(), [refusal])
+        session.send()
+        XCTAssertEqual(errors(), [refusal], "the refusal is not repeated")
+        session.submitFromTelegram("from the phone", chat: 7)
+        await settle()
+        XCTAssertTrue(turns.isEmpty)
+        XCTAssertEqual(telegram, [.failed(refusal)])
+        XCTAssertFalse(session.submitFromAutomation("review", automation: "a1"))
+        XCTAssertTrue(turns.isEmpty)
+
+        session.setAgent(claude)
+        session.send()
+        await settle()
+        XCTAssertEqual(turns.map(\.prompt), ["keep going"], "an agent that asks may work in the copy (a new chat, since the agent changed)")
+        XCTAssertNotNil(session.taskRunScope, "with the run's rules")
+        XCTAssertEqual(TaskRunner.askingAgentNames, "Claude Code, Codex, Cursor and Gemini CLI")
+
+        let plain = ChatSession(restore: false)
+        plain.turnRunner = { turn, _ in turns.append(turn) }
+        plain.workspace = base
+        plain.setAgent(pi)
+        plain.input = "hello"
+        plain.send()
+        await settle()
+        XCTAssertEqual(turns.last?.prompt, "hello", "outside a copy Pi chats as before")
     }
 
     @MainActor
