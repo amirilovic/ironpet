@@ -259,6 +259,7 @@ enum AutomationValidator {
     private static func validate(trigger t: Automation.Trigger, now: Date, isNew: Bool) -> [String] {
         var errors: [String] = []
         guard triggerTypes.contains(t.type) else { return ["trigger.type must be one of \(triggerTypes.joined(separator: ", "))"] }
+        if t.catchUpMinutes != nil, t.type != "daily" { errors.append("trigger.catchUpMinutes only applies to daily triggers") }
         switch t.type {
         case "interval":
             if let m = t.minutes, m >= 1, m <= 525_600 {} else { errors.append("trigger.minutes must be a number from 1 to 525600") }

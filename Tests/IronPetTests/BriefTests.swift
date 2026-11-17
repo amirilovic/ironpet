@@ -308,6 +308,9 @@ final class DailyCatchUpTests: AutomationTestCase {
         XCTAssertTrue(AutomationValidator.validate(a).contains("trigger.catchUpMinutes must be a number from 0 to 720"))
         a.trigger.catchUpMinutes = 0
         XCTAssertEqual(AutomationValidator.validate(a), [])
+        var reminder = bubble("water", minutes: 45)
+        reminder.trigger.catchUpMinutes = 30
+        XCTAssertEqual(AutomationValidator.validate(reminder), ["trigger.catchUpMinutes only applies to daily triggers"])
     }
 }
 
