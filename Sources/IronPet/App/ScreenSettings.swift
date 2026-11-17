@@ -155,7 +155,7 @@ private struct ScreenSettingsBody: View {
         } header: {
             Text("Local decision model")
         } footer: {
-            Text("Rules redact the secrets they know first, so a key in a useful message is sent as [redacted:aws-key] and the rest of the message still goes. A model on this Mac, such as H2O-Lightning-4B, then scores the redacted text. An item it still flags at or above the secret threshold stays on this Mac and its text is dropped. The unredacted text of an item that had a secret is kept for 24 hours so you can look at it under Show captures, and is never sent. The address must be localhost. If no model is set or it does not answer, nothing is sent to the agent.")
+            Text("Rules redact the secrets they know first, so a key in a useful message is sent as [redacted:aws-key] and the rest of the message still goes. A model on this Mac, such as H2O-Lightning-4B, then scores the redacted text. An item it still flags at or above the secret threshold stays on this Mac and its text is dropped. The unredacted text of an item that had a secret is kept for 24 hours so you can look at it under Screen, Captures, and is never sent. The address must be localhost. If no model is set or it does not answer, nothing is sent to the agent.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

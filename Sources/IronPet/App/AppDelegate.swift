@@ -15,7 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let installer = HookInstaller()
     private var automations: AutomationService!
     private var capture: CaptureService?
-    private lazy var captureInspector = CaptureInspectorWindow(service: { [weak self] in self?.capture })
     private var dueReminders: TaskDueReminders?
     /// Nil until the database is open, a moment after launch.
     private var activity: ActivityLog?
@@ -337,7 +336,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
         capture = service
         settingsModel.capture = service
-        settingsModel.showCaptures = { [weak self] in self?.captureInspector.show() }
         service.refreshModel()
         service.apply()
     }
@@ -351,7 +349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                       body: "Text from the apps you allowed is being read by the agent now."))
     }
 
-    @objc private func showCaptureInspector() { captureInspector.show() }
+    @objc private func showCaptureInspector() { pet.showScreen(tab: .captures) }
 
     @objc private func captureMenuAction(_ sender: NSMenuItem) {
         guard let capture else { return }
@@ -704,8 +702,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             control.welcomeBack = welcomeBack
             control.setIdleSeconds = { [weak self] seconds in self?.testIdleSeconds = seconds }
             control.showInspector = { [weak self] in
-                self?.captureInspector.show()
-                return self?.captureInspector.windowNumber ?? 0
+                self?.pet.showScreen(tab: .captures)
+                return self?.pet.windowNumber ?? 0
             }
             control.showProposal = { proposal in
                 TaskStore.shared?.suggest(capture: [proposal])

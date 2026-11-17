@@ -241,6 +241,12 @@ final class PetController: NSObject {
         }
     }
 
+    /// Opens the ironpet window on the Screen section's `tab`.
+    func showScreen(tab: ScreenTab) {
+        windowModel.screenTab = tab
+        showWindow(.screen)
+    }
+
     /// Opens the ironpet window on `section`, or on whatever needs attention when nil. Switches the section when it is
     /// already open.
     func showWindow(_ section: IronPetSection?) {

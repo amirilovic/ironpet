@@ -1,33 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// A window that lists what screen capture stored, for debugging: when, from which app and thread, the text, what the local filter
-/// decided and whether it was sent. It reads the local database only. Nothing here goes to a model, to MCP or to a log.
-@MainActor
-final class CaptureInspectorWindow {
-    private var window: NSWindow?
-    private let service: () -> CaptureService?
-
-    init(service: @escaping () -> CaptureService?) { self.service = service }
-
-    var windowNumber: Int { window?.windowNumber ?? 0 }
-
-    func show() {
-        guard let service = service() else { return }
-        if window == nil {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: CaptureInspectorView(store: service.store)))
-            window.title = "Screen captures"
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            window.isReleasedWhenClosed = false
-            window.setContentSize(NSSize(width: 900, height: 600))
-            window.center()
-            self.window = window
-        }
-        NSApp.activate()
-        window?.makeKeyAndOrderFront(nil)
-    }
-}
-
+/// What screen capture stored, for debugging: when, from which app and thread, the text, what the local filter decided and whether it
+/// was sent. It is the Captures tab of the Screen section. It reads the local database only. Nothing here goes to a model, to MCP or to a log.
 struct CaptureInspectorView: View {
     let store: CaptureStore
     @State private var rows: [CaptureStore.InspectRow] = []
@@ -73,9 +48,9 @@ struct CaptureInspectorView: View {
                     .tag(row.id)
                 }
             }
-            .frame(minWidth: 320, idealWidth: 360)
+            .frame(minWidth: 220, idealWidth: 360)
             detail
-                .frame(minWidth: 380)
+                .frame(minWidth: 300)
         }
         .onAppear(perform: reload)
         .onReceive(timer) { _ in reload() }

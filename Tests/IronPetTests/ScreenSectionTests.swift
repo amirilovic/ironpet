@@ -30,3 +30,18 @@ final class ScreenSectionTests: XCTestCase {
         XCTAssertEqual(shown.firstIndex(of: .screen), shown.firstIndex(of: .transcripts)! + 1)
     }
 }
+
+@MainActor
+final class ScreenTabTests: XCTestCase {
+    func testTwoTabsCapturesFirst() {
+        XCTAssertEqual(ScreenTab.allCases, [.captures, .sent])
+        XCTAssertEqual(ScreenTab.allCases.map(\.title), ["Captures", "Sent to the agent"])
+    }
+
+    func testWindowModelOpensOnCapturesAndKeepsTheChosenTab() {
+        let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ScreenTabTests-\(UUID().uuidString)")!)
+        XCTAssertEqual(model.screenTab, .captures)
+        model.screenTab = .sent
+        XCTAssertEqual(model.screenTab, .sent)
+    }
+}

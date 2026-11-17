@@ -71,6 +71,14 @@ final class TaskStore: ObservableObject {
                 try db.execute("ALTER TABLE \(table) ADD COLUMN source_ref TEXT")
             }
         },
+        // Numbered above every migration in the app (usage's 430 is the highest), so a database already past 430 still runs it.
+        // A resolved suggestion leaves task_suggestions, so this keeps what happened to each one for the batch that produced it.
+        .init(431, "tasks: what became of each screen capture suggestion", sql: """
+            CREATE TABLE IF NOT EXISTS task_suggestion_outcomes(id INTEGER PRIMARY KEY AUTOINCREMENT, send_log INTEGER NOT NULL,
+                suggestion TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '', outcome TEXT NOT NULL,
+                task TEXT, note TEXT, at REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS task_suggestion_outcomes_by_log ON task_suggestion_outcomes(send_log, id);
+            """),
     ]
 
     /// A source reference as stored: a JSON object, keys sorted.
@@ -432,8 +440,32 @@ final class TaskStore: ObservableObject {
             if let note, !note.isEmpty { created = try update(created.id, note: note, by: by) }
             item = created
         }
+        recordOutcome(s, "accepted", task: item.id, note: note)
         removeSuggestion(suggestionID)
         return item
+    }
+
+    /// The send log id a capture suggestion or task came from, read from its source reference.
+    nonisolated static func sendLog(of ref: String?) -> Int64? {
+        guard let ref, let object = refValue(ref) as? [String: Any] else { return nil }
+        return (object["send_log"] as? NSNumber)?.int64Value
+    }
+
+    /// What became of the capture suggestions a send produced, oldest first: `(suggestion, kind, title, quote, outcome, task, note)`.
+    func captureOutcomes(sendLog: Int64) -> [[Database.Value]] {
+        (try? database.read {
+            try $0.rows("SELECT suggestion, kind, title, quote, outcome, task, note FROM task_suggestion_outcomes WHERE send_log = ? ORDER BY id", [sendLog])
+        }) ?? []
+    }
+
+    /// Keeps what became of a capture suggestion, so the batch that produced it can still list it after it leaves the suggestions.
+    private func recordOutcome(_ s: TaskSuggestion, _ outcome: String, task: String? = nil, note: String? = nil) {
+        guard let log = Self.sendLog(of: s.sourceRef) else { return }
+        try? database.write {
+            try $0.execute("""
+                INSERT INTO task_suggestion_outcomes(send_log, suggestion, kind, title, quote, outcome, task, note, at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, [log, s.id, s.kind.rawValue, s.title, s.quote, outcome, task, note, now().timeIntervalSince1970])
+        }
     }
 
     private func applyCapture(_ s: TaskSuggestion, _ o: Overrides, note: String?, by: String) throws -> TaskItem {
@@ -470,9 +502,11 @@ final class TaskStore: ObservableObject {
     }
 
     /// Removes a suggestion. A capture suggestion's fingerprint is remembered, so the analysis does not propose it again.
-    func skip(_ suggestionID: String) {
-        if let s = suggestions.first(where: { $0.id == suggestionID }), let fingerprint = s.fingerprint {
-            ignoreCapture(fingerprint, s.kind.rawValue)
+    func skip(_ suggestionID: String, note: String? = nil) {
+        if let s = suggestions.first(where: { $0.id == suggestionID }) {
+            if let fingerprint = s.fingerprint { ignoreCapture(fingerprint, s.kind.rawValue) }
+            let reason = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+            recordOutcome(s, "rejected", note: reason?.isEmpty == false ? reason : nil)
         }
         removeSuggestion(suggestionID)
     }
@@ -486,7 +520,7 @@ final class TaskStore: ObservableObject {
         if let note = try note.map({ try TaskValidator.notes($0) }), !note.isEmpty, let target = s.target, task(target) != nil {
             try update(target, note: "Rejected a suggestion (\(s.title)): \(note)", by: by)
         }
-        skip(suggestionID)
+        skip(suggestionID, note: note)
     }
 
     // MARK: Due reminders
@@ -673,6 +707,7 @@ final class TaskStore: ObservableObject {
                 try db.execute("DELETE FROM task_items WHERE status = 'done' AND closed < ?", [cutoff])
                 try db.execute("DELETE FROM task_due_marks WHERE task NOT IN (SELECT id FROM task_items)")
                 try db.execute("DELETE FROM task_events WHERE at < ? AND task NOT IN (SELECT id FROM task_items)", [cutoff])
+                try db.execute("DELETE FROM task_suggestion_outcomes WHERE at < ?", [cutoff])
                 try db.execute("DELETE FROM task_suggestion_keys WHERE at < ?",
                                [time.addingTimeInterval(-Double(Self.keepSuggestedKeysDays) * 86_400).timeIntervalSince1970])
             }

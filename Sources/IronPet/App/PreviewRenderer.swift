@@ -77,12 +77,34 @@ enum PreviewRenderer {
         var captureOn = screenConfig
         captureOn.screenCapture.enabled = true
         ConfigStore.shared.usePreview(captureOn)
-        render(ScreenSection(model: screenStatus).frame(width: 600, height: 460).panel(), to: dir, "screen")
+        render(ScreenSection(model: screenStatus, tab: .constant(.sent)).frame(width: 600, height: 460).panel(), to: dir, "screen")
         var captureOff = screenConfig
         captureOff.screenCapture.enabled = false
         ConfigStore.shared.usePreview(captureOff)
-        render(ScreenSection(model: screenStatus).frame(width: 600, height: 460).panel(), to: dir, "screen-off")
+        render(ScreenSection(model: screenStatus, tab: .constant(.sent)).frame(width: 600, height: 460).panel(), to: dir, "screen-off")
         ConfigStore.shared.usePreview(screenConfig)
+        // The Captures tab, with two stored items.
+        let capturesStore = CaptureStore(database: Database.open(path: nil, migrations: CaptureStore.migrations).database)
+        for (thread, text) in [("slack:acme/ana", "Please send the invoice by Friday"), ("mail:rent", "Rent is due on the 1st")] {
+            let item = CaptureItem(app: CaptureApp(bundleId: "com.tinyspeck.slackmacgap", name: "Slack"), threadKey: thread, threadTitle: thread,
+                                   content: .conversation(title: thread, isGroup: false, messages: [CaptureMessage(author: "Ana", text: text)]), parser: "preview")
+            _ = try? capturesStore.ingest(item)
+        }
+        render(ScreenSection(model: screenStatus, tab: .constant(.captures), store: capturesStore).frame(width: 900, height: 560).panel(), to: dir, "screen-captures")
+        // One send opened: its items, and a suggestion that is waiting, accepted and rejected.
+        let batch = ScreenBatch(
+            record: screenStatus.sendLog[0],
+            items: [ScreenBatch.Item(id: 4, app: "Slack", title: "slack:acme/ana", at: Date().addingTimeInterval(-300), state: "sent",
+                                     body: "Ana: please send the invoice by Friday", redactions: CaptureRedactor.Report()),
+                    ScreenBatch.Item(id: 5, app: "Mail", title: "Invoice 42", at: Date().addingTimeInterval(-200), state: "sent",
+                                     body: "", redactions: CaptureRedactor.Report())],
+            suggestions: [ScreenBatch.Suggestion(id: "a", kind: "new_task", title: "Send the invoice", quote: "please send the invoice by Friday",
+                                                 outcome: .pending(id: "a")),
+                          ScreenBatch.Suggestion(id: "b", kind: "update", title: "Pay the rent", quote: "rent paid",
+                                                 outcome: .accepted(task: "pay-the-rent", title: "Pay the rent")),
+                          ScreenBatch.Suggestion(id: "c", kind: "new_task", title: "Call Sam", quote: "call Sam", outcome: .rejected(note: "already done"))],
+            redactions: CaptureRedactor.Report())
+        render(ScrollView { ScreenBatchView(batch: batch).padding(16) }.frame(width: 600, height: 560).panel(), to: dir, "screen-batch")
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks")
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks-light", scheme: .light)
         let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
