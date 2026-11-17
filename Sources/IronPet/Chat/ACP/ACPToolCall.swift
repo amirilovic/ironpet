@@ -67,7 +67,8 @@ struct ACPToolCall {
 
     static let pathKeys = ["file_path", "path", "target_file", "notebook_path", "destination", "new_path", "target", "source"]
 
-    /// Every file the call names: its locations, the path keys of its input, and those of a list of edits in it.
+    /// Every file the call names: its locations, the path keys of its input and of a list of edits in it, and the keys
+    /// of a map keyed by path (Codex's `changes`; elsewhere only keys that look like absolute or home paths).
     var allPaths: [String] {
         var found = paths
         func collect(_ object: JSON) {
@@ -76,8 +77,11 @@ struct ACPToolCall {
             }
         }
         collect(input)
-        for value in input.values {
+        for (name, value) in input {
             if let list = value as? [JSON] { list.forEach(collect) }
+            if let map = value as? JSON {
+                found += map.keys.filter { name == "changes" || $0.hasPrefix("/") || $0.hasPrefix("~") }.sorted()
+            }
         }
         var seen = Set<String>()
         return found.filter { seen.insert($0).inserted }
@@ -131,8 +135,12 @@ struct RunScope: Equatable {
     /// The worktree. Edits outside it ask, even in Auto.
     let root: URL
 
-    /// Compares real locations, so a symlink in the worktree that points outside it counts as outside.
+    /// Compares real locations, so a symlink in the worktree that points outside it counts as outside. `~` and `$HOME`
+    /// mean the home folder, as in a shell, not a folder of that name in the worktree.
     func contains(_ path: String) -> Bool {
+        var path = path
+        if path == "~" || path.hasPrefix("~/") { path = (path as NSString).expandingTildeInPath }
+        if path == "$HOME" || path.hasPrefix("$HOME/") { path = NSHomeDirectory() + path.dropFirst("$HOME".count) }
         let base = Self.resolve(root.path)
         let target = Self.resolve(path.hasPrefix("/") ? path : root.appendingPathComponent(path).path)
         return target == base || target.hasPrefix(base + "/")
@@ -270,38 +278,26 @@ enum ApprovalRules {
     }
 
     /// Whether ironpet answers a permission request itself or shows a card. The agent only asks about calls it
-    /// considers risky, so anything not clearly read-only still asks. A task run (`run`) also refuses push and PR
-    /// commands and asks about edits outside its worktree, in Auto too.
+    /// considers risky, so anything not clearly read-only still asks. A task run (`run`) has its own rules.
     static func policy(for call: ACPToolCall, auto: Bool, isMemoryFile: (String) -> Bool = Memory.contains,
                        run: RunScope? = nil) -> ApprovalPolicy {
+        if let run { return runPolicy(for: call, auto: auto, run: run) }
         switch call.kind {
         case "read", "search", "think", "fetch":
             return .allow
         case "execute":
             let command = call.command
-            if run != nil, isPushOrPR(command + "\n" + call.arguments) { return .refuse(refusedInRun) }
-            if run != nil, let reason = sharedGitChange(command + "\n" + call.arguments) {
-                return .ask(title: "Change the project's shared git setup?", detail: command + "\n\n" + reason)
-            }
             let dangerous = isDestructive(command + "\n" + call.arguments)
             if auto, !dangerous { return .allow }
             return .ask(title: dangerous ? "Run a destructive command?" : "Run this command?", detail: command)
         case "edit", "delete", "move":
-            let all = call.allPaths
-            let path = all.first
-            if !all.isEmpty, all.allSatisfy(isMemoryFile) { return .allow }
-            // A task run asks when any named file is outside its worktree or inside git's own files, which the user's copy shares.
-            let outside = run.map { scope in
-                all.isEmpty || all.contains { !scope.contains($0) || gitInternals.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }
-            } ?? false
-            if auto, !outside { return .allow }
+            let path = call.path
+            if auto || path.map(isMemoryFile) == true { return .allow }
             let preview = ((call.input["content"] ?? call.input["new_string"] ?? call.input["new_source"]) as? String)?
                 .split(separator: "\n", omittingEmptySubsequences: false).prefix(8).joined(separator: "\n")
             let verb = call.kind == "delete" ? "Delete" : call.kind == "move" ? "Move" : "Edit"
-            let place = outside ? " outside the task's copy" : ""
-            let title = path.map { "\(verb) \(URL(fileURLWithPath: $0).lastPathComponent)\(place)?" } ?? "\(verb) a file\(place)?"
-            let files = all.isEmpty ? nil : all.joined(separator: "\n")
-            return .ask(title: title, detail: [files, preview].compactMap { $0 }.joined(separator: "\n\n"))
+            let title = path.map { "\(verb) \(URL(fileURLWithPath: $0).lastPathComponent)?" } ?? "\(verb) a file?"
+            return .ask(title: title, detail: [path, preview].compactMap { $0 }.joined(separator: "\n\n"))
         default:
             // MCP servers can change real systems (databases, issue trackers), so anything not read-only asks first.
             let mcp = call.mcp
@@ -313,5 +309,56 @@ enum ApprovalRules {
             let target = mcp.map { " (\($0.server))" } ?? ""
             return .ask(title: (dangerous ? "Run a destructive tool: " : "Use ") + tool + target + "?", detail: String(arguments.prefix(600)))
         }
+    }
+
+    /// ironpet's own tools that only read.
+    static let ownReadTools: Set<String> = ["tasks_list", "tasks_get", "automations_list", "automations_get", "automations_history"]
+
+    /// A task run. Auto skips the card only for edits whose every path is inside the worktree and outside `.git`, and for
+    /// read-only tools. Every command, and every tool that is not read-only, asks in Auto too. Commands that match
+    /// `pushOrPR` are refused and `sharedGitChange` ones ask with the reason, but the rule does not rest on those patterns.
+    static func runPolicy(for call: ACPToolCall, auto: Bool, run: RunScope) -> ApprovalPolicy {
+        switch call.kind {
+        case "read", "search", "think", "fetch":
+            return .allow
+        case "edit", "delete", "move":
+            let all = call.allPaths
+            let outside = all.isEmpty || all.contains { !run.contains($0) || gitInternals.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }
+            if auto, !outside { return .allow }
+            let preview = ((call.input["content"] ?? call.input["new_string"] ?? call.input["new_source"]) as? String)?
+                .split(separator: "\n", omittingEmptySubsequences: false).prefix(8).joined(separator: "\n")
+            let verb = call.kind == "delete" ? "Delete" : call.kind == "move" ? "Move" : "Edit"
+            let place = outside ? " outside the task's copy" : ""
+            let title = all.first.map { "\(verb) \(URL(fileURLWithPath: $0).lastPathComponent)\(place)?" } ?? "\(verb) a file\(place)?"
+            let files = all.isEmpty ? nil : all.joined(separator: "\n")
+            return .ask(title: title, detail: [files, preview].compactMap { $0 }.joined(separator: "\n\n"))
+        default:
+            let mcp = call.mcp
+            let tool = mcp?.tool ?? call.toolName ?? call.title
+            let command = runCommand(call)
+            if command == nil, isReadOnlyMCP(tool) || ownReadTools.contains(tool) && (mcp == nil || mcp?.server == "ironpet") {
+                return .allow
+            }
+            guard let command else {
+                let target = mcp.map { " (\($0.server))" } ?? ""
+                let dangerous = isDestructive(call.arguments)
+                return .ask(title: (dangerous ? "Run a destructive tool: " : "Use ") + tool + target + "?", detail: String(call.arguments.prefix(600)))
+            }
+            let text = command + "\n" + call.arguments
+            if isPushOrPR(text) { return .refuse(refusedInRun) }
+            if let reason = sharedGitChange(text) {
+                return .ask(title: "Change the project's shared git setup?", detail: command + "\n\n" + reason)
+            }
+            return .ask(title: isDestructive(text) ? "Run a destructive command?" : "Run this command?", detail: command)
+        }
+    }
+
+    /// The shell command of an execute call, or of a call of another kind that carries one. Nil for other tools.
+    static func runCommand(_ call: ACPToolCall) -> String? {
+        if call.kind == "execute" { return call.command }
+        if let text = call.input["command"] as? String ?? call.input["cmd"] as? String { return text }
+        if let parts = call.input["command"] as? [String] ?? call.input["cmd"] as? [String] { return parts.joined(separator: " ") }
+        if let text = call.rawInput as? String { return text }
+        return nil
     }
 }

@@ -95,13 +95,15 @@ final class ThreadRestoreTests: XCTestCase {
         ask(shell("git push origin HEAD"))
         XCTAssertEqual(answers.last?.allow, false)
         XCTAssertEqual(answers.last?.message, ApprovalRules.refusedInRun)
-        ask(shell("npm test"))
-        XCTAssertEqual(answers.last?.allow, true, "Auto still runs ordinary commands in the copy")
+        ask(ACPToolCall(id: "i", title: "Edit", kind: "edit", rawInput: ["file_path": copy.appendingPathComponent("a.swift").path]))
+        XCTAssertEqual(answers.last?.allow, true, "Auto still edits inside the copy")
         let count = answers.count
+        ask(shell("npm test"))
         ask(shell("git config remote.origin.url https://evil.example/app.git"))
         ask(ACPToolCall(id: "e", title: "Edit", kind: "edit", rawInput: ["file_path": base.appendingPathComponent("elsewhere.txt").path]))
-        XCTAssertEqual(answers.count, count, "shared git setup and edits outside the copy wait on a card, even in Auto")
-        XCTAssertEqual(session.approvals.map(\.title), ["Change the project's shared git setup?", "Edit elsewhere.txt outside the task's copy?"])
+        XCTAssertEqual(answers.count, count, "commands and edits outside the copy wait on a card, even in Auto")
+        XCTAssertEqual(session.approvals.map(\.title),
+                       ["Run this command?", "Change the project's shared git setup?", "Edit elsewhere.txt outside the task's copy?"])
         session.stop()
 
         session.open(ChatThread(id: "t-moved", title: "Task: Fix login", workspace: base.path, updatedAt: Date(), items: [], agent: "none", task: "fix-login"))
