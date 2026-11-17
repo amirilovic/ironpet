@@ -431,4 +431,51 @@ final class IronPetWindowTests: XCTestCase {
         let labels = CGRect(x: 80 * scale, y: 40 * scale, width: 100 * scale, height: 200 * scale)
         XCTAssertGreaterThan(differing(expanded, rail, in: labels), 100)
     }
+
+    // MARK: Section headers
+
+    /// The frames of the header and of its title, in the host view's top-left coordinates, found from the frames the header reports.
+    private func headerFrames(section: IronPetSection, collapsed: Bool) throws -> (header: CGRect, title: CGRect) {
+        let model = IronPetWindowModel(defaults: freshDefaults())
+        model.section = section
+        model.sidebarCollapsed = collapsed
+        let chat = ChatSession(restore: false)
+        chat.loadPreview(.done)
+        let meetings = MeetingLibrary(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        var seen = PageHeaderFrames()
+        let view = IronPetWindowView(model: model, store: sessions(.done), signals: signals(1), tasks: tasks(), chat: chat,
+                                     meetings: meetings, settings: nil, actions: .none)
+            .onPreferenceChange(PageHeaderFrames.self) { seen = $0 }
+            .frame(width: IronPetPanel.minimumSize.width, height: IronPetPanel.minimumSize.height)
+        let host = NSHostingView(rootView: view)
+        let window = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.frame = CGRect(origin: .zero, size: host.fittingSize)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        return (try XCTUnwrap(seen.header, "\(section) has no header"), try XCTUnwrap(seen.title, "\(section) has no title"))
+    }
+
+    /// Automations is not listed: it needs the app's settings model, and it uses the same `pageHeader` as Tasks.
+    func testEverySectionHasOneHeaderHeightWithTheTitleCenteredInIt() throws {
+        for collapsed in [false, true] {
+            for section in [IronPetSection.agents, .chat, .alerts, .tasks, .transcripts, .actions] {
+                let (header, title) = try headerFrames(section: section, collapsed: collapsed)
+                XCTAssertEqual(header.height, PageHeaderMetrics.height, accuracy: 0.5, "\(section) header height")
+                XCTAssertEqual(header.minY, 0, accuracy: 0.5, "\(section) header starts at the window top")
+                XCTAssertEqual(title.midY, PageHeaderMetrics.height / 2, accuracy: 1.5, "\(section) title is not centered")
+                // The traffic lights are centered about 15 pt below the top of the window.
+                XCTAssertEqual(title.midY, 15, accuracy: 2, "\(section) title is not level with the traffic lights")
+            }
+        }
+    }
+
+    func testTheChatTitleHasNoCapsuleAndStartsWhereOtherTitlesStart() throws {
+        let chat = try headerFrames(section: .chat, collapsed: false)
+        let agents = try headerFrames(section: .agents, collapsed: false)
+        // The avatar comes first at the 16 pt page margin, then the name; no padded pill pushes either inward.
+        XCTAssertEqual(agents.title.minX - agents.header.minX, 16, accuracy: 0.5)
+        XCTAssertGreaterThan(chat.title.minX - chat.header.minX, 16)
+        XCTAssertLessThan(chat.title.minX - chat.header.minX, 16 + 22 + 8 + 1)
+    }
 }
