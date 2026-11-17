@@ -427,6 +427,7 @@ struct ChatView: View {
     /// first, because rows report their visibility a pass after the offset changes.
     private func checkBlank(_ proxy: ScrollViewProxy) {
         blankCheck?.cancel()
+        if visibleRows.hasVisible { blankGuard.rowsVisible(); return }
         scheduleBlankCheck(proxy, confirming: false, after: 0.15)
     }
 
