@@ -267,11 +267,21 @@ final class ChatSession: ObservableObject {
     /// The agents that may work in a task run's copy, as for Start. A test adds its scripted agent.
     var taskRunAgents = TaskRunner.agentsThatAsk
 
-    /// In a task run's copy, an agent that is not known to ask before each change gets no turn: it could change the
-    /// copy unasked. Says so in the chat and returns true.
+    /// Where the agents' own permission settings are read for a chat in a run's copy. A test points it at its own files.
+    var permissionSettings: () -> AgentPermissionSettings = AgentPermissionSettings.live
+
+    /// In a task run's copy, an agent that is not known to ask before each change, or whose own settings let it run
+    /// things unasked, gets no turn: it could change the copy unasked. Says so in the chat and returns true.
     private func refusesRunAgent(telegram: Int64? = nil) -> Bool {
-        guard taskRunScope != nil, !taskRunAgents.contains(agent.id) else { return false }
-        let message = "\(agent.name) cannot work in a task run's copy: only \(TaskRunner.askingAgentNames) are known to ask before each change. Pick one of them, or choose another folder."
+        guard let scope = taskRunScope else { return false }
+        let message: String
+        if !taskRunAgents.contains(agent.id) {
+            message = "\(agent.name) cannot work in a task run's copy: only \(TaskRunner.askingAgentNames) are known to ask before each change. Pick one of them, or choose another folder."
+        } else if let refusal = permissionSettings().refusal(agent: agent.id, name: agent.name, folder: scope.root, stop: taskWorktrees) {
+            message = refusal
+        } else {
+            return false
+        }
         items.removeAll { if case .error(message) = $0.kind { return true } else { return false } }
         items.append(Item(kind: .error(message)))
         if let telegram { onTelegram?(telegram, .failed(message)) }

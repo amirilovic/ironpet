@@ -419,6 +419,46 @@ final class TaskRunnerTests: XCTestCase {
         XCTAssertFalse(fresh.canRun(agent), "without the test's opt-in, an agent outside the list cannot run")
     }
 
+    func testCursorWhoseOwnSettingsRunCommandsUnaskedCannotStart() async throws {
+        let home = dir.appendingPathComponent("home")
+        let config = home.appendingPathComponent(".cursor/cli-config.json")
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"approvalMode": "unrestricted", "permissions": {"allow": []}}"#.write(to: config, atomically: true, encoding: .utf8)
+        runner.permissionSettings = { AgentPermissionSettings(home: home, environment: [:], claudeManaged: home.appendingPathComponent("none")) }
+        // The scripted agent under Cursor's id, so the run reads Cursor's settings; its modes stand in for Cursor's.
+        runner.askingModes["cursor"] = ["default"]
+        let cursor = ACPAgent(id: "cursor", name: "Cursor", command: agent.command, args: [], helper: nil)
+        let id = try newTask("COMMIT the feature")
+
+        let refused = await runner.start(task: id, project: repo, agent: cursor, model: nil)
+        XCTAssertEqual(refused, """
+            Cursor's own settings would let it run commands or change files without asking ironpet, so it cannot work on a task. \
+            ~/.cursor/cli-config.json sets approvalMode to "unrestricted". Set it to "allowlist".
+            """)
+        XCTAssertNil(runner.run(for: id))
+        XCTAssertEqual(tasks.task(id)?.status, .backlog)
+        XCTAssertEqual(try git("worktree", "list").split(separator: "\n").count, 1, "no copy is made")
+        XCTAssertEqual(runner.settingsRefusal(cursor), refused, "what the Start popover shows before Start")
+
+        // A setting committed in the project reaches the copy, and the fresh copy is removed again.
+        try #"{"approvalMode": "allowlist"}"#.write(to: config, atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent(".cursor"), withIntermediateDirectories: true)
+        try #"{"permissions": {"allow": ["Shell(make)"]}}"#.write(to: repo.appendingPathComponent(".cursor/cli.json"), atomically: true, encoding: .utf8)
+        _ = try git("add", ".cursor/cli.json")
+        _ = try git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "cursor rules")
+        let fromProject = await runner.start(task: id, project: repo, agent: cursor, model: nil)
+        XCTAssertTrue(fromProject?.contains("/.cursor/cli.json allows Shell(make) in permissions.allow") == true, fromProject ?? "started")
+        XCTAssertNil(runner.run(for: id))
+        XCTAssertEqual(try git("worktree", "list").split(separator: "\n").count, 1, "the copy made for the check is removed")
+        XCTAssertEqual(try git("branch", "--list", "ironpet/*"), "", "and its branch")
+
+        _ = try git("rm", "-q", ".cursor/cli.json")
+        _ = try git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "no cursor rules")
+        let started = await runner.start(task: id, project: repo, agent: cursor, model: nil)
+        XCTAssertNil(started, "allowlist and no allow rules: every command reaches ironpet")
+        await wait("finish") { finished == [id] }
+    }
+
     func testASecondPendingApprovalSurfacesWhenTheFirstIsAnswered() async throws {
         let id = try newTask("BOTH at once")
         await start(id)

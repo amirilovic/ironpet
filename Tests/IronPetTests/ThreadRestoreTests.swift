@@ -145,6 +145,8 @@ final class ThreadRestoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
         let session = ChatSession(restore: false)
         session.taskWorktrees = worktrees
+        let home = base.appendingPathComponent("home")
+        session.permissionSettings = { AgentPermissionSettings(home: home, environment: [:], claudeManaged: home.appendingPathComponent("none")) }
         var turns: [ACPTurn] = []
         session.turnRunner = { turn, _ in turns.append(turn) }
         var telegram: [ChatSession.TelegramEvent] = []
@@ -179,6 +181,31 @@ final class ThreadRestoreTests: XCTestCase {
         XCTAssertEqual(turns.map(\.prompt), ["keep going"], "an agent that asks may work in the copy (a new chat, since the agent changed)")
         XCTAssertNotNil(session.taskRunScope, "with the run's rules")
         XCTAssertEqual(TaskRunner.askingAgentNames, "Claude Code, Codex, Cursor and Gemini CLI")
+
+        // An allow rule in the copy's own Claude settings would run the command before ironpet is asked.
+        let local = copy.appendingPathComponent(".claude/settings.local.json")
+        try FileManager.default.createDirectory(at: local.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"permissions": {"allow": ["Bash(git commit:*)"]}}"#.write(to: local, atomically: true, encoding: .utf8)
+        let guarded = ChatSession(restore: false)
+        guarded.taskWorktrees = worktrees
+        guarded.permissionSettings = session.permissionSettings
+        var guardedTurns: [ACPTurn] = []
+        guarded.turnRunner = { turn, _ in guardedTurns.append(turn) }
+        guarded.workspace = copy
+        guarded.setAgent(claude)
+        guarded.input = "commit it"
+        guarded.send()
+        await settle()
+        let guardedErrors = guarded.items.compactMap { if case .error(let m) = $0.kind { m } else { nil } }
+        XCTAssertTrue(guardedTurns.isEmpty, "no turn while the copy's settings allow a command")
+        XCTAssertEqual(guarded.input, "commit it")
+        XCTAssertEqual(guardedErrors.count, 1)
+        XCTAssertTrue(guardedErrors.first?.hasPrefix("Claude Code's own settings would let it run commands or change files without asking ironpet") == true)
+        XCTAssertTrue(guardedErrors.first?.contains("/fix-login/.claude/settings.local.json allows Bash(git commit:*) in permissions.allow") == true)
+        try FileManager.default.removeItem(at: local)
+        guarded.send()
+        await settle()
+        XCTAssertEqual(guardedTurns.map(\.prompt), ["commit it"])
 
         let plain = ChatSession(restore: false)
         plain.turnRunner = { turn, _ in turns.append(turn) }
