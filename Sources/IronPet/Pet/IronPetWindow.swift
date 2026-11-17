@@ -54,8 +54,8 @@ enum IronPetSection: String, CaseIterable, Identifiable {
 
     /// The tooltip of a sidebar row or rail icon: the name and its ⌘N shortcut.
     func hint(in sections: [IronPetSection]) -> String {
-        guard let index = sections.firstIndex(of: self), index < 9 else { return title }
-        return "\(title) (⌘\(index + 1))"
+        guard let shortcut = shortcutLabel(in: sections) else { return title }
+        return "\(title) (\(shortcut))"
     }
 
     /// The sections that show what a bubble would announce, so bubbles wait while one is open. The others leave them
@@ -479,6 +479,7 @@ struct IronPetWindowView: View {
                         })
                     .frame(width: 9)
                 }
+                .zIndex(1) // above the detail view, so the handle's wider hit area is not covered
                 detail.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -507,12 +508,18 @@ struct IronPetWindowView: View {
     /// Whether the column shows the rail: while dragging, whichever side of the snap width the edge is on.
     private var showsRail: Bool { liveWidth.map(IronPetWindowModel.showsRail(atWidth:)) ?? collapsed }
 
+    /// While dragging, the rows never render narrower than their minimum; the rail shows below the snap width.
+    private var columnWidth: CGFloat {
+        guard let live = liveWidth else { return model.columnWidth }
+        return showsRail ? live : max(live, IronPetWindowModel.minSidebarWidth)
+    }
+
     /// The full sidebar or the icon rail, one glass column whose width animates between the two.
     private var sidebarColumn: some View {
         ZStack {
             if showsRail { rail.transition(.opacity) } else { sidebar.transition(.opacity) }
         }
-        .frame(width: liveWidth ?? model.columnWidth)
+        .frame(width: columnWidth)
         .clipped()
         // The whole column, insets included, is glass over the window background: a half-strength material, so the pattern stays visible through it.
         .background { Rectangle().fill(.ultraThinMaterial).opacity(IronPetGlass.strength) }
