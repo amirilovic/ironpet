@@ -137,7 +137,7 @@ final class CaptureSuggestionsTests: XCTestCase {
         guard case .failure = tasks.call("suggestion_reject", ["id": "nope"], by: "agent:mcp") else { return XCTFail("reject") }
     }
 
-    func testMigrationFromSchema305KeepsSuggestions() throws {
+    func testMigrationFromSchema420KeepsSuggestions() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-sugg-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
         let path = dir.appendingPathComponent("ironpet.db")
