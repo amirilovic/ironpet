@@ -87,7 +87,7 @@ final class CaptureFlowTests: XCTestCase {
         let secret = try XCTUnwrap(chat(store, thread: "slack:b", messages: ["the vault phrase is rosebud"], at: now.addingTimeInterval(-600)))
         let safe2 = try XCTUnwrap(chat(store, thread: "slack:c", messages: ["Please review my pull request"], at: now.addingTimeInterval(-600)))
         let done = await filter.run(on: store, tasks: tasks)
-        XCTAssertEqual(done, 3)
+        XCTAssertEqual(done.done, 3)
         XCTAssertEqual(store.item(id: secret)?.state, "local")
         XCTAssertEqual(store.item(id: secret)?.body, "", "the text of a flagged item is dropped")
         let row = try XCTUnwrap(store.inspect().first { $0.id == secret })
@@ -170,7 +170,7 @@ final class CaptureFlowTests: XCTestCase {
         let (filter, analyzer) = make(store, decision: decision, runner: runner)
         let id = try XCTUnwrap(chat(store, messages: ["Please send the report"], at: Date().addingTimeInterval(-3600)))
         let awaited1 = await filter.run(on: store, tasks: tasks)
-        XCTAssertEqual(awaited1, 0)
+        XCTAssertEqual(awaited1.done, 0)
         XCTAssertEqual(store.item(id: id)?.state, "new")
         guard case .unavailable(let reason) = filter.status else { return XCTFail("\(filter.status)") }
         XCTAssertTrue(reason.contains("did not answer"), reason)
@@ -188,7 +188,7 @@ final class CaptureFlowTests: XCTestCase {
             let filter = CaptureDecisionFilter(settings: { Config.ScreenCapture.Decision(baseUrl: url) }, makeClient: { _, _ in used })
             _ = try chat(store, messages: ["Please send the report"])
             let awaited2 = await filter.run(on: store, tasks: tasks)
-            XCTAssertEqual(awaited2, 0, url)
+            XCTAssertEqual(awaited2.done, 0, url)
             XCTAssertEqual(used.calls, 0, "no request leaves for \(url)")
             guard case .unavailable(let reason) = filter.status else { return XCTFail(url) }
             XCTAssertTrue(reason.contains("Captures stay on this Mac"), reason)
@@ -411,6 +411,61 @@ final class CaptureFlowTests: XCTestCase {
         XCTAssertFalse(ACPCaptureRunner.decision(for: ACPToolCall(id: "1", title: "mcp__ironpet__tasks_list", kind: "other", toolName: "WebFetch")).allow)
     }
 
+    /// S1: items the filter keeps local do not restart the quiet period.
+    func testLocalItemsDoNotRestartTheQuietPeriod() async throws {
+        let store = CaptureStore.inMemory()
+        let decision = FakeDecision()
+        decision.secretWords = ["noise"]
+        let runner = FakeRunner()
+        let (filter, analyzer) = make(store, decision: decision, runner: runner)
+        let t0 = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 - 3600).rounded(.down))
+        _ = try XCTUnwrap(chat(store, thread: "slack:acme/ready", messages: ["Please send the report"], at: t0))
+        let first = await filter.run(on: store, tasks: tasks)
+        XCTAssertEqual(first.ready, 1)
+        analyzer.noteReady(at: t0)
+        for i in 1...4 {
+            _ = try XCTUnwrap(chat(store, app: "com.other", thread: "other:\(i)", messages: ["noise \(i)"], at: t0.addingTimeInterval(Double(i) * 30)))
+            let result = await filter.run(on: store, tasks: tasks)
+            XCTAssertEqual(result.ready, 0, "a flagged item stays local")
+            XCTAssertEqual(result.done, 1)
+            if result.ready > 0 { analyzer.noteReady(at: t0.addingTimeInterval(Double(i) * 30)) }
+        }
+        XCTAssertEqual(analyzer.dueDate(), t0.addingTimeInterval(180))
+        runner.answer = "{\"new_tasks\":[],\"updates\":[],\"calendar\":[],\"follow_ups\":[]}"
+        let sent = await analyzer.runIfDue(now: t0.addingTimeInterval(180))
+        XCTAssertNotNil(sent)
+    }
+
+    /// S2: steady ready items cannot postpone the send past the maximum wait.
+    func testSteadyActivityCannotPostponeTheSendForever() async throws {
+        let store = CaptureStore.inMemory()
+        let runner = FakeRunner()
+        let (_, analyzer) = make(store, decision: FakeDecision(), runner: runner)
+        let t0 = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 - 7200).rounded(.down))
+        for i in 0..<20 {
+            let id = try XCTUnwrap(chat(store, thread: "slack:acme/t\(i)", messages: ["Please send report \(i)"], at: t0.addingTimeInterval(Double(i) * 60)))
+            store.setState(id, "ready")
+            analyzer.noteReady(at: t0.addingTimeInterval(Double(i) * 60))
+        }
+        XCTAssertEqual(analyzer.dueDate(), t0.addingTimeInterval(CaptureAnalyzer.maxWait))
+        runner.answer = "{\"new_tasks\":[],\"updates\":[],\"calendar\":[],\"follow_ups\":[]}"
+        let early = await analyzer.runIfDue(now: t0.addingTimeInterval(CaptureAnalyzer.maxWait - 1))
+        XCTAssertNil(early)
+        let due = await analyzer.runIfDue(now: t0.addingTimeInterval(CaptureAnalyzer.maxWait))
+        XCTAssertNotNil(due)
+        XCTAssertEqual(runner.prompts.count, 1)
+    }
+
+    /// S3: with nothing ready there is no due date.
+    func testNoReadyItemsMeansNoDueDate() async throws {
+        let store = CaptureStore.inMemory()
+        let (_, analyzer) = make(store, decision: FakeDecision(), runner: FakeRunner())
+        analyzer.noteReady(at: Date())
+        XCTAssertNil(analyzer.dueDate())
+        let result = await analyzer.runIfDue(now: Date().addingTimeInterval(10_000))
+        XCTAssertNil(result)
+    }
+
     // MARK: S7, the per-app allow list
 
     func testItemsFromAnAppThatIsNotAllowedStayLocal() async throws {
@@ -420,7 +475,7 @@ final class CaptureFlowTests: XCTestCase {
         let (filter, analyzer) = make(store, decision: decision, runner: runner, sendApps: [])
         let id = try XCTUnwrap(chat(store, messages: ["Please send the report"], at: Date().addingTimeInterval(-3600)))
         let awaited4 = await filter.run(on: store, tasks: tasks)
-        XCTAssertEqual(awaited4, 1, "the local filter still runs")
+        XCTAssertEqual(awaited4.done, 1, "the local filter still runs")
         let awaited5 = await analyzer.runIfDue()
         XCTAssertNil(awaited5)
         let awaited6 = await analyzer.run()

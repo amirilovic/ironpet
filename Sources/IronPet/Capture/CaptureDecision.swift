@@ -223,11 +223,12 @@ final class CaptureDecisionFilter {
 
     /// Filters every `new` item in the store. Items the model cannot be asked about stay `new`.
     @discardableResult
-    func run(on store: CaptureStore, tasks: CaptureTaskList) async -> Int {
+    func run(on store: CaptureStore, tasks: CaptureTaskList) async -> FilterResult {
         var done = 0
+        var ready = 0
         let open = await tasks.open()
         for item in store.items(inState: "new") {
-            guard isEnabled() else { return done }
+            guard isEnabled() else { return FilterResult(done: done, ready: ready) }
             do {
                 let verdict = try await evaluate(text: item.body, openTasks: open)
                 if verdict.flagged {
@@ -238,12 +239,19 @@ final class CaptureDecisionFilter {
                     store.setState(item.id, "local", reason: "nothing to act on", secret: verdict.secret, related: verdict.related, calendar: verdict.calendar, task: verdict.newTask)
                 } else {
                     store.setState(item.id, "ready", secret: verdict.secret, related: verdict.related, calendar: verdict.calendar, task: verdict.newTask)
+                    ready += 1
                 }
                 done += 1
             } catch {
-                return done
+                return FilterResult(done: done, ready: ready)
             }
         }
-        return done
+        return FilterResult(done: done, ready: ready)
+    }
+
+    /// `done` counts every item decided. `ready` counts only those that will be sent, and only those restart the quiet period.
+    struct FilterResult: Equatable {
+        var done = 0
+        var ready = 0
     }
 }
