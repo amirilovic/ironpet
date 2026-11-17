@@ -126,7 +126,8 @@ final class BriefModel: ObservableObject {
     }
 
     /// The day the recap shows, from the bubble that opened the page, so a recap caught up after midnight still opens on
-    /// its day. Nil is today. Cleared when the user picks the other kind or the page closes.
+    /// its day. Nil is today. Cleared when the user picks a kind on the page, leaves Today, or the window closes or
+    /// minimizes (`PetController` calls `setVisible(false)` from the panel's visibility change).
     private(set) var recapDay: Date?
 
     func refresh() {

@@ -287,8 +287,11 @@ final class PetController: NSObject {
             model: windowModel, store: store, signals: signals, tasks: taskList, chat: chat, meetings: meetings,
             settings: settings, brief: brief, actions: actions))
         window.onVisibilityChange = { [weak self] visible in
-            self?.syncChat()
-            if !visible { self?.refreshMood() }
+            guard let self else { return }
+            syncChat()
+            if !visible { refreshMood() }
+            // The panel is reused, so closing it fires no onDisappear; Today's own appear and disappear cover section changes.
+            brief?.setVisible(visible && windowModel.section == .today)
         }
         window.onClose = { [weak self] in self?.onWindowClosed?() }
         windowModel.$section

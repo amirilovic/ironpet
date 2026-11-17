@@ -509,6 +509,32 @@ final class BriefModelTests: XCTestCase {
         model.setVisible(false)
         XCTAssertNil(model.recapDay, "closing the page forgets it")
     }
+
+    /// `PetController` calls `setVisible(false)` when the panel closes, which fires no onDisappear.
+    func testAHiddenPageStopsRebuildingOnStoreChanges() throws {
+        let tasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
+        let source = BriefSource(tasks: tasks, sessions: SessionStore(), signals: SignalStore(),
+                                 meetingsRoot: FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-brief-\(UUID().uuidString)"),
+                                 activity: FixedBriefActivity(events: []))
+        let model = BriefModel(source: source)
+        func needs() -> Int { model.briefs[.brief]?.sections.first { $0.id == "needs" }?.items.count ?? 0 }
+        func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.7)) }
+
+        model.setVisible(true)
+        _ = try tasks.create(title: "Visible", status: .needsYou, source: .chat, by: "user")
+        settle()
+        XCTAssertEqual(needs(), 1, "a visible page follows the stores")
+
+        model.show(recapDay: Date().addingTimeInterval(-86_400))
+        model.setVisible(false)
+        _ = try tasks.create(title: "Hidden", status: .needsYou, source: .chat, by: "user")
+        settle()
+        XCTAssertEqual(needs(), 1, "a hidden page does not rebuild")
+        XCTAssertNil(model.recapDay)
+
+        model.setVisible(true)
+        XCTAssertEqual(needs(), 2, "reopening rebuilds")
+    }
 }
 
 @MainActor
