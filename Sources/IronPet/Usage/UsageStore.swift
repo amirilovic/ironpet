@@ -117,7 +117,9 @@ final class UsageStore: @unchecked Sendable {
             """),
         // The first turn after a resumed chat session was recorded with the session's lifetime cost. Only rows more than 20 times
         // their token-implied cost change, and they end up at that value, so running it again changes nothing.
-        .init(101, "usage: correct chat cost recorded from a resumed session's lifetime total", sql: UsagePricing.correctionSQL),
+        // Numbered 430, not 101: the database has one version for every feature (see `AppMigrations`), and installs were already at
+        // 422 when this was added, so a number at or below that never runs on them. Keep it above every other migration.
+        .init(430, "usage: correct chat cost recorded from a resumed session's lifetime total", sql: UsagePricing.correctionSQL),
     ]
 
     private let database: Database
