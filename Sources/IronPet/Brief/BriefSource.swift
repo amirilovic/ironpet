@@ -125,14 +125,31 @@ final class BriefModel: ObservableObject {
         self.briefs = Dictionary(briefs.map { ($0.kind, $0) }, uniquingKeysWith: { _, last in last })
     }
 
+    /// The day the recap shows, from the bubble that opened the page, so a recap caught up after midnight still opens on
+    /// its day. Nil is today. Cleared when the user picks the other kind or the page closes.
+    private(set) var recapDay: Date?
+
     func refresh() {
         guard let source else { return }
         let weekdays = weekdays()
-        briefs = Dictionary(uniqueKeysWithValues: Brief.Kind.allCases.map { ($0, source.build($0, weekdays: weekdays)) })
+        briefs = Dictionary(uniqueKeysWithValues: Brief.Kind.allCases.map {
+            ($0, source.build($0, weekdays: weekdays, day: $0 == .recap ? recapDay : nil))
+        })
+    }
+
+    func show(recapDay: Date?) {
+        self.recapDay = recapDay
+        if visible { refresh() }
+    }
+
+    /// The user picked a kind on the page, so the recap goes back to today.
+    func picked() {
+        guard recapDay != nil else { return }
+        show(recapDay: nil)
     }
 
     func setVisible(_ visible: Bool) {
         self.visible = visible
-        if visible { refresh() }
+        if visible { refresh() } else { recapDay = nil }
     }
 }

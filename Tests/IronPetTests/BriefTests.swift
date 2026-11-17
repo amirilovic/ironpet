@@ -482,6 +482,33 @@ final class DigestAutomationTests: AutomationTestCase {
 }
 
 @MainActor
+final class BriefModelTests: XCTestCase {
+    private typealias F = BriefFixture
+
+    func testARecapOpenedForYesterdayStaysOnItUntilTheUserPicksAKind() throws {
+        let tasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-brief-\(UUID().uuidString)")
+        let source = BriefSource(tasks: tasks, sessions: SessionStore(), signals: SignalStore(), meetingsRoot: root,
+                                 activity: FixedBriefActivity(events: [F.turn("a", .sessionDone, at: F.tuesday(hour: 10))]))
+        source.now = { F.tuesday(hour: 25) }
+        source.calendar = F.calendar
+        let model = BriefModel(source: source)
+        model.show(recapDay: F.tuesday(hour: 18))
+        model.setVisible(true)
+        XCTAssertEqual(model.briefs[.recap]?.window.start, F.startOfTuesday)
+        XCTAssertFalse(model.briefs[.recap]?.isEmpty ?? true)
+
+        model.picked()
+        XCTAssertEqual(model.briefs[.recap]?.window.start, F.calendar.startOfDay(for: F.tuesday(hour: 25)))
+        XCTAssertTrue(model.briefs[.recap]?.isEmpty ?? false)
+
+        model.show(recapDay: F.tuesday(hour: 18))
+        model.setVisible(false)
+        XCTAssertNil(model.recapDay, "closing the page forgets it")
+    }
+}
+
+@MainActor
 final class BriefBubbleTests: XCTestCase {
     private typealias F = BriefFixture
 

@@ -136,9 +136,10 @@ final class PetController: NSObject {
         if windowModel.todayShown != shown { windowModel.todayShown = shown }
     }
 
-    /// Opens the Today page on the brief or the recap.
-    func showBrief(_ kind: Brief.Kind) {
+    /// Opens the Today page on the brief or the recap. `day` is the recap's day when the bubble was for an earlier one.
+    func showBrief(_ kind: Brief.Kind, day: Date? = nil) {
         windowModel.briefKind = kind
+        brief?.show(recapDay: kind == .recap ? day : nil)
         showWindow(.today)
     }
 

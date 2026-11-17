@@ -300,7 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         service.showDigest = { [weak self] brief, a, _ in
             self?.announcer.brief(brief, automation: a) { [weak self] in
                 self?.announcer.bubbles.dismiss(Announcer.briefID(brief.kind))
-                self?.pet.showBrief(brief.kind)
+                self?.pet.showBrief(brief.kind, day: brief.window.start)
             }
         }
         automations.$automations

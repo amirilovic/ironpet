@@ -11,7 +11,7 @@ struct TodayView: View {
     var body: some View {
         content
             .pageHeader(IronPetSection.today.title) {
-                Picker("Show", selection: $kind) {
+                Picker("Show", selection: Binding(get: { kind }, set: { kind = $0; model.picked() })) {
                     ForEach(Brief.Kind.allCases) { Text($0.pickerTitle).tag($0) }
                 }
                 .pickerStyle(.segmented)
@@ -27,7 +27,7 @@ struct TodayView: View {
         if let brief = model.briefs[kind], !brief.isEmpty {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(Self.dateLine(kind, brief.window.end))
+                    Text(Self.dateLine(kind, kind == .recap ? brief.window.start : brief.window.end))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 10)
