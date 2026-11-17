@@ -37,8 +37,6 @@ final class PetController: NSObject {
     var onCapture: ((_ region: Bool) -> Void)?
     /// The Tasks section's list. Falls back to `TaskStore.shared`, then to an empty list.
     var tasks: TaskStore?
-    /// Agents working on tasks. Set before the window first opens; nil hides Start and run rows.
-    var runs: TaskRunner?
     /// The Automations section. Set before the window first opens.
     var settings: SettingsModel?
     /// The Settings row at the bottom of the sidebar: opens the Settings window.
@@ -209,11 +207,9 @@ final class PetController: NSObject {
         let watched: PetMood? = summary.status == .idle ? nil : summary.status.mood
         let alerts = signals.summary
         let chat = chatMood()
-        let taskRuns = runs?.mood
-        if chat != nil || taskRuns != nil { lastActivity = Date() }
-        if let mood = [watched, alerts?.mood, chat, taskRuns].compactMap({ $0 }).max(by: { Self.urgency($0) < Self.urgency($1) }) {
+        if chat != nil { lastActivity = Date() }
+        if let mood = [watched, alerts?.mood, chat].compactMap({ $0 }).max(by: { Self.urgency($0) < Self.urgency($1) }) {
             let badge = (mood == watched ? summary.count : 0) + (mood == alerts?.mood ? alerts?.count ?? 0 : 0)
-                + (mood == taskRuns ? (mood == .needsInput ? runs?.waiting.count : runs?.liveCount) ?? 0 : 0)
             view.show(mood, badge: badge)
         } else {
             let sleepy = Date().timeIntervalSince(lastActivity) > Self.sleepAfter
@@ -229,8 +225,7 @@ final class PetController: NSObject {
     /// Watched agents or alerts that need attention take the click; otherwise it opens the chat.
     private func handleClick() {
         lastActivity = Date()
-        if [.needsInput, .failed, .done].contains(store.summary.status) || !signals.signals.isEmpty || runs?.mood == .needsInput
-            || onChatToggle == nil {
+        if [.needsInput, .failed, .done].contains(store.summary.status) || !signals.signals.isEmpty || onChatToggle == nil {
             toggleWindow()
         } else {
             onChatToggle?()
@@ -250,7 +245,7 @@ final class PetController: NSObject {
     /// already open.
     func showWindow(_ section: IronPetSection?) {
         lastActivity = Date()
-        windowModel.section = section ?? IronPetSection.needingAttention(store: store, signals: signals, tasks: taskList, runs: runs)
+        windowModel.section = section ?? IronPetSection.needingAttention(store: store, signals: signals, tasks: taskList)
         settings?.refresh()
         NSApp.activate()
         window.show(near: panel.frame)
@@ -297,7 +292,7 @@ final class PetController: NSObject {
             onBriefOpen: { [weak self] target in self?.openBrief(target) })
         let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(
             model: windowModel, store: store, signals: signals, tasks: taskList, chat: chat, meetings: meetings,
-            settings: settings, brief: brief, runs: runs, actions: actions))
+            settings: settings, brief: brief, actions: actions))
         window.onVisibilityChange = { [weak self] visible in
             guard let self else { return }
             syncChat()

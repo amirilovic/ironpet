@@ -16,8 +16,6 @@ enum Paths {
     /// Files sent to the Telegram bot, one folder per Telegram chat.
     static let telegramFiles = root.appendingPathComponent("telegram/files")
     static let petDir = root.appendingPathComponent("pet")
-    /// One git worktree per task run, grouped by repository.
-    static let worktrees = root.appendingPathComponent("worktrees")
     static let cursorHooks = home.appendingPathComponent(".cursor/hooks.json")
     static let claudeSettings = home.appendingPathComponent(".claude/settings.json")
 

@@ -137,14 +137,14 @@ final class CaptureSuggestionsTests: XCTestCase {
         guard case .failure = tasks.call("suggestion_reject", ["id": "nope"], by: "agent:mcp") else { return XCTFail("reject") }
     }
 
-    func testMigrationFromSchema420KeepsSuggestions() throws {
+    func testMigrationFromSchema410KeepsSuggestions() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-sugg-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
         let path = dir.appendingPathComponent("ironpet.db")
         let time = Date(timeIntervalSince1970: 1_800_000_000)
         do {
-            let old = try Database(path: path, migrations: AppMigrations.all.filter { $0.version <= 420 })
-            XCTAssertEqual(old.schemaVersion, 420)
+            let old = try Database(path: path, migrations: AppMigrations.all.filter { $0.version < 421 })
+            XCTAssertEqual(old.schemaVersion, 410)
             try old.write { db in
                 try db.execute("INSERT INTO task_suggestions(id, title, due, meeting, created, waiting_on) VALUES('a', 'Book the room', 'Friday', '/tmp/m', ?, 'Ana')",
                                [time.timeIntervalSince1970])
