@@ -30,7 +30,7 @@ if CommandLine.arguments.contains("--uninstall") {
         LoginItem.set(false)
         print("Removed the login item")
     }
-    MainActor.assumeIsolated { TaskRunUninstall.run() }.forEach { print($0) }
+    MainActor.assumeIsolated { TaskRunUninstall.run() }.forEach { print($0) } // top-level code runs on the main thread before NSApplication starts
     exit(0)
 }
 
