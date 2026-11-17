@@ -37,6 +37,10 @@ final class AutomationEngine {
         var slot: Date? = nil
         /// Run now from Settings, MCP or the CLI rather than the schedule.
         var manual = false
+        /// `stream`: how many events this delivery stands for (`{{count}}`).
+        var count: Int?
+        /// `stream`: called once the action has finished, so the next event can fire.
+        var finished: (() -> Void)?
     }
 
     var env: Environment
@@ -56,7 +60,11 @@ final class AutomationEngine {
     }
     /// Runs a poll command. Replaced in tests.
     var runPoll: (Automation) async -> CommandResult = AutomationEngine.defaultRunPoll
-    var state = AutomationState()
+    var state = AutomationState() {
+        didSet { wireStreamState() }
+    }
+    /// The `stream` triggers' commands.
+    let streams = StreamEngine()
 
     private(set) var automations: [Automation] = []
     private var activeElapsed: [String: TimeInterval] = [:]
@@ -69,6 +77,39 @@ final class AutomationEngine {
     init(env: Environment = Environment()) {
         self.env = env
         lastTick = env.now()
+        streams.now = { [env] in env.now() }
+        streams.fire = { [weak self] automation, item, count, done in
+            self?.onFire(Fire(automations: [automation], item: item, agentWorking: self?.env.isAgentWorking() ?? false, count: count, finished: done))
+                ?? done()
+        }
+        streams.onRecord = { [weak self] id, outcome, text in self?.onRecord(id, outcome, text) }
+        streams.onLog = { [weak self] id, outcome, summary, detail, duration in self?.onLog(id, outcome, summary, detail, duration) }
+        wireStreamState()
+    }
+
+    private func wireStreamState() {
+        streams.loadSeen = { [weak self] in self?.state.seen($0) }
+        // A stream that exits after its automation was deleted must not write the seen set back.
+        streams.saveSeen = { [weak self] id, set in
+            guard let self, self.automations.contains(where: { $0.id == id }) else { return }
+            self.state.setSeen(id, set)
+        }
+    }
+
+    /// Starts the `stream` commands that are enabled and approved. Call once the approval check (`mayRun`) is wired.
+    func startStreams() {
+        streams.enabled = true
+        syncStreams()
+    }
+
+    /// Makes the running commands match the list and the approvals. Call after either changes.
+    func syncStreams() {
+        streams.sync(automations, mayRun: mayRun)
+    }
+
+    /// Stops every `stream` command and waits briefly for it to go. Safe to call more than once.
+    func stopStreams() {
+        streams.shutdown()
     }
 
     // MARK: Configuration
@@ -103,12 +144,13 @@ final class AutomationEngine {
             polling[gone.id] = nil
         }
         automations = list
+        syncStreams()
     }
 
     /// What decides which items a poll sees. A change here makes every old item look new, so the seen set starts over.
     private static func sameExtraction(_ a: Automation.Trigger, _ b: Automation.Trigger) -> Bool {
         a.source == b.source && a.mode == b.mode && a.items == b.items && a.id == b.id
-            && a.version == b.version
+            && a.version == b.version && a.command == b.command
     }
 
     /// Pushes a reminder back so it is due again in the snooze time.
@@ -258,6 +300,8 @@ final class AutomationEngine {
             return nil
         case "once":
             return onceFired.contains(a.id) ? nil : a.trigger.at.flatMap(AutomationClock.parse)
+        case "stream":
+            return nil
         default:
             return nextPollAt[a.id] ?? now
         }

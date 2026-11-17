@@ -6,7 +6,7 @@ import Foundation
 /// can name the exact field that is wrong.
 struct Automation: Codable, Equatable, Identifiable {
     struct Trigger: Codable, Equatable {
-        /// `interval`, `daily`, `once` or `poll`.
+        /// `interval`, `daily`, `once`, `poll`, `script` or `stream`.
         var type: String
         /// `interval`: minutes between runs. `poll`: minutes between polls.
         var minutes: Double?
@@ -34,6 +34,14 @@ struct Automation: Codable, Equatable, Identifiable {
         var script: String?
         /// `poll`: after a run fires, this many minutes pass before the next one can.
         var cooldownMinutes: Double?
+        /// `stream`: a shell command that keeps running. Each line it prints is an event.
+        var command: String?
+        /// `stream`: a JMESPath expression on one item. The item fires only when the result is truthy.
+        var when: String?
+        /// `stream`: fire once after this many seconds without a new event, with the latest one.
+        var debounceSeconds: Double?
+        /// `stream`: fire at most once in this many seconds.
+        var throttleSeconds: Double?
         /// `daily`: a slot missed while the Mac slept or ironpet was not running still fires when it is at most this many
         /// minutes late. Only the latest missed slot fires. Without it, a slot missed during sleep fires once on wake and
         /// one missed before launch never does.
@@ -143,6 +151,7 @@ struct Automation: Codable, Equatable, Identifiable {
         if action.type == "shell" { parts.append("shell:" + (action.command ?? "")) }
         if action.type == "prompt" { parts.append("prompt:" + (action.prompt ?? "") + "|" + (action.agent ?? "") + "|" + (action.model ?? "")) }
         if trigger.type == "script" { parts.append("script:" + (trigger.script ?? "")) }
+        if trigger.type == "stream" { parts.append("stream:" + (trigger.command ?? "")) }
         if trigger.type == "poll", trigger.source?.type == "shell" { parts.append("poll:" + (trigger.source?.command ?? "")) }
         if trigger.type == "poll", trigger.source?.type == "http" {
             parts.append("http:" + (trigger.source?.url ?? "") + "|" + (trigger.source?.headers ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ","))
@@ -158,15 +167,16 @@ struct AutomationFile: Codable {
 
 enum AutomationValidator {
     static let weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-    static let triggerTypes = ["interval", "daily", "once", "poll", "script"]
+    static let triggerTypes = ["interval", "daily", "once", "poll", "script", "stream"]
     static let actionTypes = ["bubble", "prompt", "shell", "digest"]
     static let digestKinds = ["brief", "recap"]
     static let pollModes = ["json", "lines", "text", "exit_code"]
-        static let buttons = ["done", "snooze"]
+    static let streamModes = ["lines", "json"]
+    static let buttons = ["done", "snooze"]
 
     private static let keys: [String: Set<String>] = [
         "automation": ["id", "name", "enabled", "trigger", "action", "presentation", "createdBy", "note"],
-        "trigger": ["type", "minutes", "clock", "times", "weekdays", "at", "source", "mode", "items", "id", "version", "script", "cooldownMinutes", "catchUpMinutes"],
+        "trigger": ["type", "minutes", "clock", "times", "weekdays", "at", "source", "mode", "items", "id", "version", "script", "cooldownMinutes", "catchUpMinutes", "command", "when", "debounceSeconds", "throttleSeconds"],
         "source": ["type", "command", "timeoutSeconds", "url", "headers"],
         "action": ["type", "title", "body", "prompt", "agent", "model", "command", "timeoutSeconds", "digest"],
         "presentation": ["mood", "symbol", "buttons", "notification", "expiresSeconds"],
@@ -260,6 +270,12 @@ enum AutomationValidator {
         var errors: [String] = []
         guard triggerTypes.contains(t.type) else { return ["trigger.type must be one of \(triggerTypes.joined(separator: ", "))"] }
         if t.catchUpMinutes != nil, t.type != "daily" { errors.append("trigger.catchUpMinutes only applies to daily triggers") }
+        if t.type != "stream" {
+            for (field, present) in [("command", t.command != nil), ("when", t.when != nil),
+                                     ("debounceSeconds", t.debounceSeconds != nil), ("throttleSeconds", t.throttleSeconds != nil)] where present {
+                errors.append("trigger.\(field) only applies to stream triggers")
+            }
+        }
         switch t.type {
         case "interval":
             if let m = t.minutes, m >= 1, m <= 525_600 {} else { errors.append("trigger.minutes must be a number from 1 to 525600") }
@@ -274,6 +290,8 @@ enum AutomationValidator {
             if let at = t.at, let date = AutomationClock.parse(at) {
                 if isNew, date <= now { errors.append("trigger.at is in the past") }
             } else { errors.append("trigger.at must be an ISO 8601 date and time, such as 2026-11-20T15:30:00+01:00") }
+        case "stream":
+            errors += validate(stream: t)
         case "script":
             if let m = t.minutes, m >= 1, m <= 525_600 {} else { errors.append("trigger.minutes must be a number from 1 to 525600") }
             if (t.script ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errors.append("trigger.script is empty") }
@@ -303,6 +321,30 @@ enum AutomationValidator {
                 }
             default:
                 errors.append("trigger.source.type must be shell or http")
+            }
+        }
+        return errors
+    }
+
+    private static func validate(stream t: Automation.Trigger) -> [String] {
+        var errors: [String] = []
+        guard let command = t.command else { return ["trigger.command is required for stream"] }
+        if command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errors.append("trigger.command is empty") }
+        if let mode = t.mode, !streamModes.contains(mode) { errors.append("trigger.mode must be one of \(streamModes.joined(separator: ", ")) for stream") }
+        for (field, value) in [("debounceSeconds", t.debounceSeconds), ("throttleSeconds", t.throttleSeconds)] {
+            if let value, value < 0 || value > 3600 || value.isNaN {
+                errors.append(value < 0 ? "trigger.\(field) cannot be negative" : "trigger.\(field) must be a number from 0 to 3600")
+            }
+        }
+        if let c = t.cooldownMinutes, c < 0 { errors.append("trigger.cooldownMinutes cannot be negative") }
+        for (field, expression) in [("items", t.items), ("id", t.id), ("version", t.version), ("when", t.when)] {
+            if let expression, let problem = JMES.check(expression) { errors.append("trigger.\(field) is not valid JMESPath: \(problem)") }
+        }
+        if t.source != nil { errors.append("trigger.source does not apply to stream. Put the command in trigger.command") }
+        if t.script != nil { errors.append("trigger.script does not apply to stream") }
+        if (t.mode ?? "lines") == "lines" {
+            for (field, value) in [("items", t.items), ("id", t.id), ("version", t.version)] where value != nil {
+                errors.append("trigger.\(field) needs \"mode\": \"json\"")
             }
         }
         return errors
@@ -338,7 +380,7 @@ enum AutomationValidator {
             if let agent = a.agent, AgentCatalog.agent(id: agent) == nil { errors.append("action.agent \"\(agent)\" is not a known agent") }
         case "digest":
             if !digestKinds.contains(a.digest ?? "") { errors.append("action.digest must be one of \(digestKinds.joined(separator: ", "))") }
-            if trigger.type == "poll" { errors.append("a digest action runs on an interval, daily or once trigger, not a poll") }
+            if trigger.type == "poll" || trigger.type == "stream" { errors.append("a digest action runs on an interval, daily or once trigger, not a \(trigger.type)") }
         default:
             if (a.command ?? "").trimmingCharacters(in: .whitespaces).isEmpty { errors.append("action.command is empty") }
             if placeholderInQuotes(a.command ?? "") {

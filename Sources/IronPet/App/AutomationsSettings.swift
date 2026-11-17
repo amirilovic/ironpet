@@ -162,6 +162,10 @@ private struct AutomationList: View {
         if a.enabled, let next = service.engine.nextRun(a) {
             text += " · next " + (a.trigger.type == "interval" && a.trigger.clock != "wall" ? "after about " : "") + Self.relative.localizedString(for: next, relativeTo: Date())
         }
+        if a.trigger.type == "stream", a.enabled {
+            text += " · " + service.engine.streams.status(a.id).rawValue
+            if let last = service.engine.streams.lastEvent(a.id) { text += ", last event " + Self.relative.localizedString(for: last, relativeTo: Date()) }
+        }
         if a.createdBy != "user" { text += " · by \(a.createdBy)" }
         return text
     }

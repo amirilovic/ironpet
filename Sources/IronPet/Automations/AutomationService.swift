@@ -100,6 +100,12 @@ final class AutomationService {
         pruneLogs(force: true)
         engine.state.prune(now: engine.env.now(), keeping: Set(store.automations.map(\.id)))
         reviewApprovals()
+        engine.startStreams()
+    }
+
+    /// Stops the `stream` commands and their children. Call when the app quits. It waits up to two seconds, then kills.
+    func stop() {
+        engine.stopStreams()
     }
 
     /// A run for the history that `automations_history` and the Settings list show: the last 20, short.
@@ -199,7 +205,7 @@ final class AutomationService {
     func approvalDetail(_ a: Automation) -> String {
         (a.riskText ?? "").split(separator: "\n").map { line -> String in
             let text = String(line)
-            for prefix in ["shell:", "poll:", "prompt:", "http:"] where text.hasPrefix(prefix) { return String(text.dropFirst(prefix.count)) }
+            for prefix in ["shell:", "poll:", "prompt:", "http:", "stream:"] where text.hasPrefix(prefix) { return String(text.dropFirst(prefix.count)) }
             return text
         }.joined(separator: "\n")
     }
@@ -229,6 +235,7 @@ final class AutomationService {
         engine.state.setApproved(id, AutomationState.hash(risk))
         engine.state.setRejected(id, nil)
         dismissNotice(Self.approvalID(id))
+        engine.syncStreams()
         if let fire = pending.removeValue(forKey: id) { handle(fire) }
     }
 
@@ -251,20 +258,27 @@ final class AutomationService {
             if let only = bubbles.first { handle(.init(automations: [only], item: nil, agentWorking: fire.agentWorking)) }
             return
         }
-        guard let a = fire.automations.first else { return }
+        guard let a = fire.automations.first else { return fire.finished?() ?? () }
+        // A stream event waits for its action to finish. Actions that run in the background call `finished` themselves.
+        if !handle(a, fire) { fire.finished?() }
+    }
+
+    /// Runs one automation's action. Returns true when the action goes on in the background and will call `fire.finished`.
+    private func handle(_ a: Automation, _ fire: AutomationEngine.Fire) -> Bool {
         guard !needsApproval(a) else {
-            if isRejected(a) { return record(a.id, "skipped", "rejected earlier, not run") }
-            pending[a.id] = fire
+            if isRejected(a) { record(a.id, "skipped", "rejected earlier, not run"); return false }
+            // A stream event is dropped rather than kept: a stream does not run before it is approved.
+            if a.trigger.type != "stream" { pending[a.id] = fire }
             record(a.id, "waiting", "waiting for approval")
             askApproval(a)
-            return
+            return false
         }
-        if a.id == AutomationDefaults.reviewTasksID, !hasOpenTasks() { return record(a.id, "skipped", "skipped: no open tasks") }
-        let values = templateValues(a, item: fire.item)
+        if a.id == AutomationDefaults.reviewTasksID, !hasOpenTasks() { record(a.id, "skipped", "skipped: no open tasks"); return false }
+        let values = templateValues(a, item: fire.item, count: fire.count)
         switch a.action.type {
         case "shell":
             let command = AutomationTemplate.render(a.action.command ?? "", values: values.shellSafe)
-            runInBackground(a) { [self] in
+            return runInBackground(a, done: fire.finished) { [self] in
                 let result = await runShell(command, a.action.timeoutSeconds ?? 60)
                 finish(a, ok: result.ok, text: result.summary.isEmpty ? (result.ok ? "done" : "failed") : result.summary, fire: fire, truncated: result.truncated)
             }
@@ -272,7 +286,8 @@ final class AutomationService {
             deliverToChat(a, fire: fire, values: values)
         case "digest":
             guard let kind = a.action.digest.flatMap(Brief.Kind.init(rawValue:)), let brief = digest(kind, a, fire.slot) else {
-                return record(a.id, "failed", "the brief is not available")
+                record(a.id, "failed", "the brief is not available")
+                return false
             }
             // A scheduled brief with nothing in it stays quiet; Run now always answers.
             if brief.isEmpty, !fire.manual {
@@ -284,7 +299,7 @@ final class AutomationService {
             afterRun(a)
         case "prompt":
             let prompt = AutomationTemplate.render(a.action.prompt ?? "", values: values)
-            runInBackground(a) { [self] in
+            return runInBackground(a, done: fire.finished) { [self] in
                 switch await runPrompt(a, prompt) {
                 case .success(let answer): finish(a, ok: true, text: answer, fire: fire)
                 case .failure(let error): finish(a, ok: false, text: error.message, fire: fire)
@@ -296,6 +311,7 @@ final class AutomationService {
             record(a.id, "fired", AutomationTemplate.render(a.action.title ?? a.name, values: values))
             afterRun(a)
         }
+        return false
     }
 
     /// A prompt without poll item data runs in the user's chat, with the chat's agent, tools and memory. Item text comes
@@ -346,19 +362,27 @@ final class AutomationService {
         }
     }
 
-    private func runInBackground(_ a: Automation, key: String? = nil, _ work: @escaping () async -> Void) {
+    /// Always returns true: when it skips the run it calls `done` itself.
+    @discardableResult
+    private func runInBackground(_ a: Automation, key: String? = nil, done: (() -> Void)? = nil, _ work: @escaping () async -> Void) -> Bool {
         // One run at a time per automation: a slow command must not stack up behind its own schedule.
         let key = key ?? a.id
-        guard running.insert(key).inserted else { return record(a.id, "skipped", "the previous run is still going") }
+        guard running.insert(key).inserted else {
+            record(a.id, "skipped", "the previous run is still going")
+            done?()
+            return true
+        }
         Task { [weak self] in
             await work()
             self?.running.remove(key)
+            done?()
         }
+        return true
     }
 
     private func finish(_ a: Automation, ok: Bool, text: String, fire: AutomationEngine.Fire, truncated: Bool = false) {
         record(a.id, ok ? "ok" : "failed", text)
-        let values = templateValues(a, item: fire.item)
+        let values = templateValues(a, item: fire.item, count: fire.count)
         let title = a.action.title.map { AutomationTemplate.render($0, values: values) } ?? (ok ? a.name : "\(a.name) failed")
         let body = ok ? (a.action.body.map { AutomationTemplate.render($0, values: values) + "\n" } ?? "") + text : text
         show(a, title: title, body: String(body.prefix(600)) + (truncated ? "\n(output cut off)" : ""), fire: fire, ok: ok)
@@ -369,8 +393,10 @@ final class AutomationService {
         if a.trigger.type == "once" { try? store.update(a.id) { $0.enabled = false } }
     }
 
-    private func templateValues(_ a: Automation, item: [String: Any]?) -> [String: Any] {
-        ["item": item ?? [:], "name": a.name, "now": AutomationClock.format(engine.env.now())]
+    private func templateValues(_ a: Automation, item: [String: Any]?, count: Int? = nil) -> [String: Any] {
+        var values: [String: Any] = ["item": item ?? [:], "name": a.name, "now": AutomationClock.format(engine.env.now())]
+        if let count { values["count"] = count }
+        return values
     }
 
     private func show(_ a: Automation, title: String, body: String, fire: AutomationEngine.Fire, ok: Bool) {
@@ -564,7 +590,7 @@ final class AutomationService {
                 if a.trigger.type == "poll" || a.trigger.type == "script" {
                     await engine.pollNow(a.id)
                 } else {
-                    handle(.init(automations: [a], item: nil, agentWorking: false, manual: true))
+                    handle(.init(automations: [a], item: nil, agentWorking: false, manual: true, count: a.trigger.type == "stream" ? 1 : nil))
                 }
                 let waiting = needsApproval(a)
                 return .success(["id": a.id, "status": waiting ? "waiting for approval" : "started"])
@@ -666,6 +692,10 @@ final class AutomationService {
         if let next = engine.nextRun(a) { out["nextRun"] = AutomationClock.format(next) }
         if let last = engine.state.history(a.id, limit: 1).last { out["lastRun"] = ["time": AutomationClock.format(last.date), "outcome": last.outcome, "output": last.output] }
         if needsApproval(a) { out["approval"] = isRejected(a) ? "rejected" : "pending" }
+        if a.trigger.type == "stream" {
+            out["stream"] = engine.streams.status(a.id).rawValue
+            if let last = engine.streams.lastEvent(a.id) { out["lastEvent"] = AutomationClock.format(last) }
+        }
         return out
     }
 
@@ -690,6 +720,9 @@ final class AutomationService {
         case "daily": return "daily at \((t.times ?? []).joined(separator: ", "))" + (t.weekdays.map { " on \($0.joined(separator: ", "))" } ?? "")
         case "once": return "once at \(t.at ?? "?")"
         case "script": return "runs a script every \(Int(t.minutes ?? 0)) min"
+        case "stream":
+            let command = (t.command ?? "").split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            return "streams `\(command.count > 60 ? String(command.prefix(60)) + "…" : command)`"
         default: return "polls a \(t.source?.type ?? "?") source every \(Int(t.minutes ?? 0)) min"
         }
     }

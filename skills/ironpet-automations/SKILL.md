@@ -25,6 +25,7 @@ Tools: `automations_list`, `automations_get`, `automations_create`, `automations
 | `once` | "at 3pm today", "tomorrow at 9" | `at`: ISO 8601 with the time zone. It turns itself off after it fires. |
 | `script` | watch something and compare with last time | `minutes`, `script`. See below. |
 | `poll` | simple "tell me about new items" from a command | `minutes`, `source`, `items`, `id`, `version`. See below. |
+| `stream` | react to each line a long-running command prints, with no polling | `command`, `mode`, `items`, `id`, `version`, `when`, `debounceSeconds`, `throttleSeconds`, `cooldownMinutes`. See below. |
 
 Use `once` with a full timestamp. Work out the user's time zone and today's date first. Never guess the date.
 
@@ -35,7 +36,7 @@ Use `once` with a full timestamp. Work out the user's time zone and today's date
 - `{"type":"shell","command":"..."}` runs a command and shows its output.
 - `{"type":"digest","digest":"brief"}` (or `"recap"`) shows a bubble with what needs the user today (tasks due, tasks that need them, open alerts, meeting action items, waiting agents), or what happened today (agent turns, closed tasks, resolved alerts, meetings). ironpet builds it from data on the Mac, so no agent runs and it needs no approval. Not for `poll`. Two built-ins use it, `morning-brief` and `day-recap`, off until the user turns them on; turn one on with `automations_resume` instead of creating a copy.
 
-Text can use `{{name}}`, `{{now}}` and, for `poll`, `{{item.field}}`.
+Text can use `{{name}}`, `{{now}}`, for `poll` and `stream` `{{item.field}}`, and for `stream` `{{count}}`.
 
 ## Reminder examples
 
@@ -96,9 +97,29 @@ For "tell me about each new item" with no comparison, a `poll` is shorter:
 
 The source is a `shell` command or an `http` GET. `items` is a JMESPath expression for the list (default: the whole output, if it is an array). `id` and `version` are JMESPath on one item. An item fires when its id is new or its version changed. The first run records what exists and fires nothing. Filter with JMESPath, for example `"items":"[?state=='open']"`. JMESPath has no regular expressions. Other modes: `"mode":"lines"`, `"text"`, `"exit_code"`.
 
+## Reacting to a long-running command: stream
+
+Use a `stream` when something already prints events as they happen: `fswatch` for file changes, `log stream` for macOS logs, `tail -f`, `gh run watch`, any CLI with a watch mode. ironpet keeps the command running and fires the action for each line it prints, so nothing polls.
+
+```json
+{"name":"New PDFs in Downloads",
+ "trigger":{"type":"stream","command":"fswatch --event Created ~/Downloads | grep --line-buffered '[.]pdf$'","debounceSeconds":2},
+ "action":{"type":"bubble","title":"{{count}} new PDF(s)","body":"{{item.line}}"}}
+```
+
+- `mode` is `lines` (default, one event per line, `{{item.line}}`) or `json` (one JSON value per line). In `json` mode `items`, `id` and `version` work as in `poll`. `id` dedupes: a repeated id does not fire again unless its `version` changed. Without `id`, every event fires.
+- `when` is a JMESPath filter on one item and must be truthy, for example `contains(line, 'error')` or `level=='error'`.
+- `debounceSeconds` fires once after that long without a new event, with the latest event, and `{{count}}` is how many events it merged. `throttleSeconds` allows at most one fire in that many seconds. `cooldownMinutes` drops events that come too soon after a fire.
+- While an action is running, ironpet keeps only the newest waiting event and fires it when the action ends. Actions of one automation never overlap.
+- Lines over 64 KiB and more than 20 events a second are dropped and logged. stderr goes to the log and is not an event.
+- ironpet starts the command when the automation is on and approved, and stops it (SIGTERM, then SIGKILL, on the whole process group) when it is paused, deleted or changed, and when ironpet quits. When the command exits, ironpet starts it again after 1 s, then 2 s, 4 s and so on up to 5 minutes. A run of a minute or more resets the wait. Events printed before the first approval are not kept.
+- In a pipeline, make the filter print each line at once: `grep --line-buffered`, `sed -u`, `awk -W interactive`. Otherwise the pipe holds lines back.
+- `automations_get` shows `"stream": "running"`, `"restarting"` or `"stopped"`, and `lastEvent`.
+- A `digest` action does not work with a stream.
+
 ## Safety
 
-- A `shell` action, a `prompt` action, a `script` or a poll `shell` source that you create or change waits for the user to press **Approve** in a bubble before it first runs, and asks again each time you change it. Tell the user to look for the bubble. Do not try to get around it.
+- A `shell` action, a `prompt` action, a `script`, a `stream` command or a poll `shell` source that you create or change waits for the user to press **Approve** in a bubble before it first runs, and asks again each time you change it. Tell the user to look for the bubble. Do not try to get around it.
 - Never put a secret in an automation. Use an environment variable, or read it at run time, for example `security find-generic-password -s NAME -w` in a `sh` call. Literal tokens are refused.
 - Do not create automations that fire more often than needed. Five minutes is plenty for a watcher.
 - Do not edit `~/.ironpet/ironpet.db`. Edit definitions through the tools or `automations.json`.
@@ -117,7 +138,8 @@ Do not touch other automations, and do not turn the failing one off unless the u
 ## Debugging
 
 - `automations_history` shows the last runs (time, outcome, short output). The full execution log, with exit codes, output and `console.log` lines, is in the app: ironpet window → Automations → Show logs.
-- `automations_run_now` runs it now, outside the schedule. A poll or script runs once.
+- `automations_run_now` runs it now, outside the schedule. A poll or script runs once. A stream runs its action once with no item. To test the command, run it in a terminal first.
+- A stream that never fires: check `automations_get` for `"approval": "pending"` and for `"stream": "restarting"` (the command keeps exiting, the log shows the exit code and stderr), and that the command prints complete lines promptly.
 - A script that returns nothing before it has any state stays a "first run". If alerts did not appear, check that the first run was not the one that should have fired.
 - An automation waiting for approval shows `"approval": "pending"` in `automations_get`.
 - Reminders on `clock: "active"` only count while the user is at the keyboard, so they will not fire during a long break. Use `wall` for a fixed schedule.

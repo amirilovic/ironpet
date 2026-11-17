@@ -597,6 +597,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chat.persistForRelaunch()
         chat.shutdown()
         taskRunner?.shutdown()
+        automations?.stop()
         try? FileManager.default.removeItem(at: Paths.portFile)
     }
 
