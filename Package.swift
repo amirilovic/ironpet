@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/adam-fowler/jmespath.swift", exact: "1.0.3"),
-        .package(url: "https://github.com/zqqf16/QuickJS-Swift.git", from: "1.0.0"),
+        .package(path: "Vendor/QuickJS-Swift"),
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.18.3"),
     ],
     targets: [

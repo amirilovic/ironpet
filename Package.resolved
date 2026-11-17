@@ -1,5 +1,5 @@
 {
-  "originHash" : "6ec5045a89a1d50252cad17e05df4af9503922202b1d66888c51491bb48a5ea7",
+  "originHash" : "a80043e85e37d6355351b09981b2567b5ddfb07efc7c3d79907e80bc52ecbac9",
   "pins" : [
     {
       "identity" : "fluidaudio",
@@ -17,15 +17,6 @@
       "state" : {
         "revision" : "3877a5060e85ae33e3b9fe51ab581784f65ec80e",
         "version" : "1.0.3"
-      }
-    },
-    {
-      "identity" : "quickjs-swift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/zqqf16/QuickJS-Swift.git",
-      "state" : {
-        "revision" : "5f13d42d81c308d5b70786340c0cd113b78e6315",
-        "version" : "1.0.0"
       }
     }
   ],
