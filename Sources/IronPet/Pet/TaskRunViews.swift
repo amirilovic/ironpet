@@ -34,7 +34,10 @@ struct TaskRunControls: View {
             case .approval(let title, let detail):
                 TaskRunApprovalCard(title: title, detail: detail)
                 actions {
-                    Button("Allow") { decide(run, true) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    Button("Allow") { decide(run, true) }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(runner.waiting.first?.task == task.id ? KeyboardShortcut(.return, modifiers: .command) : nil)
+                        .help(runner.waiting.first?.task == task.id ? "Allow (⌘↩)" : "Allow")
                     Button("Deny") { decide(run, false) }
                     openChat(run)
                 }
@@ -239,6 +242,10 @@ struct TaskStartPopover: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Hand to an Agent").font(.headline)
                 Text(task.title).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                if let origin = TaskRunPrompt.untrustedOrigin(task.source) {
+                    Label("From \(origin)", systemImage: task.source.symbol)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Form {
                 if let run = continuing {
@@ -268,6 +275,10 @@ struct TaskStartPopover: View {
                         Text("Auto")
                         Text("Edits and commands in the task's copy run without asking. Destructive commands still ask.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        if let origin = TaskRunPrompt.untrustedOrigin(task.source) {
+                            Text("This task's text came from \(origin). Auto lets the agent run commands without asking.")
+                                .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
             }
