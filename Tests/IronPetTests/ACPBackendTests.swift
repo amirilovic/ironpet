@@ -111,6 +111,14 @@ final class ACPBackendTests: XCTestCase {
                 send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
                 continue
             update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pid=%d" % os.getpid()}})
+            if mode == "usageresume":
+                # A resumed Claude Code session: its lifetime total, with no replayed baseline, on an ordinary turn.
+                turns += 1
+                update({"sessionUpdate": "usage_update", "used": 100, "size": 1000, "cost": {"amount": [168.5, 168.7][min(turns, 2) - 1], "currency": "USD"},
+                        "_meta": {"_claude/model": "claude-opus-5-5"}})
+                send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn",
+                      "usage": {"inputTokens": 0, "outputTokens": 1400, "cachedReadTokens": 916000, "cachedWriteTokens": 0}}})
+                continue
             if mode == "usage":
                 turns += 1
                 update({"sessionUpdate": "usage_update", "used": 100, "size": 1000, "cost": {"amount": [0.05, 0.12][min(turns, 2) - 1], "currency": "USD"},
@@ -671,6 +679,31 @@ final class ACPBackendTests: XCTestCase {
 
     private func recorded(_ store: UsageStore) -> UsageSummary {
         store.summary(days: 7)
+    }
+
+    func testResumedSessionsFirstLifetimeTotalIsNotRecordedAsTheTurnsCost() async throws {
+        setenv("FAKE_MODE", "usageresume", 1)
+        let store = try usageStore()
+        let backend = ACPBackend(agent: agent)
+        backend.usageFeature = .chat
+        backend.usageStore = store
+        _ = await run(backend, turn("one", resume: "sess-1"))
+        _ = await run(backend, turn("two", resume: "sess-1"))
+        let row = try XCTUnwrap(recorded(store).rows.first)
+        XCTAssertEqual(row.requests, 2)
+        // First turn: priced from its tokens (916000 x 0.20 + 1400 x 20, per million). Second: the change in the total.
+        XCTAssertEqual(row.cost ?? 0, 0.2112 + 0.2, accuracy: 1e-6, "nowhere near the $168.50 lifetime total")
+        XCTAssertLessThan(row.cost ?? .infinity, 1)
+        backend.shutdown()
+    }
+
+    func testResumedSessionOfAnUnpricedModelRecordsNoCostForTheFirstTurn() {
+        var event = UsageEvent(feature: .chat, model: "some-other-model", outputTokens: 10)
+        XCTAssertNil(UsagePricing.cost(for: event))
+        event.model = "claude-opus-5-5"
+        XCTAssertEqual(UsagePricing.cost(for: event) ?? 0, 0.0002, accuracy: 1e-9)
+        // Tokens in a component with no confirmed price do not make a $0 turn.
+        XCTAssertNil(UsagePricing.cost(for: UsageEvent(feature: .chat, model: "claude-opus-5-5", inputTokens: 5)))
     }
 
     func testTurnWithReportedUsageStoresOneChatRecord() async throws {

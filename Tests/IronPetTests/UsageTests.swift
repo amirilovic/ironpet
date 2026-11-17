@@ -63,6 +63,84 @@ final class UsageTests: XCTestCase {
         XCTAssertEqual(quarter.days.map(\.requests).flatMap(\.values).reduce(0, +), 7)
     }
 
+    // MARK: Cost and today
+
+    private func costStore() throws -> UsageStore {
+        let store = try memoryStore()
+        store.record(UsageEvent(at: daysAgo(0, hour: 8), feature: .chat, model: "opus", duration: 1, cost: 0.5, currency: "USD"))
+        store.record(UsageEvent(at: daysAgo(0, hour: 8), feature: .chat, model: "opus", duration: 1, cost: 0.25, currency: "USD"))
+        store.record(UsageEvent(at: daysAgo(0, hour: 10), feature: .automations, model: "sonnet", duration: 1, cost: 0.125, currency: "USD"))
+        store.record(UsageEvent(at: daysAgo(1, hour: 9), feature: .chat, model: "opus", duration: 1, cost: 2, currency: "USD"))
+        store.record(UsageEvent(at: daysAgo(1, hour: 9), feature: .voiceTranscription, model: "whisper-1", audioSeconds: 3))
+        return store
+    }
+
+    func testCostPerDayAndFeatureIsTheSumOfTheRecordedCosts() throws {
+        let week = try costStore().summary(days: 7, now: now, calendar: calendar)
+        XCTAssertEqual(week.days[6].cost[.chat] ?? 0, 0.75, accuracy: 1e-9)
+        XCTAssertEqual(week.days[6].cost[.automations] ?? 0, 0.125, accuracy: 1e-9)
+        XCTAssertEqual(week.days[5].cost[.chat] ?? 0, 2, accuracy: 1e-9)
+        XCTAssertNil(week.days[5].cost[.voiceTranscription], "no cost reported, nothing to chart")
+        XCTAssertEqual(week.uncostedEvents, 1)
+    }
+
+    func testTodayIsBucketedByHourAndOnlyListsTodaysRows() throws {
+        let today = try costStore().summary(days: 1, hourly: true, now: now, calendar: calendar)
+        XCTAssertEqual(today.days.count, 24)
+        XCTAssertEqual(today.days[8].day, calendar.date(byAdding: .hour, value: 8, to: calendar.startOfDay(for: now)))
+        XCTAssertEqual(today.days[8].requests[.chat], 2)
+        XCTAssertEqual(today.days[8].cost[.chat] ?? 0, 0.75, accuracy: 1e-9)
+        XCTAssertEqual(today.days[10].cost[.automations] ?? 0, 0.125, accuracy: 1e-9)
+        XCTAssertEqual(Set(today.rows.map(\.id)), ["chat|opus", "automations|sonnet"])
+        XCTAssertEqual(today.uncostedEvents, 0)
+    }
+
+    func testSummaryLineShowsTodayAndTheRangeTotals() throws {
+        let store = try costStore()
+        let week = store.summary(days: 7, now: now, calendar: calendar)
+        XCTAssertEqual(week.todayCost, 0.875, accuracy: 1e-9)
+        XCTAssertEqual(week.rangeCost, 2.875, accuracy: 1e-9)
+        XCTAssertEqual(UsageFormat.summaryLine(today: week.todayCost, range: week.rangeCost), "Today \(UsageFormat.cost(0.875, currency: nil)) · This range \(UsageFormat.cost(2.875, currency: nil))")
+        let today = store.summary(days: 1, hourly: true, now: now, calendar: calendar)
+        XCTAssertEqual(today.todayCost, today.rangeCost, accuracy: 1e-9)
+    }
+
+    func testMigrationCorrectsOutlierChatCostsOnceAndLeavesTheRestAlone() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-usage-\(UUID().uuidString)/ironpet.db")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        // A database from before the correction: only the first usage migration has run.
+        let old = try Database(path: url, migrations: UsageStore.migrations.filter { $0.version == 100 })
+        let store = UsageStore(database: old)
+        func chat(_ model: String, cost: Double?, hour: Int, feature: UsageFeature = .chat) {
+            store.record(UsageEvent(at: daysAgo(0, hour: hour), feature: feature, model: model, outputTokens: 1400, cacheReadTokens: 916_000, cost: cost, currency: "USD"))
+        }
+        chat("claude-opus-5-5", cost: 168.5, hour: 1)
+        chat("claude-opus-5-5", cost: 0.4, hour: 2)
+        chat("claude-opus-5-5", cost: nil, hour: 3)
+        chat("claude-opus-5-5", cost: 168.5, hour: 4, feature: .automations)
+        chat("unpriced-model", cost: 168.5, hour: 5)
+        // A long uncached first turn: 12M cache write tokens can explain $30 whatever the cache read and output tokens cost.
+        store.record(UsageEvent(at: daysAgo(0, hour: 6), feature: .chat, model: "claude-opus-5-5", outputTokens: 100, cacheWriteTokens: 12_000_000, cost: 30, currency: "USD"))
+        store.flush()
+        func costs(_ database: Database) throws -> [Double?] {
+            try database.read { try $0.rows("SELECT cost FROM usage_events ORDER BY at").map { $0[0] as? Double } }
+        }
+        XCTAssertEqual(try costs(old).compactMap { $0 }.count, 5)
+
+        let migrated = try Database(path: url, migrations: AppMigrations.all)
+        let after = try costs(migrated)
+        XCTAssertEqual(after[0] ?? 0, 0.2112, accuracy: 1e-9, "the outlier takes the token-implied cost")
+        XCTAssertEqual(after[1], 0.4, "an ordinary cost is untouched")
+        XCTAssertNil(after[2], "a missing cost stays missing")
+        XCTAssertEqual(after[3], 168.5, "only chat rows change")
+        XCTAssertEqual(after[4], 168.5, "a model without a price is left alone")
+        XCTAssertEqual(after[5], 30, "unpriced input or cache write tokens can explain the cost, so it stays")
+
+        // Running the same statements again changes nothing.
+        try migrated.write { try $0.script(UsagePricing.correctionSQL) }
+        XCTAssertEqual(try costs(migrated), after)
+    }
+
     // MARK: Persistence (S7)
 
     func testRecordsSurviveReopeningTheDatabase() throws {

@@ -90,6 +90,8 @@ enum PreviewRenderer {
         render(today(.recap, brief), to: dir, "today-recap")
         render(today(.brief, BriefModel(briefs: [])), to: dir, "today-empty")
 
+        renderUsage(to: dir)
+
         var patterned = config
         patterned.chat.background = "paws"
         // The same pages in a real window, so the screenshots show the title bar, selection and glass as they are.
@@ -212,6 +214,33 @@ enum PreviewRenderer {
         let file = dir.appendingPathComponent("\(name).png")
         try? rep.representation(using: .png, properties: [:])?.write(to: file)
         print("wrote \(file.path)")
+    }
+
+    /// The Usage tab with a week of made-up events: cost mode, requests mode and the hourly Today range.
+    private static func renderUsage(to dir: URL) {
+        guard let database = try? Database(path: nil, migrations: AppMigrations.all) else { return }
+        let store = UsageStore(database: database)
+        let calendar = Calendar.current
+        let now = Date()
+        let start = calendar.startOfDay(for: now)
+        let features: [(UsageFeature, String, Double)] = [(.chat, "claude-opus", 0.9), (.automations, "claude-sonnet", 0.2),
+                                                            (.meetingSummary, "claude-sonnet", 0.35)]
+        for back in 0..<7 {
+            for (index, item) in features.enumerated() {
+                guard let day = calendar.date(byAdding: .day, value: -back, to: start) else { continue }
+                for turn in 0...(index + back % 3) {
+                    let at = min(now, day.addingTimeInterval(Double(8 + index * 3 + turn) * 3600))
+                    store.record(UsageEvent(at: at, feature: item.0, model: item.1, duration: 20, inputTokens: 4000, outputTokens: 600,
+                                            cost: item.2 * Double(1 + (back + turn) % 3), currency: "USD"))
+                }
+            }
+        }
+        store.record(UsageEvent(at: now.addingTimeInterval(-60), feature: .voiceTranscription, model: "whisper-1", audioSeconds: 12))
+        for (name, days, hourly, cost) in [("usage-cost", 7, false, true), ("usage-requests", 30, false, false), ("usage-today", 1, true, true)] {
+            let summary = store.summary(days: days, hourly: hourly, now: now, calendar: calendar)
+            render(UsageSettings(range: days, sample: summary, showCost: cost).frame(width: 560, height: 700).panel(),
+                   to: dir, name)
+        }
     }
 
     private static func sampleSettings(chat: ChatSession, config: Config) -> SettingsModel {
