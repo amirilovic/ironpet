@@ -307,6 +307,42 @@ final class TaskRunnerTests: XCTestCase {
         XCTAssertEqual(restored.row(for: try XCTUnwrap(tasks.task(id))), .interrupted)
     }
 
+    func testMoodAttentionAndAgentsListFollowTheRun() async throws {
+        let id = try newTask("ASK first")
+        XCTAssertNil(runner.mood)
+        await start(id)
+        await wait("approval") { approvals.count == 1 }
+        XCTAssertEqual(runner.mood, .needsInput)
+        XCTAssertEqual(runner.shown(in: tasks).map(\.task.id), [id])
+        let signals = SignalStore()
+        XCTAssertEqual(IronPetSection.needingAttention(store: SessionStore(), signals: signals, tasks: tasks, runs: runner), .agents)
+        runner.decide(id: approvals[0].id, allow: true)
+        await wait("finish") { finished == [id] }
+        XCTAssertNil(runner.mood)
+        XCTAssertEqual(runner.shown(in: tasks).map(\.task.id), [id], "a finished run stays listed while its task needs the user")
+        try tasks.update(id, status: .backlog, by: "test")
+        XCTAssertTrue(runner.shown(in: tasks).isEmpty)
+    }
+
+    func testUninstallRemovesCleanCopiesAndKeepsDirtyOnes() async throws {
+        let file = dir.appendingPathComponent("ironpet.db")
+        database = Database.open(path: file, migrations: AppMigrations.all).database
+        tasks = TaskStore(database: database)
+        runner = makeRunner()
+        let clean = try newTask("COMMIT clean")
+        let dirty = try newTask("DIRTY left")
+        await start(clean)
+        await wait("first") { finished.count == 1 }
+        await start(dirty)
+        await wait("second") { finished.count == 2 }
+        let cleanRun = try XCTUnwrap(runner.run(for: clean)), dirtyRun = try XCTUnwrap(runner.run(for: dirty))
+        let lines = TaskRunUninstall.run(database: file)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cleanRun.worktree.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dirtyRun.worktree.path))
+        XCTAssertTrue(lines.contains("Kept \(dirtyRun.worktree.path): it has uncommitted changes"))
+        XCTAssertTrue(lines.contains("Kept the branch \(cleanRun.branch) in \(cleanRun.repo.path): it has the agent's commits"))
+    }
+
     func testFirstSentence() {
         XCTAssertEqual(TaskRunner.firstSentence("Fixed it. Then more."), "Fixed it.")
         XCTAssertEqual(TaskRunner.firstSentence("  One line\nsecond"), "One line")

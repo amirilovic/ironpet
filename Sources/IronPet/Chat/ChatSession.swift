@@ -499,7 +499,16 @@ final class ChatSession: ObservableObject {
         lastRunDuration = nil
     }
 
+    /// True while a task run's agent owns the thread. Opening it then calls `onThreadInUse` instead.
+    var threadInUse: (String) -> Bool = { _ in false }
+    var onThreadInUse: ((ChatThread) -> Void)?
+
     func open(_ thread: ChatThread) {
+        if threadInUse(thread.id) {
+            ChatLog.note("thread \(thread.id) not opened: a task run is using it")
+            onThreadInUse?(thread)
+            return
+        }
         stop()
         shutdownAgent()
         apply(thread, reason: "opened from history")

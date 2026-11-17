@@ -71,3 +71,40 @@ final class TaskRunStore {
                        error: row[14] as? String, cleanup: (row[15] as? String).flatMap(TaskRun.Cleanup.init(rawValue:)) ?? .none)
     }
 }
+
+/// For `--uninstall`: the worktrees task runs left behind. Clean ones are removed with their empty branches; one with
+/// uncommitted changes stays, because removing it would lose that work.
+enum TaskRunUninstall {
+    @MainActor static func run(database file: URL = Paths.root.appendingPathComponent("ironpet.db")) -> [String] {
+        guard FileManager.default.fileExists(atPath: file.path), let git = LoginShell.find("git")?.path else { return [] }
+        let store = TaskRunStore(database: Database.open(path: file, migrations: AppMigrations.all).database)
+        var lines: [String] = []
+        var repos = Set<URL>()
+        for run in store.all() where run.cleanup != .removed {
+            repos.insert(run.repo)
+            guard FileManager.default.fileExists(atPath: run.worktree.path) else { continue }
+            let removed = sync(git, ["-C", run.repo.path, "worktree", "remove", run.worktree.path])
+            guard removed.code == 0 else {
+                lines.append("Kept \(run.worktree.path): it has uncommitted changes")
+                continue
+            }
+            lines.append("Removed the task copy \(run.worktree.path)")
+            let ahead = sync(git, ["-C", run.repo.path, "rev-list", "--count", "\(run.base)..\(run.branch)"])
+            if ahead.code == 0, ahead.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "0" {
+                _ = sync(git, ["-C", run.repo.path, "branch", "-d", run.branch])
+            } else {
+                lines.append("Kept the branch \(run.branch) in \(run.repo.path): it has the agent's commits")
+            }
+        }
+        for repo in repos where FileManager.default.fileExists(atPath: repo.path) {
+            _ = sync(git, ["-C", repo.path, "worktree", "prune"])
+        }
+        return lines
+    }
+
+    private static func sync(_ git: String, _ arguments: [String]) -> CommandResult {
+        var env = LoginShell.environment()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        return CommandRunner.runBlocking(executable: git, arguments: arguments, timeout: 60, environment: env, stdin: nil, maxBytes: 64 * 1024)
+    }
+}
