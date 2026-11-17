@@ -37,6 +37,10 @@ final class TaskRunner: ObservableObject {
     var onFailed: ((TaskRun) -> Void)?
     var onPushed: ((TaskRun, String) -> Void)?
     var onOpenPRFailed: ((TaskRun, String) -> Void)?
+    /// True when this thread is the one open in the chat, where a second agent would share its session.
+    var threadOpenInChat: (String) -> Bool = { _ in false }
+
+    static let closeChatFirst = "This run's conversation is open in the chat. Start a new chat there first, then try again."
 
     private struct Live {
         let backend: ACPBackend
@@ -112,6 +116,14 @@ final class TaskRunner: ObservableObject {
                                lastRun: runs[task.id], ironpetRoot: ironpetRoot)
     }
 
+    /// What the Start popover shows for a folder: the repository it is in, its current branch, and the remotes the push
+    /// block does not cover. Nil when it is not a git repository.
+    func target(of project: URL) async -> (repo: URL, branch: String?, unblockedRemotes: [String])? {
+        guard let git = git(), let repo = try? await git.repoRoot(of: project) else { return nil }
+        let branch = (try? await git.head(repo))?.branch
+        return (repo, branch, await git.remotesWithOwnPushURL(repo))
+    }
+
     /// The agent a run uses unless the popover picked another.
     func defaultAgent() -> (agent: ACPAgent, model: String?)? {
         let settings = config()
@@ -130,6 +142,10 @@ final class TaskRunner: ObservableObject {
         guard let task = tasks.task(id), task.status != .done else { return "That task is closed." }
         if let existing = runs[id], existing.state.isLive { return "An agent is already working on this task." }
         guard !starting.contains(id) else { return "An agent is already starting on this task." }
+        if let previous = runs[id], let session = previous.session, previous.cleanup != .removed,
+           FileManager.default.fileExists(atPath: previous.worktree.path), threadOpenInChat(session) {
+            return Self.closeChatFirst
+        }
         guard liveCount < limit else { return "\(liveCount) tasks are already running. The limit is taskRuns.maxConcurrent." }
         guard let git = git() else { return "git was not found. Install the Xcode command line tools, then try again." }
         starting.insert(id)
@@ -149,20 +165,24 @@ final class TaskRunner: ObservableObject {
             fresh = false
         } else {
             guard let project else { return "Choose the project folder for this task." }
+            var picked: (repo: URL, base: String, branch: String, folder: URL)?
             do {
                 let repo = try await git.repoRoot(of: project)
                 let head = try await git.head(repo)
                 let slot = await git.freeSlot(repo, task: id, parent: GitWorktree.parent(for: repo, root: worktreeRoot))
+                picked = (repo, head.sha, slot.branch, slot.folder)
                 try await git.addWorktree(repo: repo, folder: slot.folder, branch: slot.branch, base: head.sha)
                 run = TaskRun(task: id, repo: repo, worktree: slot.folder, branch: slot.branch, base: head.sha, baseBranch: head.branch,
                               agent: agent.id, model: model, session: nil, auto: auto, state: .starting, started: now(),
                               ended: nil, summary: nil, error: nil)
             } catch {
+                if let picked { await git.discardFailedStart(repo: picked.repo, folder: picked.folder, branch: picked.branch, base: picked.base) }
                 return error.localizedDescription
             }
             fresh = true
         }
         let remotes = await git.remotes(run.repo)
+        run.unblockedRemotes = await git.remotesWithOwnPushURL(run.repo)
         if fresh, let remote = await git.pushRemote(run.repo, baseBranch: run.baseBranch) {
             run.pushURL = await git.pushURL(run.repo, remote: remote)
         }

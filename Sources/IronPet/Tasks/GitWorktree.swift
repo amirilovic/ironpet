@@ -70,6 +70,43 @@ struct GitWorktree {
         return result.stdout.split(whereSeparator: \.isNewline).map(String.init).filter { !$0.isEmpty }
     }
 
+    /// The same list without waiting on a task, for the chat building an agent's environment. Empty when git fails.
+    func remotesNow(_ repo: URL) -> [String] {
+        var env = LoginShell.environment()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        let result = CommandRunner.runBlocking(executable: git, arguments: ["-C", repo.path, "remote"], timeout: 5,
+                                               environment: env, stdin: nil, maxBytes: 16 * 1024)
+        guard result.code == 0 else { return [] }
+        return result.stdout.split(whereSeparator: \.isNewline).map(String.init).filter { !$0.isEmpty }
+    }
+
+    /// Remotes with their own `pushurl`. git pushes to every `pushurl` a remote has, so the push block's extra one
+    /// does not stop a push to them.
+    func remotesWithOwnPushURL(_ repo: URL) async -> [String] {
+        let result = await run(["config", "--get-regexp", #"^remote\..*\.pushurl$"#], in: repo)
+        guard result.code == 0 else { return [] }
+        return Self.pushURLRemotes(result.stdout)
+    }
+
+    /// The remote names in `git config --get-regexp` output such as `remote.origin.pushurl git@host:me/app.git`.
+    static func pushURLRemotes(_ output: String) -> [String] {
+        var names: [String] = []
+        for line in output.split(whereSeparator: \.isNewline) {
+            guard let key = line.split(separator: " ", maxSplits: 1).first, key.hasPrefix("remote."), key.hasSuffix(".pushurl") else { continue }
+            let name = String(key.dropFirst("remote.".count).dropLast(".pushurl".count))
+            if !name.isEmpty, !names.contains(name) { names.append(name) }
+        }
+        return names
+    }
+
+    /// Undoes a Start that failed after picking its slot: removes the worktree when git made it and it is clean,
+    /// forgets it, and deletes the branch when it has no commits.
+    func discardFailedStart(repo: URL, folder: URL, branch: String, base: String) async {
+        if FileManager.default.fileExists(atPath: folder.path) { try? await removeWorktree(repo: repo, folder: folder, force: false) }
+        await prune(repo)
+        await deleteBranchIfEmpty(repo: repo, branch: branch, base: base)
+    }
+
     /// The remote Open PR pushes to: the base branch's upstream remote, else `origin`, else the only one.
     func pushRemote(_ repo: URL, baseBranch: String?) async -> String? {
         let all = await remotes(repo)
@@ -157,7 +194,7 @@ struct GitWorktree {
 
     static let noPushURL = "ironpet-no-push://task-runs-cannot-push"
     /// URL prefixes rewritten for pushes only, so a push to a remote added later, or straight to a URL, fails too.
-    static let pushPrefixes = ["https://", "http://", "ssh://", "git@", "git://"]
+    static let pushPrefixes = ["https://", "http://", "ssh://", "git@", "git://", "file://"]
 
     /// Environment for the agent process: every remote's push URL points nowhere and every push URL is rewritten to
     /// nowhere, so a `git push` the agent runs without asking fails. ironpet's own push on Open PR runs without it.

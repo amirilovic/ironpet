@@ -244,9 +244,16 @@ final class ChatSession: ObservableObject {
         return folder.hasPrefix(root + "/") ? RunScope(root: workspace) : nil
     }
 
+    /// The remotes of the open run thread's copy, read once per copy.
+    private var runRemotes: (path: String, names: [String])?
+
     /// The push block a task run's agent gets, when the open thread is one.
-    private var agentEnvironment: [String: String] {
-        taskRunScope == nil ? [:] : GitWorktree.pushBlockEnvironment(remotes: [])
+    var agentEnvironment: [String: String] {
+        guard let scope = taskRunScope else { return [:] }
+        if runRemotes?.path != scope.root.path {
+            runRemotes = (scope.root.path, GitWorktree.locate()?.remotesNow(scope.root) ?? [])
+        }
+        return GitWorktree.pushBlockEnvironment(remotes: runRemotes?.names ?? [])
     }
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
     private var decided: [String: Bool] = [:]

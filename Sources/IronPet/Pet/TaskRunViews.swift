@@ -224,6 +224,8 @@ struct TaskStartPopover: View {
     @State private var showPrompt = false
     @State private var starting = false
     @State private var error: String?
+    /// The repository and branch the chosen folder is in, and its remotes the push block does not cover.
+    @State private var target: (repo: URL, branch: String?, unblockedRemotes: [String])?
 
     private var continuing: TaskRun? {
         runner.run(for: task.id).flatMap { run in
@@ -273,10 +275,10 @@ struct TaskStartPopover: View {
                 Toggle(isOn: $auto) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Auto")
-                        Text("Edits and commands in the task's copy run without asking. Destructive commands still ask.")
+                        Text("Auto lets the agent edit files in the task's copy without asking. Commands and tools that change anything still ask.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         if let origin = TaskRunPrompt.untrustedOrigin(task.source) {
-                            Text("This task's text came from \(origin). Auto lets the agent run commands without asking.")
+                            Text("This task's text came from \(origin). Read it before you start.")
                                 .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -290,10 +292,16 @@ struct TaskStartPopover: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Label("The agent commits on its branch but cannot push. You open the pull request.", systemImage: "lock")
+            Label("The agent commits on its branch. Pushing asks you first, and you open the pull request.", systemImage: "lock")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if let unblocked = target?.unblockedRemotes, !unblocked.isEmpty {
+                Label(Self.unblockedText(unblocked), systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             DisclosureGroup("What the agent is told", isExpanded: $showPrompt) {
                 ScrollView {
                     Text(prompt)
@@ -320,12 +328,24 @@ struct TaskStartPopover: View {
         .padding(16)
         .frame(width: 400)
         .onAppear(perform: load)
+        .task(id: continuing?.repo ?? project) {
+            target = nil
+            guard let folder = continuing?.repo ?? project else { return }
+            target = await runner.target(of: folder)
+        }
     }
 
     private var prompt: String {
         if continuing != nil { return TaskRunPrompt.resume(task: task, lastError: runner.run(for: task.id)?.error) }
-        return TaskRunPrompt.start(task: task, repo: project ?? URL(fileURLWithPath: "/your/project"), branch: "ironpet/\(task.id)",
-                                   baseBranch: nil)
+        return TaskRunPrompt.start(task: task, repo: target?.repo ?? project ?? URL(fileURLWithPath: "/your/project"),
+                                   branch: "ironpet/\(task.id)", baseBranch: target?.branch)
+    }
+
+    /// "origin has its own push URL, …": git pushes to every push URL, so the agent's push block does not cover it.
+    static func unblockedText(_ remotes: [String]) -> String {
+        let names = remotes.joined(separator: ", ")
+        let verb = remotes.count == 1 ? "has its own push URL" : "have their own push URLs"
+        return "\(names) \(verb), which the extra push block does not cover. Commands still ask before they run, Auto or not."
     }
 
     /// "web-app — ~/code": the folder first, so a long parent path never hides which project it is.

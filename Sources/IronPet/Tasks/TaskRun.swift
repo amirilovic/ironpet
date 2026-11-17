@@ -55,6 +55,8 @@ struct TaskRun: Identifiable, Equatable {
     var dirty = false
     /// The approval card waiting in this run, if any.
     var approval: Approval?
+    /// Remotes with their own `pushurl`, which the agent's push block does not cover. Commands still ask.
+    var unblockedRemotes: [String] = []
 
     struct Approval: Equatable {
         let id: UUID

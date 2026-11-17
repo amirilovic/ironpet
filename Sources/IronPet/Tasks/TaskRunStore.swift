@@ -88,7 +88,7 @@ enum TaskRunUninstall {
             guard FileManager.default.fileExists(atPath: run.worktree.path) else { continue }
             let removed = sync(git, ["-C", run.repo.path, "worktree", "remove", run.worktree.path])
             guard removed.code == 0 else {
-                lines.append("Kept \(run.worktree.path): it has uncommitted changes")
+                lines.append("Kept \(run.worktree.path): \(GitWorktree.describe(removed))")
                 continue
             }
             lines.append("Removed the task copy \(run.worktree.path)")

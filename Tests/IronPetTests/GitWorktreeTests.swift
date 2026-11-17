@@ -133,19 +133,47 @@ final class GitWorktreeTests: XCTestCase {
 
     func testPushBlockEnvironmentRewritesPushesToURLsAndRemotesAddedLater() async throws {
         let env = GitWorktree.pushBlockEnvironment(remotes: [])
-        XCTAssertEqual(env["GIT_CONFIG_COUNT"], "5")
-        XCTAssertEqual(Set((0..<5).compactMap { env["GIT_CONFIG_VALUE_\($0)"] }), Set(GitWorktree.pushPrefixes))
-        XCTAssertTrue((0..<5).allSatisfy { env["GIT_CONFIG_KEY_\($0)"] == "url.ironpet-no-push://.pushInsteadOf" })
+        XCTAssertEqual(env["GIT_CONFIG_COUNT"], "6")
+        XCTAssertEqual(Set((0..<6).compactMap { env["GIT_CONFIG_VALUE_\($0)"] }), Set(GitWorktree.pushPrefixes))
+        XCTAssertTrue((0..<6).allSatisfy { env["GIT_CONFIG_KEY_\($0)"] == "url.ironpet-no-push://.pushInsteadOf" })
         try GitFixture.sh(["git", "remote", "add", "later", "git@example.invalid:me/app.git"], in: repo)
         for target in ["later", "https://example.invalid/me/app.git", "http://example.invalid/app.git",
-                       "ssh://git@example.invalid/me/app.git", "git://example.invalid/app.git"] {
+                       "ssh://git@example.invalid/me/app.git", "git://example.invalid/app.git", "file:///tmp/ironpet-none.git"] {
             let result = await git.run(["push", target, "main"], in: repo, environment: env, timeout: 20)
             XCTAssertNotEqual(result.code, 0, target)
             XCTAssertTrue(result.stderr.contains("ironpet-no-push"), "\(target): \(result.stderr)")
         }
         let listed = GitWorktree.pushBlockEnvironment(remotes: ["origin"])
-        XCTAssertEqual(listed["GIT_CONFIG_COUNT"], "6")
+        XCTAssertEqual(listed["GIT_CONFIG_COUNT"], "7")
         XCTAssertEqual(listed["GIT_CONFIG_KEY_0"], "remote.origin.pushurl")
+    }
+
+    func testRemotesWithTheirOwnPushURLAreFound() async throws {
+        let none = await git.remotesWithOwnPushURL(repo)
+        XCTAssertEqual(none, [])
+        try GitFixture.sh(["git", "remote", "add", "origin", "https://example.com/origin.git"], in: repo)
+        try GitFixture.sh(["git", "remote", "add", "fork", "https://example.com/fork.git"], in: repo)
+        XCTAssertEqual(git.remotesNow(repo).sorted(), ["fork", "origin"])
+        try GitFixture.sh(["git", "config", "remote.fork.pushurl", "git@example.com:me/fork.git"], in: repo)
+        try GitFixture.sh(["git", "config", "--add", "remote.fork.pushurl", "git@example.com:me/mirror.git"], in: repo)
+        let found = await git.remotesWithOwnPushURL(repo)
+        XCTAssertEqual(found, ["fork"])
+        XCTAssertEqual(GitWorktree.pushURLRemotes("remote.a.pushurl x\nremote.my.dotted.pushurl y\nremote.a.pushurl z\nbranch.main.remote a"),
+                       ["a", "my.dotted"])
+    }
+
+    func testAFailedStartIsUndoneWithoutLosingWork() async throws {
+        let (clean, cleanBranch, base) = try await addWorktree("clean")
+        await git.discardFailedStart(repo: repo, folder: clean, branch: cleanBranch, base: base)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: clean.path))
+        let cleanExists = await git.branchExists(repo, cleanBranch)
+        XCTAssertFalse(cleanExists)
+        let (dirty, dirtyBranch, _) = try await addWorktree("dirty")
+        try "x".write(to: dirty.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        await git.discardFailedStart(repo: repo, folder: dirty, branch: dirtyBranch, base: base)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dirty.appendingPathComponent("new.txt").path), "uncommitted work stays")
+        let missing = dir.appendingPathComponent("never-made")
+        await git.discardFailedStart(repo: repo, folder: missing, branch: "ironpet/never", base: base)
     }
 
     func testPushURLFollowsAPushurlSetting() async throws {

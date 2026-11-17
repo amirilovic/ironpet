@@ -360,6 +360,53 @@ final class TaskRunnerTests: XCTestCase {
         XCTAssertEqual(logged().filter { $0["asked"] as? String == "touch y" }.map { $0["allowed"] as? Bool }, [true, true])
     }
 
+    func testRetryRefusesWhileTheRunsThreadIsOpenInTheChat() async throws {
+        let id = try newTask("BROKEN first")
+        await start(id)
+        await wait("failure") { failed == [id] }
+        let session = try XCTUnwrap(runner.run(for: id)?.session)
+        runner.threadOpenInChat = { $0 == session }
+        let refused = await start(id)
+        XCTAssertEqual(refused, TaskRunner.closeChatFirst)
+        XCTAssertEqual(runner.run(for: id)?.state, .failed)
+        XCTAssertEqual(runner.liveCount, 0)
+        XCTAssertEqual(logged().filter { $0["cwd"] != nil }.count, 1, "no second agent turn")
+        runner.threadOpenInChat = { _ in false }
+        let started = await start(id)
+        XCTAssertNil(started)
+        await wait("second failure") { failed == [id, id] }
+    }
+
+    func testAStartThatFailsAfterPickingItsSlotLeavesNoBranch() async throws {
+        let id = try newTask("COMMIT nowhere")
+        try "not a folder".write(to: dir.appendingPathComponent("blocked"), atomically: true, encoding: .utf8)
+        runner.worktreeRoot = dir.appendingPathComponent("blocked")
+        let error = await start(id)
+        XCTAssertNotNil(error)
+        XCTAssertNil(runner.run(for: id))
+        XCTAssertFalse(runner.starting.contains(id))
+        XCTAssertThrowsError(try git("show-ref", "--verify", "refs/heads/ironpet/\(id)"))
+        XCTAssertEqual(try git("worktree", "list").split(separator: "\n").count, 1)
+    }
+
+    func testRemotesWithTheirOwnPushURLAreReported() async throws {
+        _ = try git("config", "remote.origin.pushurl", "git@github.com:you/app.git")
+        let target = await runner.target(of: repo.appendingPathComponent("."))
+        XCTAssertEqual(target?.repo.resolvingSymlinksInPath(), repo.resolvingSymlinksInPath())
+        XCTAssertEqual(target?.branch, "main")
+        XCTAssertEqual(target?.unblockedRemotes, ["origin"])
+        let id = try newTask("COMMIT with a pushurl")
+        await start(id)
+        XCTAssertEqual(runner.run(for: id)?.unblockedRemotes, ["origin"])
+        await wait("finish") { finished == [id] }
+        let plain = dir.appendingPathComponent("plain")
+        try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
+        let none = await runner.target(of: plain)
+        XCTAssertNil(none)
+        XCTAssertEqual(TaskStartPopover.unblockedText(["origin"]),
+                       "origin has its own push URL, which the extra push block does not cover. Commands still ask before they run, Auto or not.")
+    }
+
     func testLaunchMarksRunsThatWereLiveAsInterrupted() async throws {
         let id = try newTask("Was running")
         var run = TaskRunStoreTests.sampleRun(id, state: .running)
@@ -404,7 +451,8 @@ final class TaskRunnerTests: XCTestCase {
         let lines = TaskRunUninstall.run(database: file)
         XCTAssertFalse(FileManager.default.fileExists(atPath: cleanRun.worktree.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: dirtyRun.worktree.path))
-        XCTAssertTrue(lines.contains("Kept \(dirtyRun.worktree.path): it has uncommitted changes"))
+        let kept = try XCTUnwrap(lines.first { $0.hasPrefix("Kept \(dirtyRun.worktree.path): ") }, "\(lines)")
+        XCTAssertTrue(kept.contains("untracked") || kept.contains("modified"), "git's own reason: \(kept)")
         XCTAssertTrue(lines.contains("Kept the branch \(cleanRun.branch) in \(cleanRun.repo.path): it has the agent's commits"))
     }
 

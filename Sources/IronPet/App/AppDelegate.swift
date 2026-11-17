@@ -1062,6 +1062,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // A live run's thread opens in Tasks, where its state and approval are, not as a second agent in the chat.
         chat.threadInUse = { [weak runner] id in runner?.isLive(thread: id) ?? false }
+        runner.threadOpenInChat = { [weak self] id in self?.chat.threadID == id }
         chat.onThreadInUse = { [weak self] _ in self?.showTasks() }
         let openThread = pet.onOpenThread
         pet.onOpenThread = { [weak self, weak runner] id in
