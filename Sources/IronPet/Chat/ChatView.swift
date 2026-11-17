@@ -35,6 +35,10 @@ struct ChatView: View {
     @State private var resizeWasPinned = true
     @State private var resizeAnchor: UUID?
     @State private var resizeEnd: DispatchWorkItem?
+    @State private var visibleRows = VisibleRows()
+    @State private var blankGuard = BlankViewportGuard()
+    @State private var blankCheck: DispatchWorkItem?
+    @State private var lastViewportHeight: CGFloat = 0
     /// How many of the newest items the transcript renders. A resumed session can hold thousands.
     @State private var shownItems = TranscriptGroup.pageSize
     /// Long user messages the reader expanded. View state only, not saved with the thread.
@@ -67,6 +71,8 @@ struct ChatView: View {
     /// The row SwiftUI reports at the top of the transcript. Tests compare it before and after content arrives, because
     /// the scroll offset in points moves when SwiftUI re-estimates the heights of rows that are not on screen.
     nonisolated(unsafe) static var topRowForTesting: UUID?
+    /// How many times the blank viewport repair ran. Tests assert it stays 0 while rows are visible.
+    nonisolated(unsafe) static var blankRepairsForTesting = 0
 
     var body: some View {
         if settingsOnly { settingsPopover } else { chat }
@@ -320,17 +326,18 @@ struct ChatView: View {
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity)
+                            .trackVisible("earlier", in: visibleRows) { checkBlank(proxy) }
                     }
                     let highlights = findHighlights
                     ForEach(groupedItems, id: \.id) { group in
-                        groupView(group, highlights: highlights).id(group.id)
+                        groupView(group, highlights: highlights).id(group.id).trackVisible(group.id, in: visibleRows) { checkBlank(proxy) }
                     }
                     if session.isRunning, session.approvals.isEmpty {
-                        TypingIndicator(started: session.runStartedAt).id("typing")
+                        TypingIndicator(started: session.runStartedAt).id("typing").trackVisible("typing", in: visibleRows) { checkBlank(proxy) }
                     }
-                    ForEach(session.approvals) { approval in approvalCard(approval).id(approval.id) }
-                    if let agent = session.runtimeOffer { runtimeCard(agent).id("runtime") }
-                    if !session.signInOptions.isEmpty { signInCard.id("signin") }
+                    ForEach(session.approvals) { approval in approvalCard(approval).id(approval.id).trackVisible(approval.id, in: visibleRows) { checkBlank(proxy) } }
+                    if let agent = session.runtimeOffer { runtimeCard(agent).id("runtime").trackVisible("runtime", in: visibleRows) { checkBlank(proxy) } }
+                    if !session.signInOptions.isEmpty { signInCard.id("signin").trackVisible("signin", in: visibleRows) { checkBlank(proxy) } }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .scrollTargetLayout()
@@ -347,6 +354,8 @@ struct ChatView: View {
             .frame(maxHeight: .infinity)
             .softScrollEdges()
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width in widthChanged(width, proxy: proxy) }
+            .onAppear { visibleRows.attached = true }
+            .onDisappear { visibleRows.attached = false; blankCheck?.cancel() }
             .overlay(alignment: .bottom) {
                 if follow.newBelow {
                     Button {
@@ -404,12 +413,49 @@ struct ChatView: View {
     private func scrollMetricsChanged(_ metrics: ScrollMetrics, userDriven: Bool, proxy: ScrollViewProxy) {
         let grew = metrics.contentHeight != lastContentHeight
         lastContentHeight = metrics.contentHeight
+        lastViewportHeight = metrics.viewportHeight
+        checkBlank(proxy)
         follow.geometryChanged(distanceFromBottom: metrics.distanceFromBottom, userDriven: userDriven)
         // Rows below the viewport only have estimated heights, so the end moves as they are measured.
         lastGap = metrics.distanceFromBottom
         if follow.pinned, topRowID != nil { topRowID = nil }
         guard follow.pinned, !userDriven, !resizing, grew, metrics.distanceFromBottom > TranscriptFollow.bottomTolerance else { return }
         settleAtEnd(proxy, attempt: 0)
+    }
+
+    /// Re-anchors once when the viewport shows no row although the content is taller than it. Waits for layout to settle
+    /// first, because rows report their visibility a pass after the offset changes.
+    private func checkBlank(_ proxy: ScrollViewProxy) {
+        blankCheck?.cancel()
+        if visibleRows.hasVisible { blankGuard.rowsVisible(); return }
+        scheduleBlankCheck(proxy, confirming: false, after: 0.15)
+    }
+
+    /// A first look finds the viewport empty; a second one 0.4 s later must find it still empty, or it was only the
+    /// initial layout or a scroll in flight, when rows have not yet reported their visibility.
+    private func scheduleBlankCheck(_ proxy: ScrollViewProxy, confirming: Bool, after delay: TimeInterval) {
+        let work = DispatchWorkItem {
+            if visibleRows.hasVisible { blankGuard.rowsVisible(); return }
+            guard visibleRows.attached, !resizing, !session.items.isEmpty,
+                  lastViewportHeight > 0, lastContentHeight > lastViewportHeight else { return }
+            guard confirming else {
+                scheduleBlankCheck(proxy, confirming: true, after: 0.4)
+                return
+            }
+            guard blankGuard.shouldReanchor(visibleRows: 0, hasRows: true, contentHeight: lastContentHeight,
+                                            viewportHeight: lastViewportHeight, distanceFromBottom: lastGap) else { return }
+            ChatView.blankRepairsForTesting += 1
+            NSLog("IronPet: chat transcript viewport was blank (content %.0f, viewport %.0f, pinned %d); re-anchoring",
+                  lastContentHeight, lastViewportHeight, follow.pinned ? 1 : 0)
+            if !follow.pinned, let top = topRowID {
+                scrollActivity.noteProgrammaticScroll()
+                proxy.scrollTo(top, anchor: .top)
+            } else {
+                scrollToEnd(proxy)
+            }
+        }
+        blankCheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     /// Scrolling realizes rows, which changes the estimated height, which would scroll again. So this jumps once after
@@ -1775,5 +1821,32 @@ private struct SlashPopup: View {
         .padding(6)
         .chromeGlass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+    }
+}
+
+/// The rows that currently intersect the transcript viewport. A class so that changes do not invalidate the view.
+final class VisibleRows {
+    private var ids = Set<AnyHashable>()
+    /// False once the transcript has left the screen; closing the chat removes every row and is not a blank viewport.
+    var attached = false
+    var hasVisible: Bool { !ids.isEmpty }
+    var count: Int { ids.count }
+    func set(_ id: AnyHashable, visible: Bool) { if visible { ids.insert(id) } else { ids.remove(id) } }
+}
+
+private extension View {
+    /// Reports whether this row intersects the scroll view's viewport. `emptied` runs when the last visible row leaves.
+    func trackVisible(_ id: AnyHashable, in rows: VisibleRows, emptied: @escaping () -> Void) -> some View {
+        onGeometryChange(for: Bool.self, of: { proxy in
+            guard let viewport = proxy.bounds(of: .scrollView) else { return false }
+            return proxy.frame(in: .scrollView).intersects(CGRect(origin: .zero, size: viewport.size))
+        }) { visible in
+            rows.set(id, visible: visible)
+            if !rows.hasVisible { emptied() }
+        }
+        .onDisappear {
+            rows.set(id, visible: false)
+            if !rows.hasVisible { emptied() }
+        }
     }
 }
