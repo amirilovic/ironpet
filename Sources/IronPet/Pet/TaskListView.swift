@@ -8,10 +8,13 @@ struct TaskListView: View {
     let onTellGhost: (String) -> Void
     let onOpenThread: (String) -> Void
     let onOpenSession: (String) -> Void
+    /// A task to scroll to and highlight, set by the Today page. Cleared once shown.
+    var focus: Binding<String?> = .constant(nil)
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showDone = false
     @State private var message = ""
+    @State private var highlighted: String?
 
     enum Content: Equatable { case unavailable, empty, list }
 
@@ -30,6 +33,7 @@ struct TaskListView: View {
                 EmptyState(symbol: "checklist", title: "No tasks yet",
                            detail: "Ask \(petName) to keep track of something, or finish a meeting.")
             } else {
+                ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
                         suggestions
@@ -49,6 +53,9 @@ struct TaskListView: View {
                     .padding(6)
                 }
                 .frame(maxHeight: .infinity)
+                .onAppear { reveal(focus.wrappedValue, proxy) }
+                .onChange(of: focus.wrappedValue) { reveal(focus.wrappedValue, proxy) }
+                }
             }
             Divider()
             tellGhost
@@ -113,6 +120,24 @@ struct TaskListView: View {
                 onDone: { _ = try? tasks.close(task.id, by: "user") },
                 onDelete: { try? tasks.delete(task.id, by: "user") },
                 onOpen: open(_:))
+            .background {
+                if highlighted == task.id { RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.18)) }
+            }
+            .id(task.id)
+    }
+
+    /// Scrolls to the task a Today row opened and highlights it for a moment.
+    private func reveal(_ id: String?, _ proxy: ScrollViewProxy) {
+        guard let id, let task = tasks.task(id) else { return }
+        focus.wrappedValue = nil
+        if task.status == .done { showDone = true }
+        highlighted = id
+        DispatchQueue.main.async {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            if highlighted == id { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.3)) { highlighted = nil } }
+        }
     }
 
     private var tellGhost: some View {

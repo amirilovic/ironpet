@@ -7,6 +7,8 @@ final class AutomationTestClock {
     var idle: TimeInterval = 0
     var working = false
     var busy = false
+    /// UTC unless a test needs a zone with clock changes. Set it before `makeRig`.
+    var calendar = AutomationTestClock.calendar
 
     /// Monday 2026-11-16 08:00 UTC.
     init(_ date: Date = AutomationTestClock.monday8) { now = date }
@@ -26,7 +28,7 @@ final class AutomationTestClock {
 
     var environment: AutomationEngine.Environment {
         AutomationEngine.Environment(now: { self.now }, idleSeconds: { self.idle }, isAgentWorking: { self.working },
-                                     isBusy: { self.busy }, calendar: Self.calendar)
+                                     isBusy: { self.busy }, calendar: calendar)
     }
 }
 
@@ -1586,7 +1588,7 @@ final class AutomationLogTests: AutomationTestCase {
         XCTAssertEqual(db?.schemaVersion, 3)
         db = nil
         let upgraded = try Database(path: file, migrations: AutomationState.migrations)
-        XCTAssertEqual(upgraded.schemaVersion, 5)
+        XCTAssertEqual(upgraded.schemaVersion, 410)
         let state = AutomationState(database: upgraded)
         state.addLog("a", date: Date(), duration: 0, outcome: "ok", summary: "x", detail: "")
         XCTAssertEqual(state.logs().count, 1)
@@ -1815,7 +1817,7 @@ final class AlertRestoreTests: XCTestCase {
         old = nil
         let upgraded = try Database(path: file, migrations: AutomationState.migrations)
         let state = AutomationState(database: upgraded)
-        XCTAssertEqual(upgraded.schemaVersion, 5)
+        XCTAssertEqual(upgraded.schemaVersion, 410)
         XCTAssertTrue(state.openAlerts().isEmpty)
         XCTAssertEqual(state.alertHash("ci", "1"), "", "the next run re-adds it, without a bubble")
     }

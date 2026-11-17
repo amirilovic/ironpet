@@ -62,6 +62,12 @@ final class TestControl {
     /// The welcome back summary, and the stand-in for the system idle time it samples (nil gives the real one back).
     var welcomeBack: WelcomeBack?
     var setIdleSeconds: ((TimeInterval?) -> Void)?
+    /// Builds the brief or the recap from the stores, as a `digest` automation would.
+    var buildBrief: ((Brief.Kind) -> Brief?)?
+    /// The ironpet window: visible, section, whether Today is listed and which page it shows.
+    var windowState: (() -> [String: Any])?
+    /// Presses a Today row, as a click would.
+    var openBrief: ((Brief.Target) -> Void)?
 
     func recordProposal(_ proposal: CaptureProposal) {
         proposals.append(proposal)
@@ -284,6 +290,24 @@ final class TestControl {
             return welcomeBackSnapshot()
         case ("GET", "/test/welcome-back"):
             return welcomeBackSnapshot()
+        case ("POST", "/test/digest"):
+            guard let kind = Brief.Kind(rawValue: body["kind"] as? String ?? "brief"), let brief = buildBrief?(kind) else {
+                return Self.encode(["ok": false, "error": "kind must be brief or recap"])
+            }
+            return Self.encode(Self.json(brief))
+        case ("GET", "/test/window"):
+            return Self.encode(windowState?() ?? [:])
+        case ("POST", "/test/today/open"):
+            // The row with this id on the brief or recap page.
+            let kind = Brief.Kind(rawValue: body["kind"] as? String ?? "brief") ?? .brief
+            let id = body["item"] as? String ?? ""
+            guard let item = buildBrief?(kind)?.sections.flatMap(\.items).first(where: { $0.id == id }) else {
+                return Self.encode(["ok": false, "error": "no item \(id)"])
+            }
+            openBrief?(item.target)
+            var result = windowState?() ?? [:]
+            result["ok"] = true
+            return Self.encode(result)
         case ("GET", "/test/tasks"):
             return tasksSnapshot()
         case ("POST", "/test/tasks/reset"):
@@ -491,6 +515,24 @@ final class TestControl {
             "suggestions": store.suggestions.map(Self.json),
             "bubbles": actions.bubbles(),
         ])
+    }
+
+    static func json(_ brief: Brief) -> [String: Any] {
+        func target(_ t: Brief.Target) -> [String: Any] {
+            switch t {
+            case .task(let id): return ["type": "task", "id": id]
+            case .session(let id, let workspace, let bundleID, let iterm):
+                return ["type": "session", "id": id, "workspace": workspace ?? "", "bundleID": bundleID ?? "", "iterm": iterm ?? ""]
+            case .alert(let id, let url): return ["type": "alert", "id": id, "url": url?.absoluteString ?? ""]
+            case .meeting(let id): return ["type": "meeting", "id": id]
+            }
+        }
+        return ["ok": true, "kind": brief.kind.rawValue, "empty": brief.isEmpty, "lines": brief.lines,
+                "sections": brief.sections.map { section in
+                    ["id": section.id, "title": section.title, "items": section.items.map { item in
+                        ["id": item.id, "title": item.title, "subtitle": item.subtitle ?? "", "target": target(item.target)] as [String: Any]
+                    }] as [String: Any]
+                }]
     }
 
     private static func json(_ suggestion: TaskSuggestion) -> [String: Any] {

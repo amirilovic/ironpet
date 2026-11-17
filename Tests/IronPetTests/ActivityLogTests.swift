@@ -25,7 +25,7 @@ final class ActivityLogTests: XCTestCase {
         let before = AppMigrations.all.filter { $0.version < 400 }
         XCTAssertEqual(try Database(path: file, migrations: before).schemaVersion, before.map(\.version).max())
         let database = try Database(path: file, migrations: AppMigrations.all)
-        XCTAssertEqual(database.schemaVersion, 400)
+        XCTAssertEqual(database.schemaVersion, AppMigrations.all.map(\.version).max())
         let log = ActivityLog(database: database)
         log.record(ActivityEvent(at: Date(), kind: .sessionDone, ref: "claude:1", title: "demo-app"))
         XCTAssertEqual(log.events(in: DateInterval(start: Date().addingTimeInterval(-60), duration: 120)).count, 1)

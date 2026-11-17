@@ -59,7 +59,9 @@ final class BubbleStore: ObservableObject {
         var next = bubbles.filter { $0.id != bubble.id }
         next.append(bubble)
         while next.count > Self.limit {
-            next.remove(at: next.firstIndex { $0.expires != nil } ?? next.firstIndex { $0.content == nil } ?? 0)
+            // The brief and recap stay until midnight, so they are usually the oldest with an expiry; pass over them first.
+            let shortLived = next.indices.dropLast().first { next[$0].expires != nil && !next[$0].id.hasPrefix(WelcomeBack.digestPrefix) }
+            next.remove(at: shortLived ?? next.firstIndex { $0.expires != nil } ?? next.firstIndex { $0.content == nil } ?? 0)
         }
         bubbles = next
     }

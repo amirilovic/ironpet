@@ -8,12 +8,15 @@ struct TranscriptsView: View {
     /// The folder of the meeting being recorded or summarized; it cannot be deleted.
     let activeFolder: () -> URL?
     let onAsk: ([URL]) -> Void
+    /// A meeting to select, set by the Today page. Cleared once selected.
+    let focus: Binding<String?>
 
-    init(library: MeetingLibrary, activeFolder: @escaping () -> URL?, onAsk: @escaping ([URL]) -> Void) {
+    init(library: MeetingLibrary, activeFolder: @escaping () -> URL?, onAsk: @escaping ([URL]) -> Void, focus: Binding<String?> = .constant(nil)) {
         self.library = library
         self.regenerator = library.regenerator
         self.activeFolder = activeFolder
         self.onAsk = onAsk
+        self.focus = focus
     }
 
     @State private var selection: String?
@@ -48,8 +51,10 @@ struct TranscriptsView: View {
         .onAppear {
             library.reload()
             if selection == nil || !library.meetings.contains(where: { $0.id == selection }) { selection = library.meetings.first?.id }
+            selectFocus()
             load()
         }
+        .onChange(of: focus.wrappedValue) { selectFocus() }
         .onChange(of: selection) { load() }
         .onChange(of: page) { load() }
         // A run changed files on disk: the list previews and the open text may be new.
@@ -57,6 +62,14 @@ struct TranscriptsView: View {
             library.reload()
             load()
         }
+    }
+
+    private func selectFocus() {
+        guard let id = focus.wrappedValue else { return }
+        focus.wrappedValue = nil
+        guard library.meetings.contains(where: { $0.id == id }) else { return }
+        page = .summary
+        selection = id
     }
 
     private var selected: MeetingRecord? { library.meetings.first { $0.id == selection } }

@@ -304,6 +304,41 @@ final class Announcer {
         return event.extra[ActivityEvent.AlertKey.label].map { "\($0): \(about)" } ?? about
     }
 
+    /// The morning brief or the day's recap from a `digest` automation. Open shows it on the Today page.
+    func brief(_ brief: Brief, automation: Automation, open: @escaping () -> Void) {
+        let bubble = Self.briefBubble(brief, automation: automation, now: Date(), open: open)
+        bubbles.show(bubble)
+        guard !brief.isEmpty else { return }
+        chime()
+        if alsoSystemNotifications || automation.presentation.notification == true {
+            notifier.announceAutomation(AutomationNotice(id: bubble.id, symbol: bubble.symbol, title: bubble.title, subtitle: bubble.subtitle,
+                                                         body: bubble.body, automationIDs: [automation.id]))
+        }
+    }
+
+    static func briefID(_ kind: Brief.Kind) -> String { "digest:\(kind.rawValue)" }
+
+    /// Stays until the end of the day, since it comes once a day. An empty one, which only Run now shows, goes in 15 seconds.
+    static func briefBubble(_ brief: Brief, automation: Automation, now: Date, calendar: Calendar = .current,
+                            open: @escaping () -> Void) -> Bubble {
+        var day = Date.FormatStyle.dateTime.weekday(.wide).day().month(.wide)
+        day.calendar = calendar
+        day.timeZone = calendar.timeZone
+        let expires: Date?
+        if let seconds = automation.presentation.expiresSeconds {
+            expires = now.addingTimeInterval(seconds)
+        } else if brief.isEmpty {
+            expires = now.addingTimeInterval(15)
+        } else {
+            expires = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))
+        }
+        return Bubble(id: briefID(brief.kind), symbol: automation.presentation.symbol ?? brief.kind.symbol,
+                      tint: brief.kind == .brief ? .orange : .indigo,
+                      title: automation.action.title ?? brief.kind.title, subtitle: (brief.kind == .recap ? brief.window.start : now).formatted(day),
+                      body: brief.isEmpty ? "Nothing to report" : brief.lines.prefix(4).joined(separator: "\n"),
+                      actions: [.init(title: "Open", style: .primary, run: open)], onTap: open, expires: expires)
+    }
+
     /// Small talk from the Actions menu.
     func say(_ text: String) {
         bubbles.show(Bubble(id: "say", symbol: "pawprint.fill", tint: .accentColor, title: ConfigStore.shared.config.pet.name, body: text,
