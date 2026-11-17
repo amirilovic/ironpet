@@ -34,13 +34,21 @@ final class AutomationScriptTests: XCTestCase {
         XCTAssertTrue(second.state.contains("\"runs\":2"), second.state)
     }
 
-    func testOnlyBubbleAlertAndPromptAreActions() async {
+    func testSuggestTaskComesBackAsAnAction() async throws {
+        let out = try await run("""
+            function poll() { return { actions: [{ type: "suggest_task", id: "m1", title: "Reply to Sam", due: "2026-11-20", url: "https://x/1" }] }; }
+            """)
+        XCTAssertEqual(out.actions.first?["type"]?.value as? String, "suggest_task")
+        XCTAssertEqual(out.actions.first?["title"]?.value as? String, "Reply to Sam")
+    }
+
+    func testOnlyBubbleAlertPromptAndSuggestTaskAreActions() async {
         for bad in ["{type: 'shell', command: 'ls'}", "{type: 'dismiss', id: 1}", "{title: 'no type'}", "'text'"] {
             do {
                 _ = try await run("function poll() { return { actions: [\(bad)] }; }")
                 XCTFail("\(bad) should be refused")
             } catch {
-                XCTAssertTrue(error.localizedDescription.contains("needs a type of bubble, alert, prompt"), error.localizedDescription)
+                XCTAssertTrue(error.localizedDescription.contains("needs a type of bubble, alert, prompt, suggest_task"), error.localizedDescription)
             }
         }
     }

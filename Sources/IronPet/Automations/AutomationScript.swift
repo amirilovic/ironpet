@@ -18,8 +18,8 @@ import QuickJS
 /// - A memory limit and an interrupt handler stop a script that allocates too much or loops forever.
 /// - `sh` is synchronous, counts against a call limit, and run with a timeout that cannot pass the time
 ///   the script has left. Its output is capped. It runs through `HostIO`, so tests replace it.
-/// - The script cannot cause a side effect by itself. It returns `actions` (`bubble`, `alert` or `prompt`), and the engine
-///   carries them out. A script an agent wrote needs approval like a shell command, and that covers what it can return.
+/// - The script cannot cause a side effect by itself. It returns `actions` (`bubble`, `alert`, `prompt` or `suggest_task`),
+///   and the engine carries them out. A `suggest_task` only ever becomes a suggestion the user adds or skips. A script an agent wrote needs approval like a shell command, and that covers what it can return.
 /// - State and results are size limited.
 enum AutomationScript {
     static let memoryLimit = 32 * 1024 * 1024
@@ -38,12 +38,12 @@ enum AutomationScript {
     struct Output: Equatable {
         /// The state to pass in next time, as JSON text.
         var state: String
-        /// What to do now: `bubble`, `alert` and `prompt` actions, in order.
+        /// What to do now: `bubble`, `alert`, `prompt` and `suggest_task` actions, in order.
         var actions: [[String: JSONBox]]
         var logs: [String]
     }
 
-    static let actionTypes = ["bubble", "alert", "prompt"]
+    static let actionTypes = ["bubble", "alert", "prompt", "suggest_task"]
 
     /// A JSON object the script returned, compared by its text so `Output` stays `Equatable`.
     struct JSONBox: Equatable {

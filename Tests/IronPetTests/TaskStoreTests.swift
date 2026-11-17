@@ -363,6 +363,168 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertTrue(store.tasks.allSatisfy { $0.source == .meeting })
     }
 
+    // MARK: Suggestions from automations
+
+    private func draft(_ key: String, _ title: String, url: URL? = nil) -> TaskSuggestion.Draft {
+        TaskSuggestion.Draft(key: key, title: title, url: url)
+    }
+
+    func testDraftCleansAndClampsWatcherText() throws {
+        let d = try TaskSuggestion.Draft(action: [
+            "type": "suggest_task", "id": 42, "title": "  Reply\u{0007} to\n\tSam\u{202E}gnp.exe  ",
+            "notes": "Line one\r\nLine two\u{0000}" + String(repeating: "x", count: 3000),
+            "due": "2026-11-20", "url": "https://mail.example.com/m/1",
+        ])
+        XCTAssertEqual(d.key, "42")
+        XCTAssertEqual(d.title, "Reply to Samgnp.exe")
+        XCTAssertTrue(d.notes.hasPrefix("Line one \nLine two" + "xxx"), d.notes)
+        XCTAssertEqual(d.notes.count, TaskSuggestion.Draft.maxNotes)
+        XCTAssertEqual(d.due, "2026-11-20")
+        XCTAssertEqual(d.url?.absoluteString, "https://mail.example.com/m/1")
+
+        let long = try TaskSuggestion.Draft(action: ["id": "a", "title": String(repeating: "t", count: 500),
+                                                     "notes": String(repeating: "é", count: 3000), "due": "next Friday",
+                                                     "url": "javascript:alert(1)"])
+        XCTAssertEqual(long.title.count, TaskSuggestion.Draft.maxTitle)
+        XCTAssertLessThanOrEqual(long.notes.utf8.count, TaskValidator.maxNotes)
+        XCTAssertNil(long.due, "only yyyy-MM-dd")
+        XCTAssertNil(long.url, "only http and https")
+        XCTAssertNil(try TaskSuggestion.Draft(action: ["id": "b", "title": "x", "url": "file:///etc/passwd", "due": "2026-11-20T10:00:00Z"]).url)
+
+        XCTAssertThrowsError(try TaskSuggestion.Draft(action: ["title": "no id"]))
+        XCTAssertThrowsError(try TaskSuggestion.Draft(action: ["id": "c", "title": " \u{0001}\n "]))
+    }
+
+    func testAutomationSuggestionsAreNotRepeatedAfterSkipOrAccept() throws {
+        try store.create(title: "Pay the invoice", source: .chat, by: "user")
+        let added = store.suggest([draft("m1", "Reply to Sam"), draft("m1", "Reply to Sam again"), draft("m2", "Book flights"),
+                                   draft("m3", "pay the INVOICE")], automation: "gmail", name: "Gmail\nwatcher")
+        XCTAssertEqual(added.map(\.title), ["Reply to Sam", "Book flights"], "same key once per call; a title that is a task is left out")
+        XCTAssertEqual(added.first?.origin, .automation(id: "gmail", name: "Gmail watcher"))
+        XCTAssertEqual(added.first?.originLabel, "From Gmail watcher")
+
+        XCTAssertEqual(store.suggest([draft("m1", "Reply to Sam")], automation: "gmail", name: "Gmail"), [], "already waiting")
+        store.skip("reply-to-sam")
+        try store.accept("book-flights")
+        XCTAssertEqual(store.suggest([draft("m1", "Reply to Sam"), draft("m2", "Book flights, renamed")], automation: "gmail", name: "Gmail"), [],
+                       "skipped and accepted keys stay remembered")
+        XCTAssertEqual(makeStore().suggest([draft("m1", "Reply to Sam")], automation: "gmail", name: "Gmail"), [], "also after a restart")
+        XCTAssertEqual(store.suggest([draft("m1", "Reply to Sam")], automation: "slack", name: "Slack").map(\.title), ["Reply to Sam"],
+                       "keys belong to one automation")
+        XCTAssertEqual(store.suggest([draft("m3", "pay the invoice")], automation: "gmail", name: "Gmail"), [],
+                       "m3 was never stored, and is still a task by title")
+        XCTAssertEqual(store.suggest([draft("m9", "REPLY TO SAM")], automation: "gmail", name: "Gmail"), [], "same-title dedupe")
+    }
+
+    func testAutomationSuggestionsWaitingAreCapped() {
+        let many = (1...60).map { draft("k\($0)", "Item \($0)") }
+        XCTAssertEqual(store.suggest(many, automation: "w", name: "W").count, TaskStore.maxPendingPerAutomation)
+        XCTAssertEqual(store.suggest([draft("k60", "Item 60")], automation: "w", name: "W"), [], "no room")
+        store.skip("item-1")
+        XCTAssertEqual(store.suggest([draft("k60", "Item 60")], automation: "w", name: "W").map(\.title), ["Item 60"],
+                       "a capped one was not remembered, so it comes when there is room")
+    }
+
+    func testAcceptMakesAnAutomationTaskWithItsLink() throws {
+        let url = URL(string: "https://github.com/acme/app/issues/9")!
+        var d = draft("9", "Triage issue 9", url: url)
+        d.due = "2026-11-20"
+        d.notes = "Opened by a customer"
+        store.suggest([d, draft("10", "No link")], automation: "gh", name: "GitHub")
+        let item = try store.accept("triage-issue-9")
+        XCTAssertEqual(item.source, .automation)
+        XCTAssertEqual(item.status, .backlog)
+        XCTAssertEqual(item.due, day("2026-11-20"))
+        XCTAssertEqual(item.notes, "Opened by a customer")
+        XCTAssertEqual(item.links, [TaskLink(kind: .url, ref: url.absoluteString, label: nil)])
+        XCTAssertEqual(store.history(item.id).first?.by, "user")
+        XCTAssertEqual(try store.accept("no-link").links, [])
+        XCTAssertEqual(TaskSource.automation.symbol, "clock.badge.checkmark")
+    }
+
+    private func temporaryDatabasePath() -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-tasks-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        return dir.appendingPathComponent("ironpet.db")
+    }
+
+    func testMainDatabaseGetsTaskMigrationsAfterCapture() throws {
+        let path = temporaryDatabasePath()
+        do {
+            let old = try Database(path: path, migrations: AppMigrations.all.filter { $0.version <= 302 })
+            XCTAssertEqual(old.schemaVersion, 302)
+            try old.write { db in
+                try db.execute("INSERT INTO task_suggestions(id, title, due, meeting, created) VALUES(?, ?, ?, ?, ?)",
+                               ["book-the-room", "Book the room", "Friday", meeting.path, clock.timeIntervalSince1970])
+                try db.execute("""
+                    INSERT INTO task_items(id, title, notes, status, source, created, updated) VALUES('reply-to-sam', 'Reply to Sam',
+                    'From screen capture items 1', 'backlog', 'capture', ?, ?)
+                    """, [clock.timeIntervalSince1970, clock.timeIntervalSince1970])
+                try db.execute("INSERT INTO capture_ignored(fingerprint, kind, at) VALUES('abc', 'newTask', 0)")
+            }
+        }
+        let migrated = try Database(path: path, migrations: AppMigrations.all)
+        XCTAssertEqual(migrated.schemaVersion, AppMigrations.all.map(\.version).max())
+        let reopened = TaskStore(database: migrated, now: { [unowned self] in clock }, keepDoneDays: { 30 })
+        XCTAssertEqual(reopened.suggestions, [TaskSuggestion(id: "book-the-room", title: "Book the room", due: "Friday",
+                                                             origin: .meeting(meeting), created: clock)])
+        XCTAssertEqual(reopened.task("reply-to-sam")?.source, .capture)
+        XCTAssertEqual(try migrated.read { try $0.rows("SELECT fingerprint FROM capture_ignored") }.first?.first as? String, "abc")
+
+        let added = reopened.suggest([TaskSuggestion.Draft(key: "1", title: "Review PR 12", due: nil)], automation: "prs", name: "PRs")
+        XCTAssertEqual(added.count, 1)
+        let item = try reopened.accept("book-the-room")
+        XCTAssertEqual(item.source, .meeting)
+        XCTAssertEqual(item.notes, "Due (from the meeting): Friday")
+        XCTAssertThrowsError(try migrated.write { db in
+            try db.execute("INSERT INTO task_suggestions(id, title, created) VALUES('x', 'x', 0)")
+        }, "a suggestion has exactly one origin")
+    }
+
+    /// A development build numbered the task migrations 201 to 203. Such a database reaches 302 through capture's migrations
+    /// and then runs the renumbered ones, which must find their changes already there.
+    func testDatabaseFromOldNumberingMigrates() throws {
+        let path = temporaryDatabasePath()
+        do {
+            let old = try Database(path: path, migrations: AppMigrations.all.filter { $0.version <= 200 })
+            try old.write { db in
+                try db.script("""
+                    CREATE TABLE task_suggestions_201(id TEXT PRIMARY KEY, title TEXT NOT NULL, due TEXT, notes TEXT NOT NULL DEFAULT '', url TEXT,
+                                                      meeting TEXT, automation TEXT, automation_name TEXT, created REAL NOT NULL,
+                                                      CHECK ((meeting IS NULL) <> (automation IS NULL))) WITHOUT ROWID;
+                    INSERT INTO task_suggestions_201(id, title, due, meeting, created) SELECT id, title, due, meeting, created FROM task_suggestions;
+                    DROP TABLE task_suggestions;
+                    ALTER TABLE task_suggestions_201 RENAME TO task_suggestions;
+                    CREATE TABLE task_suggestion_keys(automation TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL,
+                                                      PRIMARY KEY(automation, key)) WITHOUT ROWID;
+                    """)
+                try db.execute("""
+                    INSERT INTO task_suggestions(id, title, notes, url, automation, automation_name, created)
+                    VALUES('review-pr-12', 'Review PR 12', 'From the watcher', 'https://example.com/pr/12', 'prs', 'PRs', ?)
+                    """, [clock.timeIntervalSince1970])
+                try db.execute("INSERT INTO task_suggestion_keys(automation, key, at) VALUES('prs', '12', ?)", [clock.timeIntervalSince1970])
+                try db.script("PRAGMA user_version = 203")
+            }
+        }
+        let migrated = try Database(path: path, migrations: AppMigrations.all)
+        XCTAssertEqual(migrated.schemaVersion, AppMigrations.all.map(\.version).max())
+        let reopened = TaskStore(database: migrated, now: { [unowned self] in clock }, keepDoneDays: { 30 })
+        XCTAssertEqual(reopened.suggestions, [TaskSuggestion(id: "review-pr-12", title: "Review PR 12", due: nil, notes: "From the watcher",
+                                                             url: URL(string: "https://example.com/pr/12"),
+                                                             origin: .automation(id: "prs", name: "PRs"), created: clock)])
+        XCTAssertEqual(reopened.suggest([TaskSuggestion.Draft(key: "12", title: "Something else", due: nil)], automation: "prs", name: "PRs"), [],
+                       "the stored key survives")
+    }
+
+    func testTaskMigrationsComeAfterCaptureMigrations() {
+        let versions = AppMigrations.all.map(\.version)
+        XCTAssertEqual(Set(versions).count, versions.count, "no two migrations share a version")
+        let latestCapture = CaptureStore.migrations.map(\.version).max()!
+        let added = TaskStore.migrations.filter { $0.version > 200 }
+        XCTAssertFalse(added.isEmpty)
+        XCTAssertTrue(added.allSatisfy { $0.version > latestCapture }, "a database at capture's version would skip them")
+    }
+
     // MARK: Ordering
 
     func testOrderedAndActiveCount() throws {

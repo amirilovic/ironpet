@@ -393,19 +393,45 @@ final class AutomationService {
     // MARK: Script actions
 
     private static let severities = ["info", "good", "warn", "bad"]
+    static let maxSuggestionsPerRun = 10
 
     /// Carries out what a script returned, in order. A mistake in one action is recorded and the rest still run.
     func perform(_ actions: [[String: Any]], for a: Automation, firstRun: Bool) {
+        var drafts: [TaskSuggestion.Draft] = []
+        var dropped = 0
         for (index, action) in actions.enumerated() {
             let problem: String?
             switch action["type"] as? String {
             case "bubble": problem = scriptBubble(action, a)
             case "alert": problem = scriptAlert(action, a, firstRun: firstRun)
             case "prompt": problem = scriptPrompt(action, a)
-            default: problem = "type must be bubble, alert or prompt"
+            case "suggest_task":
+                do {
+                    let draft = try TaskSuggestion.Draft(action: action)
+                    if drafts.count < Self.maxSuggestionsPerRun { drafts.append(draft) } else { dropped += 1 }
+                    problem = nil
+                } catch {
+                    problem = error.localizedDescription
+                }
+            default: problem = "type must be bubble, alert, prompt or suggest_task"
             }
             if let problem { record(a.id, "failed", "action \(index + 1): \(problem)") }
         }
+        if dropped > 0 { record(a.id, "failed", "at most \(Self.maxSuggestionsPerRun) suggest_task actions per run, \(dropped) left out") }
+        if !drafts.isEmpty { suggestTasks(drafts, a, firstRun: firstRun) }
+    }
+
+    /// Where `suggest_task` actions go: suggestions only, never tasks.
+    var tasks: TaskStore?
+    /// Offers what one run added, in one bubble.
+    var suggested: (_ added: [TaskSuggestion]) -> Void = { _ in }
+
+    /// Watcher text comes from outside, so it only becomes a suggestion the user adds or skips. The first run adds
+    /// them quietly, like alerts.
+    private func suggestTasks(_ drafts: [TaskSuggestion.Draft], _ a: Automation, firstRun: Bool) {
+        guard let tasks else { return record(a.id, "failed", "suggest_task: the task list is not available") }
+        let added = tasks.suggest(drafts, automation: a.id, name: a.name)
+        if !added.isEmpty && !firstRun { suggested(added) }
     }
 
     private func text(_ action: [String: Any], _ key: String) -> String? {

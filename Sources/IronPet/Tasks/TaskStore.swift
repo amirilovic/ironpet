@@ -1,7 +1,8 @@
 import Foundation
 
 /// The task list Ghost keeps, in `ironpet.db`. The agent owns it: it creates, updates and closes tasks through `call`
-/// (MCP tools and the CLI). The UI can only mark a task done, delete it, and add or skip meeting suggestions.
+/// (MCP tools and the CLI). The UI can only mark a task done, delete it, and add or skip suggestions from meetings and
+/// watcher automations.
 /// Every change is a row in `task_events`, so nothing an agent rewrites is lost.
 @MainActor
 final class TaskStore: ObservableObject {
@@ -23,7 +24,35 @@ final class TaskStore: ObservableObject {
             CREATE TABLE task_suggestions(id TEXT PRIMARY KEY, title TEXT NOT NULL, due TEXT, meeting TEXT NOT NULL,
                                           created REAL NOT NULL) WITHOUT ROWID;
             """),
+        // Versions after 300 because they came after screen capture's. A development build numbered them 201 to 203, so a
+        // database may already have these changes: each step checks before it runs.
+        .init(303, "tasks: suggestions from automations") { db in
+            if try !TaskStore.columns(db, "task_suggestions").contains("automation") {
+                try db.script("""
+                    CREATE TABLE task_suggestions_303(id TEXT PRIMARY KEY, title TEXT NOT NULL, due TEXT, notes TEXT NOT NULL DEFAULT '', url TEXT,
+                                                      meeting TEXT, automation TEXT, automation_name TEXT, created REAL NOT NULL,
+                                                      CHECK ((meeting IS NULL) <> (automation IS NULL))) WITHOUT ROWID;
+                    INSERT INTO task_suggestions_303(id, title, due, meeting, created) SELECT id, title, due, meeting, created FROM task_suggestions;
+                    DROP TABLE task_suggestions;
+                    ALTER TABLE task_suggestions_303 RENAME TO task_suggestions;
+                    """)
+            }
+            try db.script("""
+                CREATE TABLE IF NOT EXISTS task_suggestion_keys(automation TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL,
+                                                                PRIMARY KEY(automation, key)) WITHOUT ROWID;
+                """)
+        },
     ]
+
+    /// The column names of `table`, empty when it does not exist.
+    nonisolated static func columns(_ db: Database.Connection, _ table: String) throws -> Set<String> {
+        Set(try db.rows("SELECT name FROM pragma_table_info(?)", [table]).compactMap { $0[0] as? String })
+    }
+
+    /// Suggestions one automation can have waiting. More wait in the watcher until the user adds or skips some.
+    static let maxPendingPerAutomation = 50
+    /// How long an automation's suggested keys are remembered, so a skipped one does not come back.
+    static let keepSuggestedKeysDays = 365
 
     /// Called after any change, with the task's id (nil for suggestions).
     var onChange: ((String?) -> Void)?
@@ -150,30 +179,57 @@ final class TaskStore: ObservableObject {
         onChange?(id)
     }
 
-    // MARK: Meeting suggestions
+    // MARK: Suggestions
 
-    /// Stores action items as suggestions. Items already suggested or already a task with the same title are skipped.
+    /// Stores meeting action items as suggestions. Items already suggested or already a task with the same title are skipped.
     @discardableResult
     func suggest(_ items: [(title: String, due: String?)], meeting: URL) -> [TaskSuggestion] {
+        store(items.map { TaskSuggestion.Draft(key: "", title: $0.title, due: $0.due) }, origin: .meeting(meeting))
+    }
+
+    /// Stores what a watcher automation proposed. Besides the title check, a key this automation suggested before is
+    /// left out, even after it was added or skipped.
+    @discardableResult
+    func suggest(_ drafts: [TaskSuggestion.Draft], automation id: String, name: String) -> [TaskSuggestion] {
+        let seen = suggestedKeys(id)
+        var keys = Set<String>()
+        let fresh = drafts.filter { !seen.contains($0.key) && keys.insert($0.key).inserted }
+        let waiting = suggestions.filter { if case .automation(let other, _) = $0.origin { return other == id } else { return false } }.count
+        let name = TaskSuggestion.Draft.clean(name, limit: 100, newlines: false)
+        return store(fresh, origin: .automation(id: id, name: name.isEmpty ? id : name), limit: Self.maxPendingPerAutomation - waiting)
+    }
+
+    private func store(_ drafts: [TaskSuggestion.Draft], origin: TaskSuggestion.Origin, limit: Int = .max) -> [TaskSuggestion] {
         // Compared by `ActionItems.normalized`, so a regenerated summary that words an item with another case, spacing or
         // closing full stop does not offer it a second time.
         let existing = Set(tasks.map { ActionItems.normalized($0.title) } + suggestions.map { ActionItems.normalized($0.title) })
         let time = now()
-        var added: [TaskSuggestion] = []
+        var added: [(key: String, suggestion: TaskSuggestion)] = []
         var taken = Set(suggestions.map(\.id))
-        for item in items {
-            guard let title = try? TaskValidator.title(item.title), !existing.contains(ActionItems.normalized(title)),
-                  !added.contains(where: { ActionItems.normalized($0.title) == ActionItems.normalized(title) }) else { continue }
+        for draft in drafts where added.count < limit {
+            guard let title = try? TaskValidator.title(draft.title), !existing.contains(ActionItems.normalized(title)),
+                  !added.contains(where: { ActionItems.normalized($0.suggestion.title) == ActionItems.normalized(title) }) else { continue }
             let id = AutomationValidator.slug(title, taken: taken)
             taken.insert(id)
-            added.append(TaskSuggestion(id: id, title: title, due: item.due, meeting: meeting, created: time))
+            added.append((draft.key, TaskSuggestion(id: id, title: title, due: draft.due, notes: draft.notes, url: draft.url,
+                                                    origin: origin, created: time)))
         }
         guard !added.isEmpty else { return [] }
         do {
             try database.write { db in
-                for s in added {
-                    try db.execute("INSERT INTO task_suggestions(id, title, due, meeting, created) VALUES(?, ?, ?, ?, ?)",
-                                   [s.id, s.title, s.due, s.meeting.path, s.created.timeIntervalSince1970])
+                for (key, s) in added {
+                    var meeting: String?, automation: String?, name: String?
+                    switch s.origin {
+                    case .meeting(let folder): meeting = folder.path
+                    case .automation(let id, let n):
+                        (automation, name) = (id, n)
+                        try db.execute("INSERT OR REPLACE INTO task_suggestion_keys(automation, key, at) VALUES(?, ?, ?)",
+                                       [id, key, time.timeIntervalSince1970])
+                    }
+                    try db.execute("""
+                        INSERT INTO task_suggestions(id, title, due, notes, url, meeting, automation, automation_name, created)
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, [s.id, s.title, s.due, s.notes, s.url?.absoluteString, meeting, automation, name, s.created.timeIntervalSince1970])
                 }
             }
         } catch {
@@ -182,17 +238,28 @@ final class TaskStore: ObservableObject {
         }
         reload()
         onChange?(nil)
-        return added
+        return added.map(\.suggestion)
     }
 
-    /// Turns a suggestion into a backlog task linked to its meeting.
+    private func suggestedKeys(_ automation: String) -> Set<String> {
+        Set((try? database.read { db in
+            try db.rows("SELECT key FROM task_suggestion_keys WHERE automation = ?", [automation]).compactMap { $0[0] as? String }
+        }) ?? [])
+    }
+
+    /// Turns a suggestion into a backlog task, linked to its meeting folder or to the url the automation gave.
     @discardableResult
     func accept(_ suggestionID: String) throws -> TaskItem {
         guard let s = suggestions.first(where: { $0.id == suggestionID }) else { throw TaskError(message: "no suggestion \"\(suggestionID)\"") }
         let due = try? TaskValidator.due(s.due)
-        let notes = s.due.map { "Due (from the meeting): \($0)" } ?? ""
-        let item = try create(title: s.title, notes: due == nil ? notes : "", source: .meeting, due: due,
-                              links: [TaskLink(kind: .file, ref: s.meeting.path, label: "Meeting")], by: "user")
+        var notes = s.notes
+        var links: [TaskLink] = []
+        if let folder = s.meeting {
+            links.append(TaskLink(kind: .file, ref: folder.path, label: "Meeting"))
+            if due == nil, let text = s.due { notes = "Due (from the meeting): \(text)" }
+        }
+        if let url = s.url { links.append(TaskLink(kind: .url, ref: url.absoluteString, label: nil)) }
+        let item = try create(title: s.title, notes: notes, source: s.source, due: due, links: links, by: "user")
         removeSuggestion(suggestionID)
         return item
     }
@@ -305,6 +372,8 @@ final class TaskStore: ObservableObject {
                 try db.execute("DELETE FROM task_links WHERE task IN (SELECT id FROM task_items WHERE status = 'done' AND closed < ?)", [cutoff])
                 try db.execute("DELETE FROM task_items WHERE status = 'done' AND closed < ?", [cutoff])
                 try db.execute("DELETE FROM task_events WHERE at < ? AND task NOT IN (SELECT id FROM task_items)", [cutoff])
+                try db.execute("DELETE FROM task_suggestion_keys WHERE at < ?",
+                               [time.addingTimeInterval(-Double(Self.keepSuggestedKeysDays) * 86_400).timeIntervalSince1970])
             }
         } catch {
             NSLog("ironpet: could not prune tasks: \(error.localizedDescription)")
@@ -338,10 +407,20 @@ final class TaskStore: ObservableObject {
                                     created: Date(timeIntervalSince1970: created), updated: Date(timeIntervalSince1970: updated),
                                     closed: (row[8] as? Double).map(Date.init(timeIntervalSince1970:)))
                 }
-                let suggested = try db.rows("SELECT id, title, due, meeting, created FROM task_suggestions ORDER BY created, id").compactMap { row -> TaskSuggestion? in
-                    guard let id = row[0] as? String, let title = row[1] as? String, let meeting = row[3] as? String,
-                          let created = row[4] as? Double else { return nil }
-                    return TaskSuggestion(id: id, title: title, due: row[2] as? String, meeting: URL(fileURLWithPath: meeting),
+                let suggested = try db.rows("""
+                    SELECT id, title, due, notes, url, meeting, automation, automation_name, created FROM task_suggestions ORDER BY created, id
+                    """).compactMap { row -> TaskSuggestion? in
+                    guard let id = row[0] as? String, let title = row[1] as? String, let created = row[8] as? Double else { return nil }
+                    let origin: TaskSuggestion.Origin
+                    if let meeting = row[5] as? String {
+                        origin = .meeting(URL(fileURLWithPath: meeting))
+                    } else if let automation = row[6] as? String {
+                        origin = .automation(id: automation, name: row[7] as? String ?? automation)
+                    } else {
+                        return nil
+                    }
+                    return TaskSuggestion(id: id, title: title, due: row[2] as? String, notes: row[3] as? String ?? "",
+                                          url: (row[4] as? String).flatMap(URL.init(string:)), origin: origin,
                                           created: Date(timeIntervalSince1970: created))
                 }
                 return (items, suggested)

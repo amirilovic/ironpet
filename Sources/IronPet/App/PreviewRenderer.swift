@@ -285,6 +285,10 @@ enum PreviewRenderer {
         clock = Date().addingTimeInterval(-900)
         store.suggest([("Send the design review notes to the team", "Friday")],
                       meeting: URL(fileURLWithPath: "/Users/you/.ironpet/meetings/2026-11-16-1500"))
+        clock = Date().addingTimeInterval(-300)
+        store.suggest([TaskSuggestion.Draft(key: "msg-1", title: "Reply to Sam about the Q4 budget", due: nil,
+                                            url: URL(string: "https://mail.google.com/mail/u/0/#inbox/1"))],
+                      automation: "gmail-watch", name: "Gmail watcher")
         clock = Date()
         return store
     }

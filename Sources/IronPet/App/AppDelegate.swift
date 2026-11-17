@@ -221,6 +221,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         signals.onDismiss = { [state = service.engine.state] id in state.closeAlert(signalID: id) }
         signals.reportIfUnavailable(database)
         service.nudge = { [weak self] moods in self?.pet.nudge(moods, each: moods == [.done] ? 3 : 4) }
+        service.tasks = tasks
+        service.suggested = { [weak self] added in self?.offerSuggestions(added) }
         let workspace = store.paths.workspace
         service.runPrompt = { automation, prompt in await AutomationPrompt.run(automation, prompt: prompt, workspace: workspace) }
         service.hasOpenTasks = { [tasks] in tasks.tasks.contains { $0.status != .done } }
@@ -874,12 +876,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func offerTasks(_ items: [(title: String, due: String?)], meeting: URL) {
         guard config.config.tasks.meetingSuggestions, let tasks = TaskStore.shared, !items.isEmpty else { return }
-        let added = tasks.suggest(items, meeting: meeting)
-        guard !added.isEmpty else { return }
+        offerSuggestions(tasks.suggest(items, meeting: meeting))
+    }
+
+    /// One bubble for suggestions that just arrived. Add all adds the ones it lists that are still waiting.
+    private func offerSuggestions(_ added: [TaskSuggestion]) {
+        guard !added.isEmpty, let tasks = TaskStore.shared else { return }
         announcer.taskSuggestions(added, addAll: { [weak self] in
-            let before = tasks.tasks.count
-            tasks.acceptAll()
-            self?.announcer.tasksAdded(tasks.tasks.count - before)
+            let accepted = added.filter { s in tasks.suggestions.contains(s) && (try? tasks.accept(s.id)) != nil }.count
+            self?.announcer.tasksAdded(accepted)
         }, review: { [weak self] in self?.showTasks() })
     }
 

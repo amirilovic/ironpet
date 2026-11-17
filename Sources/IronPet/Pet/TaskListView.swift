@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// The Tasks section of the ironpet window. The agent owns the list; here the user can only mark a task done, delete it,
-/// and add or skip meeting suggestions. Anything else goes to the chat through "Tell Ghost…".
+/// and add or skip suggestions from meetings and watchers. Anything else goes to the chat through "Tell Ghost…".
 struct TaskListView: View {
     @ObservedObject var tasks: TaskStore
     let onTellGhost: (String) -> Void
@@ -67,7 +67,8 @@ struct TaskListView: View {
             ForEach(tasks.suggestions) { suggestion in
                 SuggestionRow(suggestion: suggestion,
                               onAdd: { _ = try? tasks.accept(suggestion.id) },
-                              onSkip: { tasks.skip(suggestion.id) })
+                              onSkip: { tasks.skip(suggestion.id) },
+                              onOpen: open(_:))
             }
         }
     }
@@ -237,8 +238,13 @@ private struct SuggestionRow: View {
     let suggestion: TaskSuggestion
     let onAdd: () -> Void
     let onSkip: () -> Void
+    let onOpen: (TaskLink) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+
+    private var link: TaskLink? {
+        suggestion.url.map { TaskLink(kind: .url, ref: $0.absoluteString, label: nil) }
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -254,8 +260,8 @@ private struct SuggestionRow: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 5) {
-                    Image(systemName: TaskSource.meeting.symbol).font(.system(size: 10))
-                    Text("Meeting, \(suggestion.created.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))")
+                    Image(systemName: suggestion.source.symbol).font(.system(size: 10)).accessibilityHidden(true)
+                    Text("\(suggestion.originLabel), \(suggestion.created.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))")
                     if let due = suggestion.due {
                         Text("·").accessibilityHidden(true)
                         Label("Due \(due)", systemImage: "calendar").labelStyle(DueLabelStyle())
@@ -275,11 +281,16 @@ private struct SuggestionRow: View {
                 .padding(.top, 3)
             }
             Spacer(minLength: 4)
+            if let link {
+                IconButton(symbol: link.symbol, help: link.help) { onOpen(link) }
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering ? 0.07 : 0)))
+        .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .help(suggestion.notes)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         .accessibilityElement(children: .contain)
     }
