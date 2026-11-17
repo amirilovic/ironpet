@@ -102,6 +102,28 @@ final class AutomationScriptTests: XCTestCase {
         XCTAssertEqual(after?.state, "1", "the next run is fine")
     }
 
+    /// Small allocations leave no room at the limit for the error's backtrace. Before the patch in Vendor/QuickJS-Swift this crashed with SIGSEGV.
+    func testRunningOutOfMemoryOnSmallObjectsFailsWithoutCrashing() async {
+        let scripts = [
+            "function poll() { const a = []; while (true) a.push({ x: 1 }); }",
+            "function poll() { const a = []; while (true) a.push(new Array(1000).fill(1)); }",
+            "function poll() { const a = []; while (true) a.push('x'.repeat(100) + a.length); }",
+            "function poll() { let s = 'x'; while (true) s += s; }",
+        ]
+        for script in scripts {
+            for _ in 0..<5 {
+                do {
+                    _ = try await run(script, deadline: 20)
+                    XCTFail("expected a failure for \(script)")
+                } catch {
+                    XCTAssertFalse(error.localizedDescription.isEmpty)
+                }
+            }
+        }
+        let after = try? await run("function poll() { return { state: 1 }; }")
+        XCTAssertEqual(after?.state, "1", "the next run is fine")
+    }
+
     func testHostCallsAreLimitedPerRun() async {
         do {
             _ = try await run("function poll() { for (let i = 0; i < 20; i++) sh('true'); return {}; }")
