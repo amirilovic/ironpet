@@ -76,7 +76,7 @@ macOS will ask for these permissions as you use the features:
 | Move Ghost | Drag him; he stays where you leave him |
 | Switch section | <kbd>⌘1</kbd> to <kbd>⌘7</kbd> in the ironpet window select the Nth sidebar row (Chat, Agents, Alerts, Tasks, Transcripts, Actions, Automations), and <kbd>⌘8</kbd> Today when it is listed, also while the chat field has focus |
 | Morning brief and recap | Turn on **Morning brief** or **End-of-day recap** in ironpet window → Automations and pick the time there. The bubble's Open, or the Today row, shows each item; click one to open its task, session, alert link or meeting |
-| Collapse the sidebar | <kbd>⌃⌘S</kbd> or the sidebar button next to the traffic lights shrinks the sidebar to a 72 pt rail of section icons (tooltip with name and ⌘N, count badge on the icon) and back; the choice is remembered |
+| Collapse the sidebar | <kbd>⌃⌘S</kbd> shrinks the sidebar to a 78 pt rail of section icons (a label with name and ⌘N after a short hover, count badge on the icon) and back. Dragging the sidebar's edge does the same: narrower than about 117 pt collapses it, and dragging the rail's edge wider expands it. The expanded width (156 to 300 pt) and the collapsed state are remembered |
 | Settings | <kbd>⌘,</kbd>, the Settings row in the ironpet window, right-click Ghost → Settings…, or the Dock icon menu. A separate window with General, Integrations, Voice, Meetings and Usage in a sidebar; it reopens on the last page |
 | Make Ghost do tricks (wave, dance, zoomies, nap, say something…) | Right-click Ghost → Actions |
 

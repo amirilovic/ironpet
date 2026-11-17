@@ -107,6 +107,14 @@ enum PreviewRenderer {
                                                  meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
                     renderWindow(model: model, session: chat, content: view, to: dir,
                                  "real-\(section.rawValue)-\(suffix)\(collapsed ? "-collapsed" : "")", scheme: scheme)
+                    if collapsed, section == .agents {
+                        // The rail label for Tasks, the fourth icon: 56 pt below the top, then 42 pt per icon.
+                        model.hoverRail(RailTip(name: "Tasks", shortcut: "⌘4", frame: CGRect(x: 36, y: 182, width: 40, height: 38)),
+                                        hovering: true)
+                        renderWindow(model: model, session: chat, content: view, to: dir,
+                                     "real-\(section.rawValue)-\(suffix)-collapsed-tip", scheme: scheme)
+                        model.clearRailTip()
+                    }
                 }
             }
         }

@@ -253,9 +253,9 @@ final class IronPetWindowTests: XCTestCase {
         let saved = ConfigStore.shared.config
         defer { ConfigStore.shared.usePreview(saved) }
         let pagePixels = { (rep: NSBitmapImageRep) in
-            // Right of the 190 pt sidebar, the page; pixels are at backing scale.
+            // Right of the 156 pt sidebar, the page; pixels are at backing scale.
             let scale = CGFloat(rep.pixelsWide) / IronPetPanel.minimumSize.width
-            return CGRect(x: 200 * scale, y: 0, width: CGFloat(rep.pixelsWide) - 200 * scale, height: CGFloat(rep.pixelsHigh))
+            return CGRect(x: 170 * scale, y: 0, width: CGFloat(rep.pixelsWide) - 170 * scale, height: CGFloat(rep.pixelsHigh))
         }
         for section in [IronPetSection.agents, .alerts, .tasks, .actions] {
             for scheme in [ColorScheme.light, .dark] {
@@ -417,11 +417,11 @@ final class IronPetWindowTests: XCTestCase {
             let patterned = try XCTUnwrap(renderCollapsed(true, background: "paws", scheme: scheme))
             let scale = CGFloat(plain.pixelsWide) / IronPetPanel.minimumSize.width
             // The blank lower part of the rail, below the icons and above Settings.
-            let rail = CGRect(x: 4 * scale, y: 340 * scale, width: 64 * scale, height: 100 * scale)
+            let rail = CGRect(x: 4 * scale, y: 340 * scale, width: 70 * scale, height: 100 * scale)
             XCTAssertGreaterThan(differing(plain, patterned, in: rail), Int(rail.width * rail.height) / 2,
                                  "the rail does not show the chosen background in \(scheme)")
-            // Right of the 72 pt rail the page already shows the pattern, where the 190 pt sidebar would have covered it.
-            let page = CGRect(x: 80 * scale, y: 340 * scale, width: 100 * scale, height: 100 * scale)
+            // Right of the 78 pt rail the page already shows the pattern, where the 156 pt sidebar would have covered it.
+            let page = CGRect(x: 90 * scale, y: 340 * scale, width: 100 * scale, height: 100 * scale)
             XCTAssertGreaterThan(differing(plain, patterned, in: page), 1000)
         }
     }
@@ -430,8 +430,8 @@ final class IronPetWindowTests: XCTestCase {
         let none = try XCTUnwrap(renderCollapsed(true, alerts: 0))
         let some = try XCTUnwrap(renderCollapsed(true, alerts: 3))
         let scale = CGFloat(none.pixelsWide) / IronPetPanel.minimumSize.width
-        // Alerts is the third icon; the badge sits on its top right corner, inside the 72 pt rail.
-        let corner = CGRect(x: 40 * scale, y: 0, width: 32 * scale, height: IronPetPanel.minimumSize.height * scale)
+        // Alerts is the third icon; the badge sits on its top right corner, inside the 78 pt rail.
+        let corner = CGRect(x: 56 * scale, y: 0, width: 32 * scale, height: IronPetPanel.minimumSize.height * scale)
         XCTAssertGreaterThan(differing(none, some, in: corner), 20)
     }
 
@@ -439,8 +439,8 @@ final class IronPetWindowTests: XCTestCase {
         let expanded = try XCTUnwrap(renderCollapsed(false))
         let rail = try XCTUnwrap(renderCollapsed(true))
         let scale = CGFloat(rail.pixelsWide) / IronPetPanel.minimumSize.width
-        // Where the labels were: x 72 to 190 pt, now page.
-        let labels = CGRect(x: 80 * scale, y: 40 * scale, width: 100 * scale, height: 200 * scale)
+        // Where the labels were: x 78 to 156 pt, now page.
+        let labels = CGRect(x: 90 * scale, y: 60 * scale, width: 60 * scale, height: 200 * scale)
         XCTAssertGreaterThan(differing(expanded, rail, in: labels), 100)
     }
 
@@ -476,10 +476,173 @@ final class IronPetWindowTests: XCTestCase {
                 XCTAssertEqual(header.height, PageHeaderMetrics.height, accuracy: 0.5, "\(section) header height")
                 XCTAssertEqual(header.minY, 0, accuracy: 0.5, "\(section) header starts at the window top")
                 XCTAssertEqual(title.midY, PageHeaderMetrics.height / 2, accuracy: 1.5, "\(section) title is not centered")
-                // The traffic lights are centered about 15 pt below the top of the window.
-                XCTAssertEqual(title.midY, 15, accuracy: 2, "\(section) title is not level with the traffic lights")
+                XCTAssertEqual(PageHeaderMetrics.height, 52)
             }
         }
+    }
+
+    /// The traffic lights sit in the middle of the header band, and the sidebar is wide enough to hold them.
+    func testTheTrafficLightsAreCenteredInTheHeaderBandAndFitTheSidebar() throws {
+        for collapsed in [false, true] {
+            let model = IronPetWindowModel(defaults: freshDefaults())
+            model.sidebarCollapsed = collapsed
+            let panel = IronPetPanel(model: model, session: nil, content: Color.clear)
+            panel.setContentSize(IronPetPanel.minimumSize)
+            panel.centerWindowButtons()
+            var rightmost: CGFloat = 0
+            for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+                let button = try XCTUnwrap(panel.standardWindowButton(kind))
+                let frame = button.convert(button.bounds, to: nil)
+                // Window coordinates run up from the bottom; the header runs down from the top.
+                XCTAssertEqual(panel.frame.height - frame.midY, PageHeaderMetrics.height / 2, accuracy: 1, "\(kind) is not centered in the header")
+                rightmost = max(rightmost, frame.maxX)
+            }
+            XCTAssertGreaterThan(IronPetWindowModel.minSidebarWidth, rightmost, "the traffic lights do not fit the sidebar")
+            // The rail is the traffic lights' row plus a small margin on the right. The buttons end at x 69 on macOS 27
+            // (a 9 pt margin) and at x 61 on the macOS version CI runs (17 pt), so the margin is a range, not one number.
+            let margin = IronPetWindowModel.railWidth - rightmost
+            XCTAssertGreaterThanOrEqual(margin, 6, "the rail clips the window buttons")
+            XCTAssertLessThanOrEqual(margin, 20, "the rail is much wider than the window buttons")
+        }
+    }
+
+    // MARK: Rail labels
+
+    func testARailIconShowsItsLabelAfterTheDelayAndHidesOnExit() async throws {
+        let saved = IronPetWindowModel.railTipDelay
+        IronPetWindowModel.railTipDelay = .milliseconds(60)
+        defer { IronPetWindowModel.railTipDelay = saved }
+        let model = IronPetWindowModel(defaults: freshDefaults())
+        let tip = RailTip(name: "Tasks", shortcut: "⌘4", frame: CGRect(x: 36, y: 182, width: 40, height: 38))
+        model.hoverRail(tip, hovering: true)
+        XCTAssertNil(model.railTip, "the label shows before the pointer has rested")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(model.railTip, tip)
+        model.hoverRail(tip, hovering: false)
+        XCTAssertNil(model.railTip)
+    }
+
+    func testLeavingBeforeTheDelayNeverShowsTheLabel() async throws {
+        let saved = IronPetWindowModel.railTipDelay
+        IronPetWindowModel.railTipDelay = .milliseconds(60)
+        defer { IronPetWindowModel.railTipDelay = saved }
+        let model = IronPetWindowModel(defaults: freshDefaults())
+        let tip = RailTip(name: "Alerts", shortcut: "⌘3", frame: .zero)
+        model.hoverRail(tip, hovering: true)
+        model.hoverRail(tip, hovering: false)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(model.railTip)
+    }
+
+    func testAClickOrExpandingTheSidebarHidesTheLabel() async throws {
+        let saved = IronPetWindowModel.railTipDelay
+        IronPetWindowModel.railTipDelay = .milliseconds(20)
+        defer { IronPetWindowModel.railTipDelay = saved }
+        let model = IronPetWindowModel(defaults: freshDefaults())
+        model.sidebarCollapsed = true
+        let tip = RailTip(name: "Tasks", shortcut: "⌘4", frame: .zero)
+        model.hoverRail(tip, hovering: true)
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertNotNil(model.railTip)
+        model.clearRailTip()
+        XCTAssertNil(model.railTip)
+        model.hoverRail(tip, hovering: true)
+        try await Task.sleep(for: .milliseconds(120))
+        model.toggleSidebar()
+        XCTAssertNil(model.railTip)
+    }
+
+    func testTheRailLabelNamesTheSectionAndItsShortcut() {
+        let sections = IronPetSection.shown(chat: true, transcripts: true, automations: true)
+        XCTAssertEqual(IronPetSection.tasks.shortcutLabel(in: sections), "⌘4")
+        XCTAssertEqual(IronPetSection.tasks.hint(in: sections), "Tasks (⌘4)")
+    }
+
+    // MARK: Dragging the sidebar edge
+
+    func testDraggingTheEdgeFollowsThePointerBetweenTheRailAndTheMaximum() {
+        XCTAssertEqual(IronPetWindowModel.dragWidth(start: 156, delta: 40), 196)
+        XCTAssertEqual(IronPetWindowModel.dragWidth(start: 156, delta: -500), IronPetWindowModel.railWidth)
+        XCTAssertEqual(IronPetWindowModel.dragWidth(start: 156, delta: 500), IronPetWindowModel.maxSidebarWidth)
+    }
+
+    func testTheSidebarSnapsToTheRailWhenDraggedNarrowAndBackWhenDraggedWide() {
+        let model = IronPetWindowModel(defaults: freshDefaults())
+        XCTAssertFalse(model.sidebarCollapsed)
+        // Narrowed below the snap width, it collapses.
+        model.endDrag(atWidth: IronPetWindowModel.snapWidth - 1)
+        XCTAssertTrue(model.sidebarCollapsed)
+        XCTAssertEqual(model.columnWidth, IronPetWindowModel.railWidth)
+        // Dragged back past it, it expands, to the width it was let go at but never below the minimum.
+        model.endDrag(atWidth: 200)
+        XCTAssertFalse(model.sidebarCollapsed)
+        XCTAssertEqual(model.sidebarWidth, 200)
+        model.endDrag(atWidth: IronPetWindowModel.snapWidth + 1)
+        XCTAssertFalse(model.sidebarCollapsed)
+        XCTAssertEqual(model.sidebarWidth, IronPetWindowModel.minSidebarWidth)
+        XCTAssertTrue(IronPetWindowModel.showsRail(atWidth: IronPetWindowModel.railWidth))
+        XCTAssertFalse(IronPetWindowModel.showsRail(atWidth: IronPetWindowModel.minSidebarWidth))
+    }
+
+    func testTheDraggedWidthAndTheCollapsedStateSurviveARestart() {
+        let defaults = freshDefaults()
+        let first = IronPetWindowModel(defaults: defaults)
+        first.endDrag(atWidth: 220)
+        XCTAssertEqual(IronPetWindowModel(defaults: defaults).sidebarWidth, 220)
+        first.endDrag(atWidth: 90)
+        let second = IronPetWindowModel(defaults: defaults)
+        XCTAssertTrue(second.sidebarCollapsed)
+        XCTAssertEqual(second.sidebarWidth, 220, "collapsing forgot the expanded width")
+    }
+
+    func testThePressOnTheSidebarEdgeDoesNotMoveTheWindowAndReportsTheDrag() {
+        let handle = SidebarResizeHandle.HandleView()
+        XCTAssertFalse(handle.mouseDownCanMoveWindow)
+        XCTAssertTrue(handle.acceptsFirstMouse(for: nil))
+    }
+
+    private func findHandle(in view: NSView) -> SidebarResizeHandle.HandleView? {
+        if let handle = view as? SidebarResizeHandle.HandleView { return handle }
+        for sub in view.subviews { if let found = findHandle(in: sub) { return found } }
+        return nil
+    }
+
+    /// A drag that starts on the edge reaches the handle, in the real window, and collapses or expands the sidebar.
+    func testDraggingTheEdgeInTheRealWindowCollapsesAndExpandsTheSidebar() throws {
+        let model = IronPetWindowModel(defaults: freshDefaults())
+        let view = IronPetWindowView(model: model, store: sessions(.done), signals: signals(0), tasks: tasks(), chat: nil,
+                                     meetings: nil, actions: .none)
+        let panel = IronPetPanel(model: model, session: nil, content: view)
+        panel.setContentSize(IronPetPanel.minimumSize)
+        panel.orderFront(nil)
+        defer { panel.orderOut(nil) }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let content = try XCTUnwrap(panel.contentView)
+        let handle = try XCTUnwrap(findHandle(in: content), "the sidebar edge has no drag handle")
+        let center = handle.convert(CGPoint(x: handle.bounds.midX, y: handle.bounds.midY), to: nil)
+        XCTAssertEqual(center.x, model.columnWidth, accuracy: 3)
+        // A press on the edge lands on the handle, not on the page or the sidebar.
+        let hit = content.hitTest(content.convert(center, from: nil))
+        XCTAssertTrue(hit === handle, "the edge is covered by \(String(describing: hit))")
+
+        func event(_ type: NSEvent.EventType, x: CGFloat) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: CGPoint(x: x, y: center.y), modifierFlags: [], timestamp: 0,
+                               windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        // Drag the edge left past the snap width: the sidebar collapses.
+        handle.mouseDown(with: event(.leftMouseDown, x: center.x))
+        handle.mouseDragged(with: event(.leftMouseDragged, x: 80))
+        handle.mouseUp(with: event(.leftMouseUp, x: 80))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        XCTAssertTrue(model.sidebarCollapsed)
+        // Then right past it: the sidebar expands again.
+        let rail = IronPetWindowModel.railWidth
+        handle.mouseDown(with: event(.leftMouseDown, x: rail))
+        handle.mouseDragged(with: event(.leftMouseDragged, x: 200))
+        handle.mouseUp(with: event(.leftMouseUp, x: 200))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        XCTAssertFalse(model.sidebarCollapsed)
+        XCTAssertEqual(model.sidebarWidth, 200, accuracy: 1)
     }
 
     func testTheChatTitleHasNoCapsuleAndStartsWhereOtherTitlesStart() throws {
