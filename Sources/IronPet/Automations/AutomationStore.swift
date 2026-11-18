@@ -232,10 +232,13 @@ enum AutomationSchema {
             "body": { "type": "string" },
             "prompt": { "type": "string", "description": "Runs in the user's chat with the chat's tools. A prompt that uses {{item.*}} runs in a restricted background session instead." },
             "agent": { "type": "string", "description": "Only for the restricted background run. A prompt that runs in the chat uses the chat's agent." },
-            "model": { "type": "string", "description": "Only for the restricted background run. A prompt that runs in the chat uses the chat's model." },
+            "model": { "type": "string", "description": "The model for a session new or own run; leave it out to keep the skill's or the agent's own. Also used by the restricted background run. A prompt that runs in the chat uses the chat's model." },
             "command": { "type": "string" },
             "timeoutSeconds": { "type": "number", "minimum": 1, "maximum": 600 },
             "quiet": { "type": "string", "description": "prompt action: a reply that means nothing happened. A run whose final reply is exactly this text is hidden from the chat and recorded as no changes." },
+            "session": { "enum": ["chat", "new", "own"], "description": "prompt action: chat (default) posts into the open chat. new runs in a fresh agent session every time. own reuses one thread for this automation and starts a fresh one after 50 runs. new and own runs show up in the thread list as automation runs, and have the agent's full tools minus disallowedTools. A prompt that uses {{item.*}} stays read-only whatever session says." },
+            "allowedTools": { "type": "array", "items": { "type": "string" }, "description": "prompt action with session new or own: tools the agent may use without asking, such as Bash(gh pr list:*)." },
+            "disallowedTools": { "type": "array", "items": { "type": "string" }, "description": "prompt action with session new or own: tools the agent may not use, such as Bash(rm:*) or WebFetch." },
             "digest": { "enum": ["brief", "recap"], "description": "digest action: brief lists what needs you today, recap what happened today. Built from data on this Mac; no agent runs." }
           }
         },

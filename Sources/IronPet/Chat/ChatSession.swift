@@ -589,10 +589,20 @@ final class ChatSession: ObservableObject {
             if case .user(let text) = item.kind { return text } else { return nil }
         }.first ?? "Chat"
         let title = firstPrompt.count > 60 ? String(firstPrompt.prefix(57)) + "…" : firstPrompt
-        ThreadStore.save(ChatThread(id: threadID, title: title, workspace: workspace.path, updatedAt: Date(),
-                                    items: items, agent: agent.id))
+        var thread = ChatThread(id: threadID, title: title, workspace: workspace.path, updatedAt: Date(), items: items, agent: agent.id)
+        // Continuing an automation's thread keeps it marked as one, and keeps its run count.
+        if let earlier = ThreadStore.load(threadID), earlier.automation != nil {
+            thread.title = earlier.title
+            thread.automation = earlier.automation
+            thread.automationName = earlier.automationName
+            thread.runs = earlier.runs
+        }
+        ThreadStore.save(thread)
         history = ThreadStore.recent()
     }
+
+    /// Reloads the thread list after something else saved a thread, such as an automation run.
+    func refreshHistory() { history = ThreadStore.recent() }
 
     func send() {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)

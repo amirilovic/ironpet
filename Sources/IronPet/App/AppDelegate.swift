@@ -256,6 +256,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         service.suggested = { [weak self] added in self?.offerSuggestions(added) }
         let workspace = store.paths.workspace
         service.runPrompt = { automation, prompt in await AutomationPrompt.run(automation, prompt: prompt, workspace: workspace) }
+        service.runSession = { [weak self] automation, prompt in
+            let result = await AutomationSession.run(automation, prompt: prompt, workspace: workspace)
+            self?.chat.refreshHistory()
+            return result
+        }
         service.checklistHasEntries = { HeartbeatChecklist.hasEntries() }
         chat.quietReply = { [weak store] id in store?.automations.first { $0.id == id }?.action.quiet }
         setUpBrief(service, tasks: tasks)

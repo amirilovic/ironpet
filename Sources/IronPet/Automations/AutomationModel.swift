@@ -79,6 +79,17 @@ struct Automation: Codable, Equatable, Identifiable {
         /// `prompt`: a reply that means nothing happened. A run whose final reply is exactly this text is hidden from the
         /// chat and recorded as "no changes".
         var quiet: String?
+        /// `prompt`: where it runs. `chat` (default) posts into the open chat. `new` starts a fresh agent session every run.
+        /// `own` keeps one thread for this automation and resumes it each run, starting a fresh one after
+        /// `AutomationSession.ownRunLimit` runs. `new` and `own` have the agent's full tools minus `disallowedTools`.
+        var session: String?
+        /// `prompt` with `session` new or own: tools the agent may use without asking, for example `Bash(gh pr list:*)`.
+        var allowedTools: [String]?
+        /// `prompt` with `session` new or own: tools the agent may not use.
+        var disallowedTools: [String]?
+
+        /// True when the prompt runs in its own agent session instead of the open chat.
+        var runsInOwnSession: Bool { type == "prompt" && (session == "new" || session == "own") }
     }
 
     struct Presentation: Codable, Equatable {
@@ -148,11 +159,18 @@ struct Automation: Codable, Equatable, Identifiable {
         note = try c.decodeIfPresent(String.self, forKey: .note)
     }
 
+    /// The session settings of a prompt, which decide what it may do. Empty for the default, so an automation written before
+    /// `session` existed keeps its approval.
+    private var sessionRisk: String {
+        guard let session = action.session, session != "chat" else { return "" }
+        return "|session:\(session)|allow:\((action.allowedTools ?? []).joined(separator: ","))|deny:\((action.disallowedTools ?? []).joined(separator: ","))"
+    }
+
     /// Text whose change needs a new approval: the commands and prompts that can run on this Mac.
     var riskText: String? {
         var parts: [String] = []
         if action.type == "shell" { parts.append("shell:" + (action.command ?? "")) }
-        if action.type == "prompt" { parts.append("prompt:" + (action.prompt ?? "") + "|" + (action.agent ?? "") + "|" + (action.model ?? "")) }
+        if action.type == "prompt" { parts.append("prompt:" + (action.prompt ?? "") + "|" + (action.agent ?? "") + "|" + (action.model ?? "") + sessionRisk) }
         if trigger.type == "script" { parts.append("script:" + (trigger.script ?? "")) }
         if trigger.type == "stream" { parts.append("stream:" + (trigger.command ?? "")) }
         if trigger.type == "poll", trigger.source?.type == "shell" { parts.append("poll:" + (trigger.source?.command ?? "")) }
@@ -172,6 +190,7 @@ enum AutomationValidator {
     static let weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
     static let triggerTypes = ["interval", "daily", "once", "poll", "script", "stream"]
     static let actionTypes = ["bubble", "prompt", "shell", "digest"]
+    static let sessions = ["chat", "new", "own"]
     static let digestKinds = ["brief", "recap"]
     static let pollModes = ["json", "lines", "text", "exit_code"]
     static let streamModes = ["lines", "json"]
@@ -181,7 +200,7 @@ enum AutomationValidator {
         "automation": ["id", "name", "enabled", "trigger", "action", "presentation", "createdBy", "note"],
         "trigger": ["type", "minutes", "clock", "times", "weekdays", "at", "source", "mode", "items", "id", "version", "script", "cooldownMinutes", "catchUpMinutes", "command", "when", "debounceSeconds", "throttleSeconds"],
         "source": ["type", "command", "timeoutSeconds", "url", "headers"],
-        "action": ["type", "title", "body", "prompt", "agent", "model", "command", "timeoutSeconds", "digest", "quiet"],
+        "action": ["type", "title", "body", "prompt", "agent", "model", "command", "timeoutSeconds", "digest", "quiet", "session", "allowedTools", "disallowedTools"],
         "presentation": ["mood", "symbol", "buttons", "notification", "expiresSeconds"],
     ]
 
@@ -382,6 +401,12 @@ enum AutomationValidator {
             if (a.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errors.append("action.prompt is empty") }
             if let agent = a.agent, AgentCatalog.agent(id: agent) == nil { errors.append("action.agent \"\(agent)\" is not a known agent") }
             if let quiet = a.quiet, quiet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errors.append("action.quiet is empty") }
+            if let session = a.session, !sessions.contains(session) { errors.append("action.session must be one of \(sessions.joined(separator: ", "))") }
+            for (field, list) in [("allowedTools", a.allowedTools), ("disallowedTools", a.disallowedTools)] {
+                guard let list else { continue }
+                if !a.runsInOwnSession, a.session == nil || a.session == "chat" { errors.append("action.\(field) only applies when action.session is new or own") }
+                if list.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { errors.append("action.\(field) has an empty entry") }
+            }
         case "digest":
             if !digestKinds.contains(a.digest ?? "") { errors.append("action.digest must be one of \(digestKinds.joined(separator: ", "))") }
             if trigger.type == "poll" || trigger.type == "stream" { errors.append("a digest action runs on an interval, daily or once trigger, not a \(trigger.type)") }

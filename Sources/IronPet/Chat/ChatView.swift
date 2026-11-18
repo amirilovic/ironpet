@@ -220,9 +220,15 @@ struct ChatView: View {
         Menu {
             if session.history.isEmpty { Text("No previous chats") }
             ForEach(session.history) { thread in
-                Button("\(thread.title) — \(URL(fileURLWithPath: thread.workspace).lastPathComponent)") {
+                Button {
                     session.open(thread)
                     showSettings = false
+                } label: {
+                    if thread.isAutomationRun {
+                        Label("\(thread.automationName ?? thread.title) — automation run", systemImage: "gearshape.2")
+                    } else {
+                        Text("\(thread.title) — \(URL(fileURLWithPath: thread.workspace).lastPathComponent)")
+                    }
                 }
             }
         } label: {

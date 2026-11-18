@@ -46,7 +46,7 @@ enum AutomationPrompt {
     }
 
     @MainActor
-    private final class Box {
+    final class Box {
         var answer = ""
         private var result: Result<String, AutomationError>?
         private var continuation: CheckedContinuation<Result<String, AutomationError>, Never>?

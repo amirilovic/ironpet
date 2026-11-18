@@ -72,6 +72,9 @@ struct ACPTurn {
     let model: String?
     let images: [URL]
     let files: [URL]
+    /// Tool rules for the session, from an automation's `allowedTools` and `disallowedTools`. Only the Claude Code adapter reads them.
+    var allowedTools: [String]? = nil
+    var disallowedTools: [String]? = nil
 }
 
 /// Why an agent could not be started.
@@ -402,6 +405,14 @@ final class ACPBackend {
     /// The MCP servers this backend's sessions get: all of ironpet's for the chat, none for a restricted run.
     var sessionMCPServers: [JSON] { restricted ? [] : Self.defaultMCPServers() }
 
+    /// The `_meta` the Claude Code adapter reads its tool rules from (`claudeCode.options`), or nil when the turn sets none.
+    nonisolated static func toolRulesMeta(_ turn: ACPTurn) -> JSON? {
+        var options: JSON = [:]
+        if let allowed = turn.allowedTools, !allowed.isEmpty { options["allowedTools"] = allowed }
+        if let disallowed = turn.disallowedTools, !disallowed.isEmpty { options["disallowedTools"] = disallowed }
+        return options.isEmpty ? nil : ["claudeCode": ["options": options]]
+    }
+
     private func ensureSession(_ turn: ACPTurn) async throws {
         guard let client else { throw ACPError(code: -1, message: "The agent stopped") }
         if sessionReady, sessionID != nil { return }
@@ -410,6 +421,7 @@ final class ACPBackend {
         costAccounted = nil
         costBaselineMissing = false
         var params: JSON = ["cwd": turn.workspace.path, "mcpServers": sessionMCPServers]
+        if let meta = Self.toolRulesMeta(turn) { params["_meta"] = meta }
         let sessionCapabilities = capabilities["sessionCapabilities"] as? JSON ?? [:]
         if sessionCapabilities["additionalDirectories"] != nil, !restricted {
             for dir in [Memory.directory, ScreenCapture.directory] { try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }

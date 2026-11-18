@@ -49,6 +49,9 @@ final class AutomationService {
     var nudge: ([PetMood]) -> Void = { _ in }
     /// Runs a `prompt` action in a background session. Returns the answer or an error text.
     var runPrompt: (_ automation: Automation, _ prompt: String) async -> Result<String, AutomationError> = { _, _ in .failure(.init(message: "no agent")) }
+    /// Runs a `prompt` action whose `session` is `new` or `own`, in its own thread with the agent's full tools. Returns the
+    /// final reply. Without it (tests), those prompts run in the restricted background session.
+    var runSession: ((_ automation: Automation, _ prompt: String) async -> Result<String, AutomationError>)?
     /// Puts a message into the chat the user is looking at, as a queued message that runs with the chat's tools. Returns
     /// false when the chat took nothing. Without it (tests, no chat), a `prompt` action runs in the background.
     var sendToChat: ((_ automationID: String, _ message: String) -> Bool)?
@@ -286,6 +289,22 @@ final class AutomationService {
                 let result = await runShell(command, a.action.timeoutSeconds ?? 60)
                 finish(a, ok: result.ok, text: result.summary.isEmpty ? (result.ok ? "done" : "failed") : result.summary, fire: fire, truncated: result.truncated)
             }
+        case "prompt" where runsInSession(a):
+            let prompt = AutomationTemplate.render(a.action.prompt ?? "", values: values)
+            return runInBackground(a, done: fire.finished) { [self] in
+                switch await runSession?(a, prompt) ?? .failure(.init(message: "no agent")) {
+                case .success(let answer):
+                    // The reply that means nothing happened: no bubble, but the run and its thread stay recorded.
+                    if let quiet = a.action.quiet?.trimmingCharacters(in: .whitespacesAndNewlines), !quiet.isEmpty,
+                       answer.trimmingCharacters(in: .whitespacesAndNewlines) == quiet {
+                        record(a.id, "ok", "no changes")
+                        afterRun(a)
+                    } else {
+                        finish(a, ok: true, text: answer, fire: fire)
+                    }
+                case .failure(let error): finish(a, ok: false, text: error.message, fire: fire)
+                }
+            }
         case "prompt" where runsInChat(a):
             deliverToChat(a, fire: fire, values: values)
         case "digest":
@@ -321,8 +340,14 @@ final class AutomationService {
     /// A prompt without poll item data runs in the user's chat, with the chat's agent, tools and memory. Item text comes
     /// from outside (a web page, an issue title), so a prompt that uses it stays in the restricted background run.
     func runsInChat(_ a: Automation) -> Bool {
-        guard sendToChat != nil, a.action.type == "prompt" else { return false }
+        guard sendToChat != nil, a.action.type == "prompt", !runsInSession(a) else { return false }
         return !Self.usesItemData(a.action.prompt ?? "")
+    }
+
+    /// A prompt with `session` new or own runs in its own thread with full tools. The same rule as the chat applies: item
+    /// text comes from outside, so a prompt that uses it stays in the read-only background run.
+    func runsInSession(_ a: Automation) -> Bool {
+        runSession != nil && a.action.runsInOwnSession && !Self.usesItemData(a.action.prompt ?? "")
     }
 
     static func usesItemData(_ prompt: String) -> Bool {

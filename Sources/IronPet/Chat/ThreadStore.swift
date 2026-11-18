@@ -10,6 +10,14 @@ struct ChatThread: Codable, Identifiable {
     var items: [ChatSession.Item]
     /// The catalog id of the agent that owns the session.
     var agent: String
+    /// The id of the automation whose run this thread holds. Nil for a thread the user started.
+    var automation: String? = nil
+    /// The automation's name when the run was recorded, shown in the thread list.
+    var automationName: String? = nil
+    /// How many automation runs this thread holds. An `own` session starts a fresh thread after a limit.
+    var runs: Int? = nil
+
+    var isAutomationRun: Bool { automation != nil }
 }
 
 extension ChatThread {
@@ -57,15 +65,38 @@ enum ThreadStore {
         (try? Data(contentsOf: file(id))).flatMap { try? decoder.decode(ChatThread.self, from: $0) }
     }
 
-    /// Most recent first.
-    static func recent(limit: Int = 15) -> [ChatThread] {
+    /// Most recent first. Automation runs are capped at `automationLimit`, so an hourly job does not push the user's own
+    /// threads out of the list.
+    static func recent(limit: Int = 15, automationLimit: Int = 5) -> [ChatThread] {
+        var automations = 0
+        return all()
+            .filter { thread in
+                guard thread.isAutomationRun else { return true }
+                automations += 1
+                return automations <= automationLimit
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private static func all() -> [ChatThread] {
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
         return files
             .filter { $0.pathExtension == "json" }
             .compactMap { (try? Data(contentsOf: $0)).flatMap { try? decoder.decode(ChatThread.self, from: $0) } }
             .sorted { $0.updatedAt > $1.updatedAt }
-            .prefix(limit)
-            .map { $0 }
+    }
+
+    /// Deletes this automation's oldest threads beyond the newest `keep`.
+    static func prune(automation id: String, keep: Int) {
+        for thread in all().filter({ $0.automation == id }).dropFirst(keep) {
+            try? FileManager.default.removeItem(at: file(thread.id))
+        }
+    }
+
+    /// The newest thread that holds runs of this automation.
+    static func latest(automation id: String) -> ChatThread? {
+        all().first { $0.automation == id }
     }
 
     private static func file(_ id: String) -> URL {
