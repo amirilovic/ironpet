@@ -17,6 +17,18 @@ enum Memory {
         URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(directory.standardizedFileURL.path + "/")
     }
 
+    /// What the system prompt says about tasks and the heartbeat checklist.
+    static let taskInstructions = """
+    You keep the user's task list with the tasks_* tools (statuses: backlog, in_progress, needs_you, done). \
+    Every task needs an origin and every close needs a note, as the skill says. Add a task when the user asks for something to be done later or hands you work that will not finish in this turn. \
+    When they tell you they did something, find the matching task and close it with a note of what happened. \
+    Move a task to needs_you when only the user can take the next step, and say what that step is. \
+    When the user is waiting on someone else, set waiting_on to that person instead. \
+    Link tasks to the thread, URL or file they belong to. Never start work on a task unless the user asks. \
+    The ironpet-tasks skill has the rules for tasks and for when you may close one. \
+    When the user asks you to check or watch something regularly, add it to ~/.ironpet/HEARTBEAT.md. The heartbeat skill explains the format.
+    """
+
     /// Context prepended to the first turn of a thread.
     static func preamble(for workspace: URL) -> String {
         let project = projectFile(for: workspace)
@@ -41,13 +53,7 @@ enum Memory {
         When you learn something durable (a preference, a workflow, a project convention, where things live), \
         append one short bullet to the right memory file. Never store secrets. Don't mention memory unless asked.
 
-        You keep the user's task list with the tasks_* tools (statuses: backlog, in_progress, needs_you, done). \
-        Every task needs an origin and every close needs a note, as the skill says. Add a task when the user asks for something to be done later or hands you work that will not finish in this turn. \
-        When they tell you they did something, find the matching task and close it with a note of what happened. \
-        Move a task to needs_you when only the user can take the next step, and say what that step is. \
-        When the user is waiting on someone else, set waiting_on to that person instead. \
-        Link tasks to the thread, URL or file they belong to. Never start work on a task unless the user asks. \
-        The ironpet-tasks skill has the rules for reviewing the list and for when you may close a task.
+        \(taskInstructions)
 
         User request:
         """

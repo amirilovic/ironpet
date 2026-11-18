@@ -6,17 +6,17 @@ enum AutomationDefaults {
     static let githubID = "github-alerts"
     static let sentryID = "sentry-alerts"
 
-    /// The built-in task review. Every 10 minutes it asks the chat to run the `ironpet-tasks` skill.
-    static let reviewTasksID = "review-tasks"
-    static let reviewTasksPrompt = "/ironpet-tasks"
-    /// The only reply that counts as "nothing to do". The chat hides such a turn.
-    static let reviewTasksNoChange = "ironpet-tasks: no changes"
+    static let heartbeatID = "heartbeat"
+    static let heartbeatPrompt = "/heartbeat"
+    /// The reply that means the checklist found nothing for the user. The chat hides such a turn.
+    static let heartbeatQuiet = "HEARTBEAT_OK"
 
-    static func reviewTasks(enabled: Bool = true) -> Automation {
-        Automation(id: reviewTasksID, name: "Review tasks", enabled: enabled,
-                   trigger: .init(type: "interval", minutes: 10, clock: "wall"),
-                   action: .init(type: "prompt", prompt: reviewTasksPrompt), createdBy: "user",
-                   note: "Asks the chat to review the task list. Skipped when no task is open, and hidden when nothing changed.")
+    /// The built-in heartbeat. Every 15 minutes it asks the chat to run the `heartbeat` skill over `~/.ironpet/HEARTBEAT.md`.
+    static func heartbeat(enabled: Bool = true) -> Automation {
+        Automation(id: heartbeatID, name: "Heartbeat", enabled: enabled,
+                   trigger: .init(type: "interval", minutes: 15, clock: "wall"),
+                   action: .init(type: "prompt", prompt: heartbeatPrompt, quiet: heartbeatQuiet), createdBy: "user",
+                   note: "Works through ~/.ironpet/HEARTBEAT.md. Skipped when the checklist has no entries, and hidden when nothing needs you.")
     }
 
     static let morningBriefID = "morning-brief"
@@ -41,7 +41,7 @@ enum AutomationDefaults {
     }
 
     /// Every built-in, added to the file when its id is missing.
-    static var builtIns: [Automation] { [reviewTasks(), morningBrief(), dayRecap()] }
+    static var builtIns: [Automation] { [heartbeat(), morningBrief(), dayRecap()] }
 
     /// The `gh` binary, which the GitHub script runs.
     static var ghExecutable: URL? {

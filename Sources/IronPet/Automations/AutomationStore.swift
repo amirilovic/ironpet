@@ -235,6 +235,7 @@ enum AutomationSchema {
             "model": { "type": "string", "description": "Only for the restricted background run. A prompt that runs in the chat uses the chat's model." },
             "command": { "type": "string" },
             "timeoutSeconds": { "type": "number", "minimum": 1, "maximum": 600 },
+            "quiet": { "type": "string", "description": "prompt action: a reply that means nothing happened. A run whose final reply is exactly this text is hidden from the chat and recorded as no changes." },
             "digest": { "enum": ["brief", "recap"], "description": "digest action: brief lists what needs you today, recap what happened today. Built from data on this Mac; no agent runs." }
           }
         },

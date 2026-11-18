@@ -225,6 +225,8 @@ final class ChatSession: ObservableObject {
     /// Reports the start and end of a turn that an automation sent (`submitFromAutomation`).
     var onAutomation: ((String, AutomationEvent) -> Void)?
     private var automationRun: String?
+    /// The `quiet` reply of an automation, by id. A turn whose final reply is exactly that text is hidden.
+    var quietReply: (String) -> String? = { _ in nil }
     private var telegramChat: Int64?
 
     private(set) var threadID: String? {
@@ -734,19 +736,19 @@ final class ChatSession: ObservableObject {
         onAutomation?(id, error.map { .failed($0) } ?? (noChange ? .noChange : .finished))
     }
 
-    /// Removes the task review's prompt and reply from the transcript when the reply is exactly the "no changes" line.
+    /// Removes an automation's prompt and reply from the transcript when the reply is exactly its `quiet` text.
     /// Returns true when it did. Any other reply stays as a normal automation turn.
-    private func hideNoOpReview() -> Bool {
-        guard automationRun == AutomationDefaults.reviewTasksID,
+    private func hideQuietTurn() -> Bool {
+        guard let id = automationRun, let quiet = quietReply(id)?.trimmingCharacters(in: .whitespacesAndNewlines), !quiet.isEmpty,
               let start = items.lastIndex(where: { if case .user = $0.kind { return true } else { return false } }),
               items[start].origin == Self.automationOrigin,
-              lastAnswer()?.trimmingCharacters(in: .whitespacesAndNewlines) == AutomationDefaults.reviewTasksNoChange else { return false }
+              lastAnswer()?.trimmingCharacters(in: .whitespacesAndNewlines) == quiet else { return false }
         // The reply is the whole turn. Tool calls or other text before the line mean the agent did something.
         let rest = items[(start + 1)...]
         let onlyTheLine = rest.allSatisfy { item in
             if case .assistant(let text) = item.kind {
                 let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                return t.isEmpty || t == AutomationDefaults.reviewTasksNoChange
+                return t.isEmpty || t == quiet
             }
             return false
         }
@@ -1025,7 +1027,7 @@ final class ChatSession: ObservableObject {
             endTurn()
             if let error { items.append(Item(kind: .error(error))) }
             state = error == nil ? .done : .failed
-            let hidden = error == nil && hideNoOpReview()
+            let hidden = error == nil && hideQuietTurn()
             saveThread()
             // Before the queue moves on: the next message replaces the Telegram chat this turn belongs to.
             finishTelegramTurn(error: error, noChange: hidden)
