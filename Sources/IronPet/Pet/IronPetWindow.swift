@@ -98,8 +98,6 @@ final class IronPetWindowModel: ObservableObject {
     static func showsRail(atWidth width: CGFloat) -> Bool { width < snapWidth }
 
     @Published var section: IronPetSection = .chat
-    /// The tab the Screen section shows.
-    @Published var screenTab: ScreenTab = .captures
     /// Whether the Today row is listed: a brief or recap automation is on. Leaving it hidden moves off the page.
     @Published var todayShown = false {
         didSet { if !todayShown, section == .today { section = .chat } }
@@ -640,13 +638,10 @@ struct IronPetWindowView: View {
                     }
                 case .screen:
                     if let service = settings?.capture {
-                        ScreenSection(model: service.model, tab: $model.screenTab, store: service.store,
-                                      onOpenSettings: actions.onScreenSettings, onAppear: { service.refreshModel() },
-                                      loadBatch: { id in ScreenBatchLoader.load(id, capture: service.store, tasks: tasks) },
-                                      loadCounts: { ids in ScreenBatchLoader.counts(ids, tasks: tasks) },
-                                      onAccept: { id in _ = try? tasks.accept(id) }, onSkip: { id in tasks.skip(id) })
+                        ScreenSection(model: service.model, store: service.store, onOpenSettings: actions.onScreenSettings,
+                                      onAppear: { service.refreshModel() })
                     } else {
-                        ScreenSection(model: CaptureStatusModel(), tab: $model.screenTab, onOpenSettings: actions.onScreenSettings)
+                        ScreenSection(model: CaptureStatusModel(), onOpenSettings: actions.onScreenSettings)
                     }
                 case .actions: ActionsSection(onTrick: actions.onTrick)
                 case .automations:

@@ -136,14 +136,13 @@ final class Announcer {
 
     static let taskSuggestionsID = "task-suggestions"
 
-    /// One info bubble for suggestions that just arrived from a meeting summary, a watcher or screen capture: the count and the
+    /// One info bubble for suggestions that just arrived from a meeting summary or a watcher: the count and the
     /// first title, no buttons. They stay pending until resolved in the Tasks tab or over MCP. Nil when there are none.
     static func taskSuggestionsBubble(_ added: [TaskSuggestion], review: @escaping () -> Void = {}, now: Date = Date()) -> Bubble? {
         guard let first = added.first else { return nil }
         let title: String
         switch first.origin {
         case .meeting: title = "From your meeting"
-        case .capture: title = "From your screen"
         case .automation(_, let name): title = name
         }
         let count = added.count

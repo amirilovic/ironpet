@@ -1,8 +1,7 @@
 import Foundation
 
-/// Rule-based redaction of secrets in captured text, in the style of gitleaks and secretlint. It runs first, for every item, before anything is
-/// stored for the model or sent: each secret span becomes `[redacted:<kind>]`. The decision model then scores the redacted text, so a key
-/// in an otherwise useful message no longer costs the whole message. This is the one place with secret patterns: provider keys, tokens,
+/// Rule-based redaction of secrets in captured text, in the style of gitleaks and secretlint. It runs on every capture before the text
+/// is stored: each secret span becomes `[redacted:<kind>]`. This is the one place with secret patterns: provider keys, tokens,
 /// private keys, credentials in URLs and secret query parameters, `password=`-style assignments, card and bank numbers and long
 /// high-entropy strings.
 enum CaptureRedactor {
@@ -14,30 +13,13 @@ enum CaptureRedactor {
         var isEmpty: Bool { kinds.isEmpty }
 
         mutating func add(_ kind: String, _ n: Int = 1) { kinds[kind, default: 0] += n }
-        mutating func merge(_ other: Report) { for (kind, n) in other.kinds { add(kind, n) } }
-
-        /// `3 spans (aws-key 1, url-param 2)`, or `nothing redacted`.
-        var summary: String {
-            guard !isEmpty else { return "nothing redacted" }
-            let list = kinds.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", ")
-            return "redacted \(count) span\(count == 1 ? "" : "s") (\(list))"
-        }
-
-        var json: String? {
-            isEmpty ? nil : (try? JSONEncoder().encode(kinds)).map { String(decoding: $0, as: UTF8.self) }
-        }
 
         init() {}
-
-        init?(json: String?) {
-            guard let json, let kinds = try? JSONDecoder().decode([String: Int].self, from: Data(json.utf8)) else { return nil }
-            self.kinds = kinds
-        }
     }
 
     // MARK: Detectors
 
-    /// Query and fragment parameter names whose values are secrets, in lowercase. Also used by `CaptureURL` for the URL of an item.
+    /// Query and fragment parameter names whose values are secrets, in lowercase. Also used by `CaptureURL` for the URL of a window.
     static let secretURLParams: Set<String> = [
         "code", "token", "access_token", "id_token", "refresh_token", "state", "password", "passwd", "pwd", "sig", "signature", "key",
         "api_key", "apikey", "secret", "client_secret", "auth", "session", "sessionid", "x-amz-signature", "x-amz-credential",
@@ -162,7 +144,7 @@ enum CaptureRedactor {
             apply(detector.regex, kind: detector.kind) { _, _ in "[redacted:\(detector.kind)]" }
         }
         apply(urlCredentials, kind: "url-credentials") { match, text in
-            // Redacted text goes through here again at send time, and must come out the same and uncounted.
+            // Text that was already redacted must come out the same and uncounted.
             guard !text.substring(with: match.range).contains("[redacted:") else { return nil }
             return "\(group(match, 1, in: text))[redacted:url-credentials]@"
         }
@@ -191,11 +173,5 @@ enum CaptureRedactor {
             return "[redacted:high-entropy]"
         }
         return (out, report)
-    }
-
-    static func redact(_ text: String?) -> (text: String?, report: Report) {
-        guard let text else { return (nil, Report()) }
-        let result = redact(text)
-        return (result.text, result.report)
     }
 }

@@ -11,33 +11,25 @@ enum CaptureSkip: Error, Equatable, CustomStringConvertible {
     /// A URL that may not be stored: malformed, without a host, a local or browser-internal scheme, or anything but http(s) in a
     /// browser. Fails closed.
     case unsafeURL
-    case noParser
-    case emptyContent
-    case refused(String)
-    /// A rule failed or ran out of time or memory.
-    case ruleFailed(String)
-    /// Two reads of the same burst resolved to different threads: the window was mid-change.
-    case unsettled
+    case noWindow
+    /// The window has no readable text, and the screenshot fallback is off or not allowed.
+    case noText
 
     var description: String {
         switch self {
         case .paused: return "paused"
         case .privateWindow: return "a private browser window"
         case .locked: return "the screen is locked"
-        case .deniedApp(let app): return "app \(app) is on the denylist"
-        case .deniedHost(let host): return "host \(host) is on the denylist"
+        case .deniedApp(let app): return "app \(app) is on the deny list"
+        case .deniedHost(let host): return "host \(host) is on the deny list"
         case .unsafeURL: return "the url is not an address ironpet may store"
-        case .noParser: return "no parser handled this window"
-        case .emptyContent: return "nothing readable on screen"
-        case .refused(let reason): return "parser refused: \(reason)"
-        case .ruleFailed(let error): return "rule failed: \(error)"
-        case .unsettled: return "the window changed between two reads"
+        case .noWindow: return "no window to read"
+        case .noText: return "nothing readable in the window"
         }
     }
 }
 
-/// The hard floor: Swift checks that run no matter what any rule, user file or setting says. A rule can only store less than the floor
-/// allows. The JavaScript `denylist` rule adds to this list; it cannot remove from it.
+/// The hard floor: Swift checks that run no matter what a setting says. The user's deny list adds to it and cannot remove from it.
 enum CaptureFloor {
     /// Exact bundle ids, or a fragment to look for inside the lowercase bundle id.
     static let appFragments = [
@@ -88,7 +80,7 @@ enum CaptureFloor {
     }
 }
 
-/// The user-controlled capture state: pause and excluded apps. Shared across threads. The master switch lives in
+/// The user-controlled capture state: pause and the deny list. Shared across threads. The master switch lives in
 /// `CaptureService`; this is what the pet menu changes.
 final class CapturePrivacy {
     private let lock = NSLock()
@@ -157,9 +149,21 @@ final class CapturePrivacy {
         return nil
     }
 
-    func check(_ snapshot: CaptureSnapshot, now: Date = Date()) -> CaptureSkip? {
-        if let skip = checkApp(snapshot.app, now: now) { return skip }
-        if let url = snapshot.url { return CaptureFloor.checkURL(bundleId: snapshot.app.bundleId, raw: url) }
-        return nil
+    /// Title words that mark a private browser window. A browser does not say so any other way through accessibility.
+    static let privateWindowMarkers = ["private browsing", "incognito", "inprivate", "(private)", "— private", "- private", "private window"]
+
+    func isPrivateWindow(app: CaptureApp, title: String?) -> Bool {
+        guard CaptureFloor.isBrowser(app.bundleId) || app.bundleId.lowercased().contains("browser") else { return false }
+        let lower = (title ?? "").lowercased()
+        return Self.privateWindowMarkers.contains { lower.contains($0) }
+    }
+
+    /// The checks that need the window: a private browser window, and the address.
+    func check(_ read: WindowRead, now: Date = Date()) -> CaptureSkip? {
+        if let skip = checkApp(read.app, now: now) { return skip }
+        if isPrivateWindow(app: read.app, title: read.title) { return .privateWindow }
+        if let url = read.url { return CaptureFloor.checkURL(bundleId: read.app.bundleId, raw: url) }
+        // A browser window whose address could not be read might be on a denied host, so it fails closed like a malformed address.
+        return CaptureFloor.isBrowser(read.app.bundleId) ? .unsafeURL : nil
     }
 }

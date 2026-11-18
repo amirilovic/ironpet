@@ -1,227 +1,132 @@
 import AppKit
 import SwiftUI
 
-/// What one send to the larger model shows as in the Screen section.
-struct ScreenSendRow: Equatable, Identifiable {
-    var id: Int64
-    var title: String
-    var detail: String
-}
-
-/// The text of the capture block, kept apart from the view so tests can check it.
+/// The text of the Screen section, kept apart from the view so tests can check it.
 enum ScreenSectionText {
-    static func summary(items: Int, pending: Int, localOnly: Int) -> String {
-        "\(items) items, \(pending) waiting, \(localOnly) kept on this Mac"
+    static func summary(captures: Int, lastCapture: Date?, now: Date = Date()) -> String {
+        guard captures > 0 else { return "Nothing captured yet." }
+        let count = "\(captures) \(captures == 1 ? "capture" : "captures") stored"
+        guard let lastCapture else { return count }
+        return count + ", the last one \(lastCapture.formatted(.relative(presentation: .named, unitsStyle: .wide)))"
     }
 
-    /// One row per send, newest first.
-    /// `suggestions` adds each send's suggestion count, taken from the stored suggestions rather than the log's outcome text.
-    static func rows(_ log: [CaptureSendRecord], suggestions: [Int64: Int] = [:]) -> [ScreenSendRow] {
-        log.sorted { ($0.at, $0.id) > ($1.at, $1.id) }.map { record in
-            ScreenSendRow(id: record.id,
-                          title: "\(record.at.formatted(date: .abbreviated, time: .shortened)): \(record.harness) / \(record.model)",
-                          detail: "\(record.items.count) items, \(record.bytes) bytes, \(record.outcome)"
-                              + (suggestions[record.id].map { ", \($0) stored suggestion\($0 == 1 ? "" : "s")" } ?? ""))
-        }
+    /// The first `lines` lines of a capture, with `…` when there are more.
+    static func preview(_ text: String, lines: Int = 2) -> String {
+        let all = text.split(whereSeparator: \.isNewline).map(String.init)
+        let head = all.prefix(lines).joined(separator: "\n")
+        return all.count > lines ? head + " …" : head
     }
+
+    /// The window title, or the address when a page has no title.
+    static func windowLabel(_ capture: StoredCapture) -> String { capture.window.isEmpty ? (capture.url ?? "Untitled window") : capture.window }
 }
 
-/// The two tabs of the Screen section.
-enum ScreenTab: String, CaseIterable, Identifiable {
-    case captures, sent
-
-    var id: String { rawValue }
-    var title: String { self == .captures ? "Captures" : "Sent to the agent" }
-}
-
-/// The Screen section: the capture counts above two tabs, what screen capture has stored and what it sent to the agent.
+/// The Screen section: the most recent captures and a search over everything stored. It reads the local database only. Nothing here
+/// goes to a model, to MCP or to a log.
 struct ScreenSection: View {
     @ObservedObject var model: CaptureStatusModel
     @ObservedObject private var config = ConfigStore.shared
-    @Binding var tab: ScreenTab
-    /// The capture database for the Captures tab. Nil before the app has started.
+    /// The capture database. Nil before the app has started.
     var store: CaptureStore?
     var onOpenSettings: () -> Void = {}
     var onAppear: () -> Void = {}
-    /// Reads one send's items and suggestions. Nil when the app has no task store.
-    var loadBatch: (Int64) -> ScreenBatch? = { _ in nil }
-    var loadCounts: ([Int64]) -> [Int64: Int] = { _ in [:] }
-    var onAccept: (String) -> Void = { _ in }
-    var onSkip: (String) -> Void = { _ in }
 
-    @State private var selected: Int64?
-    @State private var batch: ScreenBatch?
-    @State private var counts: [Int64: Int] = [:]
+    @State private var recent: [StoredCapture] = []
+    @State private var hits: [CaptureHit] = []
+    @State private var search = ""
+    @State private var open: Set<Int64> = []
+    @State private var openText: [Int64: String] = [:]
+    private let timer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+
+    private var query: String { search.trimmingCharacters(in: .whitespaces) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                captured
-                Picker("Screen", selection: $tab) {
-                    ForEach(ScreenTab.allCases) { Text($0.title).tag($0) }
+            VStack(alignment: .leading, spacing: 10) {
+                Text(ScreenSectionText.summary(captures: model.captureCount, lastCapture: model.lastCapture))
+                if !config.config.screenCapture.enabled {
+                    HStack {
+                        Text("Screen capture is off").foregroundStyle(.secondary)
+                        Button("Open Settings", action: onOpenSettings)
+                    }
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 360)
+                TextField("Search captures", text: $search).textFieldStyle(.roundedBorder).frame(maxWidth: 360)
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             Divider()
-            switch tab {
-            case .captures:
-                if let store {
-                    CaptureInspectorView(store: store)
-                } else {
-                    Text("Nothing has been captured yet.").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            case .sent:
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        if let batch {
-                            ScreenBatchView(batch: batch, onBack: { self.batch = nil; selected = nil; refresh() },
-                                            onAccept: { onAccept($0); reload() }, onSkip: { onSkip($0); reload() })
-                        } else {
-                            sent
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    if query.isEmpty {
+                        if recent.isEmpty { Text("Captures appear here once screen capture has read a window.").font(.caption).foregroundStyle(.secondary) }
+                        ForEach(recent) { capture in
+                            row(id: capture.id, at: capture.at, app: capture.appName, window: ScreenSectionText.windowLabel(capture),
+                                text: ScreenSectionText.preview(capture.text))
+                        }
+                    } else {
+                        if hits.isEmpty { Text("No capture has all of those words.").font(.caption).foregroundStyle(.secondary) }
+                        ForEach(hits) { hit in
+                            row(id: hit.id, at: hit.at, app: hit.appName, window: hit.window.isEmpty ? (hit.url ?? "Untitled window") : hit.window, text: hit.snippet)
                         }
                     }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Text is stored on this Mac with secrets redacted, and is deleted after \(config.config.screenCapture.retentionDays) days.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxHeight: .infinity)
         .pageHeader(IronPetSection.screen.title)
         .onAppear { onAppear(); refresh() }
-        .onChange(of: model.sendLog) { _ in refresh() }
+        .onReceive(timer) { _ in if query.isEmpty { refresh() } }
+        .onChange(of: model.captureCount) { _ in refresh() }
+        .onChange(of: search) { _ in refresh() }
     }
 
-    private func refresh() { counts = loadCounts(model.sendLog.map(\.id)) }
-
-    private func reload() {
-        if let selected { batch = loadBatch(selected) }
-        refresh()
-    }
-
-    private var captured: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionTitle("Captured")
-            Text(ScreenSectionText.summary(items: model.itemCount, pending: model.pendingCount, localOnly: model.localOnlyCount))
-            if !config.config.screenCapture.enabled {
-                HStack {
-                    Text("Screen capture is off").foregroundStyle(.secondary)
-                    Button("Open Settings", action: onOpenSettings)
-                }
-            }
-        }
-    }
-
-    private var sent: some View {
-        let rows = ScreenSectionText.rows(model.sendLog, suggestions: counts)
-        return VStack(alignment: .leading, spacing: 8) {
-            SectionTitle("Sent to the agent")
-            if rows.isEmpty {
-                Text("Nothing has been sent.").font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(rows) { row in
-                Button {
-                    selected = row.id
-                    batch = loadBatch(row.id)
-                } label: {
+    private func row(id: Int64, at: Date, app: String, window: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Button {
+                if open.contains(id) { open.remove(id) } else { open.insert(id); loadText(id) }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
                     HStack {
-                        VStack(alignment: .leading) {
-                            Text(row.title)
-                            Text(row.detail).font(.caption).foregroundStyle(.secondary)
-                        }
+                        Text("\(app): \(window)").font(.headline).lineLimit(1)
                         Spacer()
-                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                        Text(at.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
                     }
-                    .contentShape(Rectangle())
+                    if !open.contains(id) { Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
                 }
-                .buttonStyle(.plain)
+                .contentShape(Rectangle())
             }
-            Text("Every send is listed here with the time, the agent and model, the capture ids and the size. Open one to see its items and the suggestions it produced.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-}
-
-/// One send: the items it carried, the redaction summary, and every suggestion it produced with what happened to it.
-struct ScreenBatchView: View {
-    let batch: ScreenBatch
-    var onBack: () -> Void = {}
-    var onAccept: (String) -> Void = { _ in }
-    var onSkip: (String) -> Void = { _ in }
-
-    @State private var open: Set<Int64> = []
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button("Back to sends", action: onBack)
-            let record = batch.record
-            SectionTitle("\(record.at.formatted(date: .abbreviated, time: .shortened)): \(record.harness) / \(record.model)")
-            Text("\(record.items.count) items, \(record.bytes) bytes, \(record.outcome)").font(.caption).foregroundStyle(.secondary)
-            Text(batch.redactions.summary).font(.caption).foregroundStyle(.secondary)
-            SectionTitle(ScreenBatchText.suggestionsTitle(batch.suggestions.count))
-            if batch.suggestions.isEmpty {
-                Text("This send produced no suggestions.").font(.caption).foregroundStyle(.secondary)
+            .buttonStyle(.plain)
+            if open.contains(id) {
+                Text(openText[id] ?? text).font(.caption).textSelection(.enabled)
+                    .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
             }
-            ForEach(batch.suggestions) { s in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(ScreenBatchLoader.label(s.kind)): \(s.title)")
-                    if !s.quote.isEmpty { Text("\u{201C}\(s.quote)\u{201D}").font(.caption).foregroundStyle(.secondary) }
-                    Text(ScreenBatchText.outcome(s.outcome)).font(.caption).foregroundStyle(.secondary)
-                    if case .pending(let id) = s.outcome {
-                        HStack {
-                            Button("Accept") { onAccept(id) }
-                            Button("Skip") { onSkip(id) }
-                        }
-                    }
-                }
-            }
-            SectionTitle("Items sent")
-            ForEach(batch.items) { item in
-                VStack(alignment: .leading, spacing: 2) {
-                    Button {
-                        if open.contains(item.id) { open.remove(item.id) } else { open.insert(item.id) }
-                    } label: {
-                        VStack(alignment: .leading) {
-                            Text(ScreenBatchText.itemTitle(item))
-                            Text(ScreenBatchText.itemDetail(item)).font(.caption).foregroundStyle(.secondary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    if open.contains(item.id) {
-                        Text(item.body.isEmpty ? "No text is stored for this item." : item.body)
-                            .font(.caption).textSelection(.enabled)
-                            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-                    }
-                }
-            }
-            Text("The text shown is the redacted text stored on this Mac, which is what was sent. It is never logged.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-}
-
-/// The wording of the batch view, kept apart so tests can check it.
-enum ScreenBatchText {
-    static func suggestionsTitle(_ n: Int) -> String { n == 0 ? "Suggestions" : "Suggestions (\(n))" }
-
-    static func outcome(_ outcome: ScreenBatch.Suggestion.Outcome) -> String {
-        switch outcome {
-        case .pending: return "Waiting for review"
-        case .accepted(let task, let title): return "Accepted" + (title.map { ": \($0)" } ?? task.map { ": task \($0)" } ?? "")
-        case .rejected(let note): return "Rejected" + (note.map { ": \($0)" } ?? "")
         }
     }
 
-    static func itemTitle(_ item: ScreenBatch.Item) -> String {
-        guard let app = item.app else { return "Item \(item.id) (no longer stored)" }
-        return "\(app): \(item.title ?? "")"
+    /// Reads the database off the main thread. An answer for a search the user has since changed is dropped.
+    private func refresh() {
+        guard let store else { return }
+        let asked = query
+        Task.detached(priority: .userInitiated) {
+            let found = asked.isEmpty ? store.recent(limit: 50) : []
+            let matched = asked.isEmpty ? [] : store.search(asked, limit: 50)
+            await MainActor.run {
+                guard asked == query else { return }
+                if asked.isEmpty { recent = found } else { hits = matched }
+            }
+        }
     }
 
-    static func itemDetail(_ item: ScreenBatch.Item) -> String {
-        guard let at = item.at else { return "Removed from the capture history" }
-        return "\(at.formatted(date: .abbreviated, time: .shortened)), \(item.state ?? "")"
+    private func loadText(_ id: Int64) {
+        guard let store else { return }
+        Task.detached(priority: .userInitiated) {
+            let text = store.capture(id: id)?.text
+            await MainActor.run { openText[id] = text }
+        }
     }
 }

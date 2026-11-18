@@ -454,11 +454,11 @@ final class TaskStoreTests: XCTestCase {
         return dir.appendingPathComponent("ironpet.db")
     }
 
-    func testMainDatabaseGetsTaskMigrationsAfterCapture() throws {
+    func testMainDatabaseGetsTheLaterTaskMigrations() throws {
         let path = temporaryDatabasePath()
         do {
-            let old = try Database(path: path, migrations: AppMigrations.all.filter { $0.version <= 302 })
-            XCTAssertEqual(old.schemaVersion, 302)
+            let old = try Database(path: path, migrations: AppMigrations.all.filter { $0.version <= 200 })
+            XCTAssertEqual(old.schemaVersion, 200)
             try old.write { db in
                 try db.execute("INSERT INTO task_suggestions(id, title, due, meeting, created) VALUES(?, ?, ?, ?, ?)",
                                ["book-the-room", "Book the room", "Friday", meeting.path, clock.timeIntervalSince1970])
@@ -466,7 +466,6 @@ final class TaskStoreTests: XCTestCase {
                     INSERT INTO task_items(id, title, notes, status, source, created, updated) VALUES('reply-to-sam', 'Reply to Sam',
                     'From screen capture items 1', 'backlog', 'capture', ?, ?)
                     """, [clock.timeIntervalSince1970, clock.timeIntervalSince1970])
-                try db.execute("INSERT INTO capture_ignored(fingerprint, kind, at) VALUES('abc', 'newTask', 0)")
             }
         }
         let migrated = try Database(path: path, migrations: AppMigrations.all)
@@ -476,7 +475,6 @@ final class TaskStoreTests: XCTestCase {
                                                              origin: .meeting(meeting), created: clock)])
         XCTAssertEqual(reopened.task("reply-to-sam")?.source, .capture)
         XCTAssertEqual(reopened.dueMarks(), [:])
-        XCTAssertEqual(try migrated.read { try $0.rows("SELECT fingerprint FROM capture_ignored") }.first?.first as? String, "abc")
 
         let added = reopened.suggest([TaskSuggestion.Draft(key: "1", title: "Review PR 12", due: nil)], automation: "prs", name: "PRs")
         XCTAssertEqual(added.count, 1)
@@ -488,8 +486,7 @@ final class TaskStoreTests: XCTestCase {
         }, "a suggestion has exactly one origin")
     }
 
-    /// A development build numbered the task migrations 201 to 203. Such a database reaches 302 through capture's migrations
-    /// and then runs the renumbered ones, which must find their changes already there.
+    /// A development build numbered the task migrations 201 to 203. Such a database then runs the renumbered ones, which must find their changes already there.
     func testDatabaseFromOldNumberingMigrates() throws {
         let path = temporaryDatabasePath()
         do {
@@ -533,13 +530,12 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(reopened.dueMarks(), ["send-the-deck": TaskDueMark(due: clock, snoozedUntil: nil)])
     }
 
-    func testTaskMigrationsComeAfterCaptureMigrations() {
+    func testNoTwoMigrationsShareAVersionAndNewOnesComeAfterEveryOldOne() {
         let versions = AppMigrations.all.map(\.version)
         XCTAssertEqual(Set(versions).count, versions.count, "no two migrations share a version")
-        let latestCapture = CaptureStore.migrations.map(\.version).max()!
-        let added = TaskStore.migrations.filter { $0.version > 200 }
-        XCTAssertFalse(added.isEmpty)
-        XCTAssertTrue(added.allSatisfy { $0.version > latestCapture }, "a database at capture's version would skip them")
+        // A database that already ran 431 skips anything numbered at or below it.
+        XCTAssertTrue(CaptureStore.migrations.allSatisfy { $0.version > 431 }, "a database at the old latest version would skip them")
+        XCTAssertTrue(TaskStore.migrations.contains { $0.version == 441 })
     }
 
     // MARK: Waiting on

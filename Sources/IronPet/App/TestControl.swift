@@ -54,10 +54,7 @@ final class TestControl {
     var onMeetingSummaryText: ((String, URL) -> Void)?
     /// Screen capture, for the `/test/screen/*` endpoints. They feed synthetic captures in, so no test reads the real screen.
     var screen: CaptureService?
-    private(set) var proposals: [CaptureProposal] = []
-    /// Shows a proposal as the analyzer's result would, with its Add, Edit and Ignore buttons.
-    var showProposal: ((CaptureProposal) -> Void)?
-    /// Opens the capture viewer and returns its window number.
+    /// Opens the Screen section and returns its window number.
     var showInspector: (() -> Int)?
     /// The welcome back summary, and the stand-in for the system idle time it samples (nil gives the real one back).
     var welcomeBack: WelcomeBack?
@@ -68,10 +65,6 @@ final class TestControl {
     var windowState: (() -> [String: Any])?
     /// Presses a Today row, as a click would.
     var openBrief: ((Brief.Target) -> Void)?
-
-    func recordProposal(_ proposal: CaptureProposal) {
-        proposals.append(proposal)
-    }
 
     init(chat: ChatSession, actions: Actions) {
         self.chat = chat
@@ -335,26 +328,12 @@ final class TestControl {
     private func screenSnapshot() -> Data {
         guard let screen else { return Self.encode(["ok": false, "error": "screen capture is not built"]) }
         let store = screen.store
-        let counts = Dictionary(uniqueKeysWithValues: ["new", "ready", "local", "sent"].map { ($0, store.count(inState: $0)) })
-        var status = "unknown"
-        var reason = ""
-        switch screen.filter.status {
-        case .unknown: break
-        case .off: status = "off"
-        case .ready(let model): status = "ready"; reason = model
-        case .unavailable(let why): status = "unavailable"; reason = why
-        }
         return Self.encode([
             "ok": true,
             "enabled": ConfigStore.shared.config.screenCapture.enabled,
             "running": screen.isRunning,
-            "items": store.itemCount,
-            "states": counts,
-            "decision": ["status": status, "reason": reason],
-            "tasks": (TaskStore.shared?.tasks ?? []).map { ["id": $0.id, "title": $0.title, "status": $0.status.rawValue, "source": $0.source.rawValue] },
-            "sendLog": store.sendLog().map { ["harness": $0.harness, "model": $0.model, "items": $0.items.map(Int.init), "bytes": $0.bytes, "outcome": $0.outcome] },
-            "proposals": proposals.map { ["id": $0.id, "kind": $0.kind.rawValue, "title": $0.title] },
-            "sending": screen.model.sending,
+            "captures": store.captureCount,
+            "recent": store.recent(limit: 20).map { ["id": $0.id, "app": $0.app, "window": $0.window, "trigger": $0.trigger, "text": $0.text] },
         ])
     }
 
@@ -362,38 +341,18 @@ final class TestControl {
         guard let screen else { return Self.encode(["ok": false, "error": "screen capture is not built"]) }
         switch path {
         case "/test/screen/ingest":
-            // A synthetic capture, as the pipeline would store it. `messages` is a list of "Author: text" lines.
-            let lines = (body["messages"] as? [String]) ?? []
-            let messages = lines.map { line -> CaptureMessage in
-                let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-                return parts.count == 2 ? CaptureMessage(author: parts[0], text: parts[1]) : CaptureMessage(text: line)
-            }
-            let thread = body["thread"] as? String ?? "test:thread"
-            let item = CaptureItem(app: CaptureApp(bundleId: body["app"] as? String ?? "com.example.chat", name: body["appName"] as? String ?? "Chat"),
-                                   threadKey: thread, threadTitle: body["title"] as? String ?? thread,
-                                   content: .conversation(title: thread, isGroup: false, messages: messages), parser: "test")
+            // A synthetic capture, as the pipeline would store it. `lines` is the window's text.
+            let lines = (body["lines"] as? [String]) ?? []
+            let app = CaptureApp(bundleId: body["app"] as? String ?? "com.example.app", name: body["appName"] as? String ?? "Example")
             let at = Date().addingTimeInterval(-((body["ageSeconds"] as? NSNumber)?.doubleValue ?? 0))
-            _ = try? screen.store.ingest(item, now: at)
-            screen.scheduleFilter()
-        case "/test/screen/stub":
-            screen.useStubs(answer: body["answer"] as? String ?? "{}", secretWords: body["secretWords"] as? [String] ?? [])
+            _ = try? screen.store.ingest(app: app, title: body["title"] as? String ?? "Window", url: body["url"] as? String,
+                                         trigger: .click, lines: lines, now: at)
+            screen.refreshModel()
         case "/test/screen/reset":
-            screen.store.clearCaptures()
-            screen.store.clearIgnored()
+            screen.store.clear()
             screen.refreshModel()
         case "/test/screen/inspector":
             return Self.encode(["ok": true, "windowId": showInspector?() ?? 0])
-        case "/test/screen/propose":
-            let title = body["title"] as? String ?? "Send the invoice"
-            let kind = CaptureProposal.Kind(rawValue: body["kind"] as? String ?? "new_task") ?? .newTask
-            let proposal = CaptureProposal(id: CaptureStore.fingerprint(kind: kind.rawValue, title: title), kind: kind, title: title, notes: "", due: body["due"] as? String,
-                                           taskId: body["taskId"] as? String, status: nil, sources: [1], quote: body["quote"] as? String ?? "", diff: [])
-            showProposal?(proposal)
-        case "/test/screen/filter":
-            Task { let result = await screen.filter.run(on: screen.store, tasks: screen.tasks); if result.ready > 0 { screen.analyzer.noteReady() }; screen.refreshModel() }
-        case "/test/screen/send":
-            // Sends the pending batch now instead of waiting for the delay.
-            Task { _ = await screen.analyzer.run(); screen.refreshModel() }
         default:
             break
         }

@@ -32,41 +32,27 @@ final class ConfigTests: XCTestCase {
         XCTAssertFalse(config.integrations.claudeHooks)
     }
 
-    func testScreenCaptureIsOffByDefaultAndSendsNothingUntilAppsAreAllowed() throws {
+    func testScreenCaptureIsOffByDefaultWithTheScreenshotFallbackOffAndSevenDaysOfHistory() throws {
         let defaults = Config().screenCapture
         XCTAssertFalse(defaults.enabled)
-        XCTAssertTrue(defaults.sendApps.isEmpty)
-        XCTAssertEqual(defaults.delayMinutes, 3)
-        XCTAssertEqual(defaults.retentionDays, 30)
-        XCTAssertEqual(defaults.decision.secretThreshold, 0.6)
-        XCTAssertEqual(defaults.decision.calendarThreshold, 0.2)
-        XCTAssertEqual(defaults.decision.skipThreshold, 0)
-        try write(#"{"screenCapture":{"enabled":true,"delayMinutes":0,"retentionDays":9999,"decision":{"secretThreshold":7}}}"#)
+        XCTAssertFalse(defaults.ocr)
+        XCTAssertEqual(defaults.retentionDays, 7)
+        XCTAssertTrue(defaults.excludedApps.isEmpty)
+        try write(#"{"screenCapture":{"enabled":true,"ocr":true,"retentionDays":9999}}"#)
         let (config, error) = Config.load(from: file)
         XCTAssertNil(error)
         XCTAssertTrue(config.screenCapture.enabled)
-        XCTAssertEqual(config.screenCapture.delayMinutes, 0.5, "clamped")
-        XCTAssertEqual(config.screenCapture.retentionDays, 365)
-        XCTAssertEqual(config.screenCapture.decision.secretThreshold, 1)
-        XCTAssertEqual(config.screenCapture.decision.api, "systemone", "other keys keep their defaults")
+        XCTAssertTrue(config.screenCapture.ocr)
+        XCTAssertEqual(config.screenCapture.retentionDays, 365, "clamped")
     }
 
-    func testAFreshConfigDefaultsTheSecretThresholdTo0Point6() throws {
-        try write("{}")
-        let loaded = Config.load(from: file).config.screenCapture.decision
-        XCTAssertEqual(loaded.secretThreshold, 0.6)
-        XCTAssertEqual(loaded.calendarThreshold, 0.2)
-        XCTAssertEqual(loaded.skipThreshold, 0)
-        try write(#"{"screenCapture":{"decision":{"secretThreshold":0.2}}}"#)
-        XCTAssertEqual(Config.load(from: file).config.screenCapture.decision.secretThreshold, 0.2, "a stored value is kept")
-    }
-
-    func testEveryDecisionThresholdIsClampedToZeroToOne() throws {
-        try write(#"{"screenCapture":{"decision":{"secretThreshold":-3,"calendarThreshold":1.5,"skipThreshold":9}}}"#)
-        let decision = Config.load(from: file).config.screenCapture.decision
-        XCTAssertEqual(decision.secretThreshold, 0)
-        XCTAssertEqual(decision.calendarThreshold, 1)
-        XCTAssertEqual(decision.skipThreshold, 1)
+    func testKeysOfTheOldCapturePipelineAreIgnoredAndDroppedOnTheNextSave() throws {
+        try write(#"{"screenCapture":{"enabled":true,"delayMinutes":3,"agent":"claude","sendApps":["a"],"decision":{"secretThreshold":0.2}}}"#)
+        let (config, error) = Config.load(from: file)
+        XCTAssertNil(error)
+        XCTAssertTrue(config.screenCapture.enabled)
+        let saved = String(decoding: try JSONEncoder().encode(config.screenCapture), as: UTF8.self)
+        for key in ["delayMinutes", "agent", "sendApps", "decision"] { XCTAssertFalse(saved.contains(key), key) }
     }
 
     func testPartialFileIsLaidOverDefaults() throws {

@@ -1463,13 +1463,13 @@ SCREEN_SLACK = "com.tinyspeck.slackmacgap"
 
 
 class ScreenConfig:
-    """Turns screen capture on for the scenario and puts config.json back. In test mode the app reads no screen and starts no agent: the
-    scenario feeds captures in through /test/screen/ingest and answers the analysis and the decision model with stubs."""
+    """Turns screen capture on for the scenario and puts config.json back. In test mode the app reads no screen: the scenario feeds
+    captures in through /test/screen/ingest."""
 
     def __enter__(self):
         self.saved = open(CONFIG).read() if os.path.exists(CONFIG) else None
         config = read_config()
-        config["screenCapture"] = {"enabled": True, "sendApps": [SCREEN_SLACK], "delayMinutes": 0.5}
+        config["screenCapture"] = {"enabled": True}
         json.dump(config, open(CONFIG, "w"), indent=2)
         time.sleep(2.6)
         return self
@@ -1487,78 +1487,47 @@ def screen_state():
     return call("GET", "/test/screen")
 
 
-def screen_proposals():
-    return [b for b in call("GET", "/test/automations")["bubbles"] if b["id"].startswith("capture-proposal:")]
+def mcp_tool(name, arguments):
+    """Calls one MCP tool on the loopback server, as the stdio bridge does for an agent. Returns the parsed JSON result."""
+    port = open(f"{ROOT}/port").read().strip()
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/mcp", data=body, method="POST",
+                                 headers={"X-Ironpet-Token": token(), "Content-Type": "application/json"})
+    reply = json.loads(urllib.request.urlopen(req, timeout=10).read())
+    text = reply["result"]["content"][0]["text"]
+    return {"isError": reply["result"].get("isError", False), "result": json.loads(text) if text.startswith("{") else text}
 
 
 def scenario_screen():
-    """Screen capture: captures pass the local filter, one agent run suggests tasks, Add creates a capture task, Ignore is remembered."""
-    with PreservedTasks(), ScreenConfig():
-        call("POST", "/test/tasks/reset")
+    """Screen capture: stored captures keep only what is new, redact secrets, and are found through the screen_* MCP tools."""
+    with ScreenConfig():
         call("POST", "/test/screen/reset")
-        # The chat the user is in, which capture must leave alone.
-        fresh_workspace()
-        call("POST", "/test/chat", {"newChat": True, "workspace": WS, "prompt": ""})
-        before = chat()
-        # The draft is left out here: the chat is the key window while this runs, so the person at the keyboard can type into it. A unit test covers it.
-        keys = ("workspace", "sessionId", "agent", "model", "history", "items", "state")
+        window = {"app": SCREEN_SLACK, "appName": "Slack", "title": "Ana (DM)"}
+        call("POST", "/test/screen/ingest", {**window, "lines": ["Ana", "Can you review PR 4649?", "The deploy waits for it."]})
+        call("POST", "/test/screen/ingest", {**window, "lines": ["Ana", "Can you review PR 4649?", "The deploy waits for it."]})
+        call("POST", "/test/screen/ingest", {**window, "lines": ["Ana", "Can you review PR 4649?", "The deploy waits for it.", "Looks good, merging."]})
+        key = "AKIA" + "IOSFODNN7EXAMPLE"
+        call("POST", "/test/screen/ingest", {"app": "com.apple.Notes", "appName": "Notes", "title": "Keys", "lines": [f"deploy key {key}"]})
+        state = screen_state()
+        record("Screen: an identical second capture stores nothing, a changed one stores only the new line",
+               state["captures"] == 3 and any(c["text"].startswith("The deploy waits for it.\nLooks good, merging.") for c in state["recent"]),
+               f"captures={state['captures']}")
+        record("Screen: a key in the text is redacted before it is stored",
+               not any(key in c["text"] for c in state["recent"]) and any("[redacted:aws-key]" in c["text"] for c in state["recent"]))
 
-        answer = json.dumps({"new_tasks": [
-            {"title": "Send the invoice to Dana", "source_items": "$IDS", "quote": "send the invoice to Dana"},
-            {"title": "Water the plants", "source_items": "$IDS", "quote": "water the plants"}]})
-        call("POST", "/test/screen/stub", {"answer": answer, "secretWords": ["rosebud"]})
-
-        # Three versions of one Slack thread, a secret in another, and a thread from an app that is not allowed to send.
-        thread = {"app": SCREEN_SLACK, "appName": "Slack", "thread": "slack:acme/ana", "title": "Ana", "ageSeconds": 3600}
-        call("POST", "/test/screen/ingest", {**thread, "messages": ["Ana: Can you send the invoice to Dana?"]})
-        call("POST", "/test/screen/ingest", {**thread, "messages": ["Ana: Can you send the invoice to Dana?", "Ana: and water the plants"]})
-        call("POST", "/test/screen/ingest", {**thread, "messages": ["Ana: Can you send the invoice to Dana?", "Ana: and water the plants", "Ana: thanks"]})
-        # A secret the rules know is redacted and the message is still sent. One only the model calls a secret stays on the Mac.
-        call("POST", "/test/screen/ingest", {**thread, "thread": "slack:acme/ops", "title": "Ops", "messages": ["Bo: the wifi password is hunter2"]})
-        call("POST", "/test/screen/ingest", {**thread, "thread": "slack:acme/vault", "title": "Vault", "messages": ["Bo: the unlock phrase is rosebud"]})
-        call("POST", "/test/screen/ingest", {"app": "com.apple.Notes", "appName": "Notes", "thread": "notes:private", "title": "Private",
-                                              "ageSeconds": 3600, "messages": ["buy milk and call the doctor"]})
-        call("POST", "/test/screen/filter")
-        # Items from an app that may not send move to "local" a moment after the filter, when the next send is scheduled.
-        settled = lambda: screen_state() if screen_state()["states"]["new"] == 0 and screen_state()["states"]["ready"] == 4 else None
-        state = wait_for(settled, 15) or screen_state()
-        record("Screen: the filter redacts what the rules know, keeps the model-flagged secret and the other app's text on the Mac, passes the rest",
-               state["states"]["new"] == 0 and state["states"]["ready"] == 4 and state["states"]["local"] == 2, f"states={state['states']}")
-
-        call("POST", "/test/screen/send")
-        bubbles = wait_for(lambda: screen_proposals() if len(screen_proposals()) >= 2 else None, 15) or []
-        log = screen_state()["sendLog"]
-        record("Screen: one run for the allowed app's passed items, and the log says what was redacted and that it was sent",
-               len(log) == 1 and len(log[0]["items"]) == 4 and log[0]["outcome"].startswith("redacted 1 span (secret-assignment 1), sent"), f"sendLog={log}")
-        record("Screen: the suggestions appear as bubbles with Add, Edit and Ignore",
-               len(bubbles) == 2 and all(b["buttons"] == ["Add", "Edit", "Ignore"] for b in bubbles),
-               f"bubbles={[(b['title'], b['buttons']) for b in bubbles]}")
-        record("Screen: nothing is added before a click", not any(t["source"] == "capture" for t in tasks_state()["tasks"]))
-
-        add = next(b for b in bubbles if "invoice" in b["body"])
-        skip = next(b for b in bubbles if "plants" in b["body"])
-        call("POST", "/test/automations/bubble", {"id": add["id"], "button": "Add"})
-        made = wait_for(lambda: next((t for t in tasks_state()["tasks"] if t["title"] == "Send the invoice to Dana"), None), 10)
-        record("Screen: Add creates a task in the Tasks section with source capture and the capture ids in its notes",
-               bool(made) and made["source"] == "capture" and "From screen capture items" in made.get("notes", ""),
-               f"task={made and (made['title'], made['source'], made.get('notes'))}")
-        call("POST", "/test/automations/bubble", {"id": skip["id"], "button": "Ignore"})
-        record("Screen: Ignore adds no task", not any(t["title"] == "Water the plants" for t in tasks_state()["tasks"]))
-
-        # The same suggestions again: the added task already exists and the ignored one is remembered.
-        call("POST", "/test/screen/ingest", {**thread, "messages": ["Ana: Can you send the invoice to Dana?", "Ana: and water the plants", "Ana: thanks", "Ana: ping"]})
-        call("POST", "/test/screen/filter")
-        wait_for(lambda: screen_state()["states"]["ready"] == 1, 15)
-        call("POST", "/test/screen/send")
-        wait_for(lambda: len(screen_state()["sendLog"]) == 2, 15)
-        time.sleep(1)
-        record("Screen: a task that exists and an ignored suggestion are not suggested again", not screen_proposals(),
-               f"bubbles={[(b['title'], b['body']) for b in screen_proposals()]}")
-
-        after = chat()
-        same = {k: (before.get(k), after.get(k)) for k in keys if before.get(k) != after.get(k)}
-        record("Screen: the user's chat session and folder are unchanged", not same, f"changed={same}")
-        call("POST", "/test/tasks/reset")
+        tools = [t["name"] for t in json.loads(urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{open(f'{ROOT}/port').read().strip()}/mcp", method="POST", headers={"X-Ironpet-Token": token()},
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()), timeout=10).read())["result"]["tools"]]
+        record("Screen: screen_search and screen_window are listed for the chat agents", "screen_search" in tools and "screen_window" in tools,
+               f"tools={[t for t in tools if t.startswith('screen_')]}")
+        found = mcp_tool("screen_search", {"query": "4649", "since": "today"})
+        hits = found["result"].get("hits", []) if not found["isError"] else []
+        record("Screen: screen_search finds the PR number with id, app, window and snippet",
+               bool(hits) and all(k in hits[0] for k in ("id", "time", "app", "window", "snippet")), f"hits={hits[:1]}")
+        if hits:
+            whole = mcp_tool("screen_window", {"id": hits[-1]["id"]})
+            record("Screen: screen_window returns the stored text for an id",
+                   not whole["isError"] and "4649" in whole["result"]["capture"]["text"], f"result={whole['result']}")
         call("POST", "/test/screen/reset")
 
 
@@ -1770,7 +1739,7 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # the system between light and dark mode for screenshots, saved to $IRONPET_E2E_SHOTS.
 # "meeting" does the same for meeting transcripts, and also runs one Claude Code summary (haiku). "meeting-system" needs
 # Screen & System Audio Recording granted to IronPet and plays a sentence with afplay.
-# "screen" feeds synthetic captures in and stubs the model and the agent, so it reads no screen and starts no agent; it puts ironpet.db and
+# "screen" feeds synthetic captures in and calls the screen_* MCP tools, so it reads no screen and starts no agent; it puts ironpet.db and
 # config.json back afterwards.
 # "tasks" runs two short turns on $IRONPET_E2E_AGENT (default cursor) and puts ironpet.db back afterwards.
 # "welcome-back" posts synthetic Claude hook events and a stand-in idle time, so it runs no agent; it puts config.json and ironpet.db back.

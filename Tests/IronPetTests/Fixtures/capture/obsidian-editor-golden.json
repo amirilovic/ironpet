@@ -1,8 +1,0 @@
-{
-  "phase": 4,
-  "content": {
-    "kind": "document",
-    "title": "Index rebuild",
-    "text": "Index rebuild\nNormalize vectors before comparison.\nKeep the local cache warm."
-  }
-}

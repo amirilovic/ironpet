@@ -79,6 +79,21 @@ final class TaskStore: ObservableObject {
                 task TEXT, note TEXT, at REAL NOT NULL);
             CREATE INDEX IF NOT EXISTS task_suggestion_outcomes_by_log ON task_suggestion_outcomes(send_log, id);
             """),
+        // The in-app screen capture analysis is gone, so its proposals, their columns and the outcome log go with it. Suggestions from
+        // meetings and automations are copied over unchanged. A table's CHECK cannot change in place, so the table is rebuilt.
+        .init(441, "tasks: drop screen capture suggestions and outcomes") { db in
+            try db.script("""
+                CREATE TABLE task_suggestions_441(id TEXT PRIMARY KEY, title TEXT NOT NULL, due TEXT, notes TEXT NOT NULL DEFAULT '', url TEXT,
+                                                  meeting TEXT, automation TEXT, automation_name TEXT, created REAL NOT NULL, waiting_on TEXT,
+                                                  source_ref TEXT, CHECK ((meeting IS NULL) <> (automation IS NULL))) WITHOUT ROWID;
+                INSERT INTO task_suggestions_441(id, title, due, notes, url, meeting, automation, automation_name, created, waiting_on, source_ref)
+                    SELECT id, title, due, notes, url, meeting, automation, automation_name, created, waiting_on, source_ref
+                    FROM task_suggestions WHERE meeting IS NOT NULL OR automation IS NOT NULL;
+                DROP TABLE task_suggestions;
+                ALTER TABLE task_suggestions_441 RENAME TO task_suggestions;
+                DROP TABLE IF EXISTS task_suggestion_outcomes;
+                """)
+        },
     ]
 
     /// A source reference as stored: a JSON object, keys sorted.
@@ -301,8 +316,6 @@ final class TaskStore: ObservableObject {
             case .automation(let automation, let name):
                 ref = ["ref": automation, "reason": "Suggested by the \(name) watcher", "automation": automation,
                        "at": ISO8601DateFormatter().string(from: time)]
-            case .capture:
-                ref = [:]
             }
             added.append((draft.key, TaskSuggestion(id: id, title: title, due: draft.due, notes: draft.notes, url: draft.url,
                                                     origin: origin, created: time, waitingOn: waitingOn, sourceRef: Self.refText(ref))))
@@ -318,7 +331,6 @@ final class TaskStore: ObservableObject {
                         (automation, name) = (id, n)
                         try db.execute("INSERT OR REPLACE INTO task_suggestion_keys(automation, key, at) VALUES(?, ?, ?)",
                                        [id, key, time.timeIntervalSince1970])
-                    case .capture: break
                     }
                     try db.execute("""
                         INSERT INTO task_suggestions(id, title, due, notes, url, meeting, automation, automation_name, created, waiting_on, source_ref)
@@ -336,71 +348,6 @@ final class TaskStore: ObservableObject {
         return added.map(\.suggestion)
     }
 
-    /// Stores what screen capture's analysis proposed, one pending suggestion per proposal. Nothing changes a task: an update
-    /// or a close waits here for accept. A proposal already waiting (same fingerprint) is left out, and so is a new task whose
-    /// title is a task or suggestion already.
-    @discardableResult
-    func suggest(capture proposals: [CaptureProposal]) -> [TaskSuggestion] {
-        var titles = Set(tasks.map { ActionItems.normalized($0.title) } + suggestions.map { ActionItems.normalized($0.title) })
-        var fingerprints = Set(suggestions.compactMap(\.fingerprint))
-        var taken = Set(suggestions.map(\.id))
-        let time = now()
-        var added: [TaskSuggestion] = []
-        for proposal in proposals {
-            guard let title = try? TaskValidator.title(proposal.title), let kind = TaskSuggestion.Kind(rawValue: proposal.kind.rawValue),
-                  !fingerprints.contains(proposal.id) else { continue }
-            var changes: [String: String] = [:]
-            var target: String?
-            if kind == .update {
-                guard let id = proposal.taskId, task(id) != nil else { continue }
-                target = id
-                changes["title"] = title
-                changes["notes"] = proposal.notes
-                if let due = proposal.due { changes["due"] = due }
-                if let status = proposal.status { changes["status"] = status }
-                // Only the fields the diff names change, so the others are not rewritten with the task's own text.
-                changes = changes.filter { key, _ in proposal.diff.contains { $0.hasPrefix(key + ":") } }
-            } else if titles.contains(ActionItems.normalized(title)) {
-                continue
-            }
-            let quote = proposal.quote.isEmpty ? "" : ": \u{201C}\(proposal.quote.prefix(300))\u{201D}"
-            var captureRef: [String: Any] = ["ref": proposal.sendLog.map { "capture_send_log:\($0)" } ?? proposal.id,
-                                             "reason": "Screen capture proposed it\(quote)", "items": proposal.sources,
-                                             "fingerprint": proposal.id]
-            if let log = proposal.sendLog { captureRef["send_log"] = log }
-            let id = AutomationValidator.slug(title, taken: taken)
-            taken.insert(id)
-            fingerprints.insert(proposal.id)
-            titles.insert(ActionItems.normalized(title))
-            added.append(TaskSuggestion(id: id, title: title, due: proposal.due, notes: proposal.notes, url: nil,
-                                        origin: .capture(fingerprint: proposal.id), created: time, kind: kind, target: target,
-                                        changes: changes, diff: proposal.diff, quote: proposal.quote, evidence: proposal.sources,
-                                        sourceRef: Self.refText(captureRef)))
-        }
-        guard !added.isEmpty else { return [] }
-        do {
-            try database.write { db in
-                for s in added {
-                    try db.execute("""
-                        INSERT INTO task_suggestions(id, title, due, notes, capture, kind, target, changes, diff, quote, evidence, created, source_ref)
-                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, [s.id, s.title, s.due, s.notes, s.fingerprint, s.kind.rawValue, s.target, Self.encode(s.changes), Self.encode(s.diff),
-                              s.quote, Self.encode(s.evidence), s.created.timeIntervalSince1970, s.sourceRef])
-                }
-            }
-        } catch {
-            NSLog("ironpet: could not store capture suggestions: \(error.localizedDescription)")
-            return []
-        }
-        reload()
-        onChange?(nil)
-        return added
-    }
-
-    private static func encode(_ value: Any) -> String {
-        (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])).flatMap { String(data: $0, encoding: .utf8) } ?? ""
-    }
-
     private func suggestedKeys(_ automation: String) -> Set<String> {
         Set((try? database.read { db in
             try db.rows("SELECT key FROM task_suggestion_keys WHERE automation = ?", [automation]).compactMap { $0[0] as? String }
@@ -416,111 +363,42 @@ final class TaskStore: ObservableObject {
     }
 
     /// Turns a suggestion into a backlog task, linked to its meeting folder or to the url the automation gave, and waiting
-    /// on the suggestion's owner if it has one. A capture update changes the task it targets instead, and `note` goes to
-    /// that task's history.
+    /// on the suggestion's owner if it has one. `note` goes to the new task's history.
     @discardableResult
     func accept(_ suggestionID: String, overrides: Overrides = Overrides(), note: String? = nil, by: String = "user") throws -> TaskItem {
         guard let s = suggestions.first(where: { $0.id == suggestionID }) else { throw TaskError(message: "no suggestion \"\(suggestionID)\"") }
         let note = try note.map { try TaskValidator.notes($0) }
-        let item: TaskItem
-        if case .capture = s.origin {
-            item = try applyCapture(s, overrides, note: note, by: by)
-        } else {
-            let due = try? TaskValidator.due(overrides.due ?? s.due)
-            var notes = overrides.notes ?? s.notes
-            var links: [TaskLink] = []
-            if let folder = s.meeting {
-                links.append(TaskLink(kind: .file, ref: folder.path, label: "Meeting"))
-                if due == nil, let text = s.due { notes = "Due (from the meeting): \(text)" }
-            }
-            if let url = s.url { links.append(TaskLink(kind: .url, ref: url.absoluteString, label: nil)) }
-            let status = try overrides.status.map { try TaskValidator.status($0) } ?? .backlog
-            var created = try create(title: overrides.title ?? s.title, notes: notes, status: status, source: s.source, due: due, links: links,
-                                     waitingOn: s.waitingOn, sourceRef: s.sourceRef, by: by)
-            if let note, !note.isEmpty { created = try update(created.id, note: note, by: by) }
-            item = created
+        let due = try? TaskValidator.due(overrides.due ?? s.due)
+        var notes = overrides.notes ?? s.notes
+        var links: [TaskLink] = []
+        if let folder = s.meeting {
+            links.append(TaskLink(kind: .file, ref: folder.path, label: "Meeting"))
+            if due == nil, let text = s.due { notes = "Due (from the meeting): \(text)" }
         }
-        recordOutcome(s, "accepted", task: item.id, note: note)
+        if let url = s.url { links.append(TaskLink(kind: .url, ref: url.absoluteString, label: nil)) }
+        let status = try overrides.status.map { try TaskValidator.status($0) } ?? .backlog
+        var item = try create(title: overrides.title ?? s.title, notes: notes, status: status, source: s.source, due: due, links: links,
+                              waitingOn: s.waitingOn, sourceRef: s.sourceRef, by: by)
+        if let note, !note.isEmpty { item = try update(item.id, note: note, by: by) }
         removeSuggestion(suggestionID)
         return item
     }
 
-    /// The send log id a capture suggestion or task came from, read from its source reference.
-    nonisolated static func sendLog(of ref: String?) -> Int64? {
-        guard let ref, let object = refValue(ref) as? [String: Any] else { return nil }
-        return (object["send_log"] as? NSNumber)?.int64Value
-    }
-
-    /// What became of the capture suggestions a send produced, oldest first: `(suggestion, kind, title, quote, outcome, task, note)`.
-    func captureOutcomes(sendLog: Int64) -> [[Database.Value]] {
-        (try? database.read {
-            try $0.rows("SELECT suggestion, kind, title, quote, outcome, task, note FROM task_suggestion_outcomes WHERE send_log = ? ORDER BY id", [sendLog])
-        }) ?? []
-    }
-
-    /// Keeps what became of a capture suggestion, so the batch that produced it can still list it after it leaves the suggestions.
-    private func recordOutcome(_ s: TaskSuggestion, _ outcome: String, task: String? = nil, note: String? = nil) {
-        guard let log = Self.sendLog(of: s.sourceRef) else { return }
-        try? database.write {
-            try $0.execute("""
-                INSERT INTO task_suggestion_outcomes(send_log, suggestion, kind, title, quote, outcome, task, note, at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, [log, s.id, s.kind.rawValue, s.title, s.quote, outcome, task, note, now().timeIntervalSince1970])
-        }
-    }
-
-    private func applyCapture(_ s: TaskSuggestion, _ o: Overrides, note: String?, by: String) throws -> TaskItem {
-        let origin = "From screen capture items \(s.evidence.map(String.init).joined(separator: ", "))"
-        let historyNote = [note, origin, s.sourceRef.map { "source: \($0)" }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
-        // A date the task store cannot read stays visible in the notes instead of being lost.
-        func due(_ text: String?, notes: inout String) throws -> Date?? {
-            guard let text, !text.isEmpty else { return nil }
-            if let parsed = try? TaskValidator.due(text) { return .some(parsed) }
-            notes += (notes.isEmpty ? "" : "\n") + "Due: \(text)"
-            return nil
-        }
-        if s.kind == .update {
-            guard let id = s.target, let current = task(id) else { throw TaskError(message: "the task this suggestion changes no longer exists") }
-            var notes = o.notes ?? s.changes["notes"] ?? current.notes
-            let date = try due(o.due ?? s.changes["due"], notes: &notes)
-            let status = try (o.status ?? s.changes["status"]).map { try TaskValidator.status($0) }
-            return try update(id, title: o.title ?? s.changes["title"], notes: notes, status: status, due: date, note: historyNote, by: by)
-        }
-        var notes = o.notes ?? s.notes
-        if s.kind == .calendar { notes += (notes.isEmpty ? "" : "\n") + "Calendar candidate" }
-        if !s.quote.isEmpty { notes += (notes.isEmpty ? "" : "\n") + "\u{201C}\(s.quote)\u{201D}" }
-        notes += (notes.isEmpty ? "" : "\n") + origin
-        let date = try due(o.due ?? s.due, notes: &notes)
-        let status = try o.status.map { try TaskValidator.status($0) } ?? .backlog
-        let item = try create(title: o.title ?? s.title, notes: notes, status: status, source: .capture, due: date ?? nil, sourceRef: s.sourceRef, by: by)
-        guard let note, !note.isEmpty else { return item }
-        return try update(item.id, note: note, by: by)
-    }
-
-    /// Adds every suggestion that makes a new task. A capture update or close changes an existing task, so it needs its own accept.
+    /// Adds every suggestion as a new task.
     func acceptAll() {
-        for s in suggestions where s.kind != .update { _ = try? accept(s.id) }
+        for s in suggestions { _ = try? accept(s.id) }
     }
 
-    /// Removes a suggestion. A capture suggestion's fingerprint is remembered, so the analysis does not propose it again.
-    func skip(_ suggestionID: String, note: String? = nil) {
-        if let s = suggestions.first(where: { $0.id == suggestionID }) {
-            if let fingerprint = s.fingerprint { ignoreCapture(fingerprint, s.kind.rawValue) }
-            let reason = note?.trimmingCharacters(in: .whitespacesAndNewlines)
-            recordOutcome(s, "rejected", note: reason?.isEmpty == false ? reason : nil)
-        }
+    /// Removes a suggestion.
+    func skip(_ suggestionID: String) {
         removeSuggestion(suggestionID)
     }
 
-    /// Remembers a rejected capture proposal. The app sets it to `CaptureStore.ignore`.
-    var ignoreCapture: (_ fingerprint: String, _ kind: String) -> Void = { _, _ in }
-
-    /// `skip` with a reason, for a reviewer. The reason goes to the history of the task an update targeted.
+    /// `skip` with a reason, for a reviewer.
     func reject(_ suggestionID: String, note: String? = nil, by: String) throws {
-        guard let s = suggestions.first(where: { $0.id == suggestionID }) else { throw TaskError(message: "no suggestion \"\(suggestionID)\"") }
-        if let note = try note.map({ try TaskValidator.notes($0) }), !note.isEmpty, let target = s.target, task(target) != nil {
-            try update(target, note: "Rejected a suggestion (\(s.title)): \(note)", by: by)
-        }
-        skip(suggestionID, note: note)
+        guard suggestions.contains(where: { $0.id == suggestionID }) else { throw TaskError(message: "no suggestion \"\(suggestionID)\"") }
+        _ = try note.map { try TaskValidator.notes($0) }
+        skip(suggestionID)
     }
 
     // MARK: Due reminders
@@ -666,26 +544,17 @@ final class TaskStore: ObservableObject {
     }
 
     func json(_ s: TaskSuggestion) -> [String: Any] {
-        var object: [String: Any] = ["id": s.id, "title": s.title, "kind": s.kind.rawValue,
+        var object: [String: Any] = ["id": s.id, "title": s.title,
                                      "created": ISO8601DateFormatter().string(from: s.created)]
         switch s.origin {
         case .meeting(let folder): object["origin"] = "meeting"; object["origin_detail"] = folder.path
         case .automation(let id, let name): object["origin"] = "automation"; object["origin_detail"] = "\(name) (\(id))"
-        case .capture: object["origin"] = "capture"
         }
         if let due = s.due { object["due"] = due }
         if !s.notes.isEmpty { object["notes"] = s.notes }
         if let url = s.url { object["url"] = url.absoluteString }
         if let waitingOn = s.waitingOn { object["waiting_on"] = waitingOn }
         if let ref = s.sourceRef { object["source_ref"] = Self.refValue(ref) }
-        if let target = s.target {
-            object["target"] = target
-            if let task = task(target) { object["target_title"] = task.title }
-        }
-        if !s.changes.isEmpty { object["changes"] = s.changes }
-        if !s.diff.isEmpty { object["diff"] = s.diff }
-        if !s.quote.isEmpty { object["quote"] = s.quote }
-        if !s.evidence.isEmpty { object["evidence_ids"] = s.evidence }
         return object
     }
 
@@ -707,7 +576,6 @@ final class TaskStore: ObservableObject {
                 try db.execute("DELETE FROM task_items WHERE status = 'done' AND closed < ?", [cutoff])
                 try db.execute("DELETE FROM task_due_marks WHERE task NOT IN (SELECT id FROM task_items)")
                 try db.execute("DELETE FROM task_events WHERE at < ? AND task NOT IN (SELECT id FROM task_items)", [cutoff])
-                try db.execute("DELETE FROM task_suggestion_outcomes WHERE at < ?", [cutoff])
                 try db.execute("DELETE FROM task_suggestion_keys WHERE at < ?",
                                [time.addingTimeInterval(-Double(Self.keepSuggestedKeysDays) * 86_400).timeIntervalSince1970])
             }
@@ -745,8 +613,7 @@ final class TaskStore: ObservableObject {
                                     sourceRef: row[10] as? String)
                 }
                 let suggested = try db.rows("""
-                    SELECT id, title, due, notes, url, meeting, automation, automation_name, created, waiting_on,
-                           capture, kind, target, changes, diff, quote, evidence, source_ref
+                    SELECT id, title, due, notes, url, meeting, automation, automation_name, created, waiting_on, source_ref
                     FROM task_suggestions ORDER BY created, id
                     """).compactMap { row -> TaskSuggestion? in
                     guard let id = row[0] as? String, let title = row[1] as? String, let created = row[8] as? Double else { return nil }
@@ -755,21 +622,13 @@ final class TaskStore: ObservableObject {
                         origin = .meeting(URL(fileURLWithPath: meeting))
                     } else if let automation = row[6] as? String {
                         origin = .automation(id: automation, name: row[7] as? String ?? automation)
-                    } else if let fingerprint = row[10] as? String {
-                        origin = .capture(fingerprint: fingerprint)
                     } else {
                         return nil
-                    }
-                    func decoded<T>(_ column: Int, _: T.Type) -> T? {
-                        (row[column] as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? T
                     }
                     return TaskSuggestion(id: id, title: title, due: row[2] as? String, notes: row[3] as? String ?? "",
                                           url: (row[4] as? String).flatMap(URL.init(string:)), origin: origin,
                                           created: Date(timeIntervalSince1970: created), waitingOn: row[9] as? String,
-                                          kind: (row[11] as? String).flatMap(TaskSuggestion.Kind.init(rawValue:)) ?? .newTask,
-                                          target: row[12] as? String, changes: decoded(13, [String: String].self) ?? [:],
-                                          diff: decoded(14, [String].self) ?? [], quote: row[15] as? String ?? "",
-                                          evidence: (decoded(16, [NSNumber].self) ?? []).map(\.int64Value), sourceRef: row[17] as? String)
+                                          sourceRef: row[10] as? String)
                 }
                 return (items, suggested)
             }
