@@ -122,7 +122,7 @@ enum ApprovalRules {
 
     /// ironpet's own task tools only read and write rows in `ironpet.db` and run nothing, like memory-note edits. Delete still asks. The
     /// `screen_*` tools only read the stored, redacted captures.
-    static let ownTaskTools: Set<String> = ["tasks_list", "tasks_get", "tasks_create", "tasks_update", "tasks_close",
+    static let ownTaskTools: Set<String> = ["tasks_list", "tasks_get", "tasks_create", "tasks_update", "tasks_close", "tasks_suggest",
                                          "tasks_suggestions_list", "tasks_suggestion_accept", "tasks_suggestion_reject",
                                          "screen_search", "screen_window"]
 

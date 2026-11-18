@@ -401,6 +401,46 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertThrowsError(try TaskSuggestion.Draft(action: ["id": "c", "title": " \u{0001}\n "]))
     }
 
+    func testAgentSuggestionsShareTheScriptPathAndDedupePerOriginKind() throws {
+        let origin: [String: Any] = ["kind": "email", "ref": "mail:1", "reason": "Ana asked"]
+        func suggest(_ args: [String: Any], origin: [String: Any]? = nil) throws -> Any {
+            var args = args
+            args["origin"] = origin ?? self.suggestOrigin
+            switch store.call("suggest", args, by: "agent:cli") {
+            case .success(let value): return value
+            case .failure(let error): throw error
+            }
+        }
+        suggestOrigin = origin
+        let long = String(repeating: "x", count: 300)
+        _ = try suggest(["id": "mail:1", "title": long + "\u{0007}", "notes": String(repeating: "n", count: 3000), "due": "soon", "url": "ftp://x"])
+        let first = try XCTUnwrap(store.suggestions.first)
+        XCTAssertEqual(first.title.count, 200)
+        XCTAssertEqual(first.notes.count, 2000)
+        XCTAssertNil(first.due)
+        XCTAssertNil(first.url)
+        XCTAssertEqual(store.tasks, [])
+        XCTAssertEqual(first.origin, .automation(id: "agent:email", name: "email agent"))
+
+        _ = try suggest(["id": "mail:1", "title": "Different"])
+        XCTAssertEqual(store.suggestions.count, 1, "same id")
+        try store.skip(first.id)
+        _ = try suggest(["id": "mail:1", "title": long])
+        XCTAssertEqual(store.suggestions.count, 0, "same id after a skip")
+        let accepted = try suggest(["id": "mail:2", "title": "Book flights"])
+        _ = accepted
+        _ = try store.accept(try XCTUnwrap(store.suggestions.first).id)
+        _ = try suggest(["id": "mail:3", "title": "book flights"])
+        XCTAssertEqual(store.suggestions.count, 0, "a title that is already a task")
+        _ = try suggest(["id": "mail:1", "title": "Other kind"], origin: ["kind": "pr", "ref": "r", "reason": "x"])
+        XCTAssertEqual(store.suggestions.count, 1, "ids are kept per origin kind")
+        _ = try suggest(["id": "mail:1", "title": "Another"], origin: origin)
+        XCTAssertThrowsError(try suggest(["title": "No id"]))
+        XCTAssertThrowsError(try suggest(["id": "z"]))
+    }
+
+    private var suggestOrigin: [String: Any] = [:]
+
     func testAutomationSuggestionsAreNotRepeatedAfterSkipOrAccept() throws {
         try store.create(title: "Pay the invoice", source: .chat, by: "user")
         let added = store.suggest([draft("m1", "Reply to Sam"), draft("m1", "Reply to Sam again"), draft("m2", "Book flights"),

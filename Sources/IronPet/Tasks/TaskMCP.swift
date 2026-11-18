@@ -62,6 +62,13 @@ enum TaskMCP {
                  required: ["id", "changes"]),
             tool("tasks_close", "Mark a task done. note is required: the evidence that it is done.", id.merging(["note": note]) { a, _ in a }, required: ["id", "note"]),
             tool("tasks_suggestions_list", "List the pending suggestions: new tasks that meetings and watchers proposed. Nothing changes until you accept one.\n\n" + guide, [:]),
+            tool("tasks_suggest", "Propose a task without creating it. It waits in the Tasks section with Add and Skip for the user. Use it for things you found that the user has not asked you to track, such as an email that needs a reply. id must be stable for the thing you found (for example a message id): a suggestion with an id you sent before is ignored, also after the user added or skipped it, and so is a title that is already a task or a suggestion.",
+                 ["id": ["type": "string", "maxLength": TaskSuggestion.Draft.maxKey, "description": "Stable id of the thing you found, such as a mail or event id"],
+                  "title": ["type": "string", "maxLength": TaskSuggestion.Draft.maxTitle], "notes": ["type": "string", "maxLength": TaskSuggestion.Draft.maxNotes],
+                  "due": ["type": "string", "description": "Date, YYYY-MM-DD. Dropped if it does not parse."],
+                  "url": ["type": "string", "description": "http(s) link to the thing. Dropped if it does not parse."],
+                  "origin": origin],
+                 required: ["id", "title", "origin"]),
             tool("tasks_suggestion_accept", "Accept a suggestion: creates the task, or applies the update or close to its target task. Pass title, due, notes or status to change what is applied. note is kept in the task's history.",
                  id.merging(["title": ["type": "string"], "due": due, "notes": ["type": "string"], "status": status, "note": note]) { a, _ in a },
                  required: ["id", "note"]),
@@ -94,7 +101,9 @@ enum TaskCLI {
           status <id> <status> [--note N]
           done <id> --note EVIDENCE
           delete <id>
-          suggestions                     pending suggestions from meetings and watchers
+          suggest --title T --id ID --origin-kind K --origin-ref R --reason WHY [--due YYYY-MM-DD] [--notes N] [--url U]
+                                          propose a task. It waits as a suggestion; --id is stable, a repeated id is ignored
+          suggestions                     pending suggestions from meetings, watchers and agents
           accept <suggestion id> --note WHY [--title T] [--due D] [--notes N] [--status S]
           reject <suggestion id> --note WHY
         Origin kinds: chat, agent, meeting, capture, automation, email, pr, user. A note is required for done, accept and reject, and when the status changes.
@@ -120,7 +129,7 @@ enum TaskCLI {
         }
     }
 
-    private static let valueOptions: Set<String> = ["--notes", "--due", "--status", "--url", "--json", "--note", "--waiting-on", "--title", "--origin-kind", "--origin-ref", "--reason"]
+    private static let valueOptions: Set<String> = ["--notes", "--due", "--status", "--url", "--json", "--note", "--waiting-on", "--title", "--id", "--origin-kind", "--origin-ref", "--reason"]
 
     /// The operation and arguments a command sends to `POST /tasks`.
     static func request(_ arguments: [String]) throws -> (op: String, args: [String: Any]) {
@@ -189,6 +198,16 @@ enum TaskCLI {
             return ("close", args)
         case "delete":
             return ("delete", ["id": try id()])
+        case "suggest":
+            for (option, key) in [("--id", "id"), ("--title", "title"), ("--due", "due"), ("--notes", "notes"), ("--url", "url")] {
+                if let value = options[option] { args[key] = value }
+            }
+            var origin: [String: Any] = [:]
+            if let kind = options["--origin-kind"] { origin["kind"] = kind }
+            if let ref = options["--origin-ref"] { origin["ref"] = ref }
+            if let reason = options["--reason"] { origin["reason"] = reason }
+            if !origin.isEmpty { args["origin"] = origin }
+            return ("suggest", args)
         case "suggestions":
             return ("suggestions_list", [:])
         case "accept", "reject":

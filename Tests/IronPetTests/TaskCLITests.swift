@@ -19,6 +19,14 @@ final class TaskCLIParsingTests: XCTestCase {
         XCTAssertEqual(try request(["list", "--status", "backlog, in_progress"]).args, ["status": ["backlog", "in_progress"]])
     }
 
+    func testSuggest() throws {
+        let suggest = try request(["suggest", "--title", "Reply to Ana", "--id", "mail:abc", "--origin-kind", "email", "--origin-ref", "mail:abc",
+                                   "--reason", "Ana asked", "--due", "2026-11-20", "--notes", "N", "--url", "https://x.test"])
+        XCTAssertEqual(suggest.op, "suggest")
+        XCTAssertEqual(suggest.args as NSDictionary, ["title": "Reply to Ana", "id": "mail:abc", "due": "2026-11-20", "notes": "N", "url": "https://x.test",
+                                                      "origin": ["kind": "email", "ref": "mail:abc", "reason": "Ana asked"]] as NSDictionary)
+    }
+
     func testShow() throws {
         let show = try request(["show", "write-docs"])
         XCTAssertEqual(show.op, "get")

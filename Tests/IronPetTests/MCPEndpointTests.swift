@@ -38,7 +38,7 @@ final class MCPEndpointTests: XCTestCase {
         XCTAssertTrue(names.isSuperset(of: ["automations_list", "automations_create", "automations_run_now", "automations_history"]))
         XCTAssertEqual(Set(names.filter { $0.hasPrefix("tasks_") }),
                        ["tasks_list", "tasks_get", "tasks_create", "tasks_update", "tasks_close", "tasks_delete",
-                        "tasks_suggestions_list", "tasks_suggestion_accept", "tasks_suggestion_reject"])
+                        "tasks_suggest", "tasks_suggestions_list", "tasks_suggestion_accept", "tasks_suggestion_reject"])
         XCTAssertEqual(Set(names.filter { $0.hasPrefix("screen_") }), ["screen_search", "screen_window"], "the screen tools are listed for the chat agents")
         for tool in tools {
             let schema = tool["inputSchema"] as? [String: Any]
@@ -57,6 +57,27 @@ final class MCPEndpointTests: XCTestCase {
         let instructions = result["instructions"] as? String ?? ""
         XCTAssertTrue(instructions.contains("automations"))
         XCTAssertTrue(instructions.contains("task list"))
+    }
+
+    func testSuggestCreatesASuggestionAndRefusesIncompleteCalls() async throws {
+        let origin: [String: Any] = ["kind": "email", "ref": "mail:abc", "reason": "Ana asked for a date"]
+        let made = try await tool("tasks_suggest", ["id": "mail:abc", "title": "Reply to Ana", "origin": origin], tasks: tasks)
+        XCTAssertFalse(made.isError, made.text)
+        XCTAssertEqual(tasks.suggestions.map(\.title), ["Reply to Ana"])
+        XCTAssertEqual(tasks.tasks, [], "a suggestion is never a task")
+        XCTAssertTrue(try XCTUnwrap(tasks.suggestions.first?.sourceRef).contains("Ana asked for a date"))
+        let again = try await tool("tasks_suggest", ["id": "mail:abc", "title": "Another title", "origin": origin], tasks: tasks)
+        XCTAssertFalse(again.isError, again.text)
+        XCTAssertEqual(tasks.suggestions.count, 1, "same id is ignored")
+
+        for (missing, args) in [("title", ["id": "m2", "origin": origin] as [String: Any]),
+                                ("id", ["title": "No id", "origin": origin]),
+                                ("origin", ["id": "m3", "title": "No origin"]),
+                                ("origin.reason", ["id": "m4", "title": "No reason", "origin": ["kind": "email", "ref": "r"]])] {
+            let refused = try await tool("tasks_suggest", args, tasks: tasks)
+            XCTAssertTrue(refused.isError, "missing \(missing): \(refused.text)")
+        }
+        XCTAssertEqual(tasks.suggestions.count, 1, "refused calls create nothing")
     }
 
     func testCreateThenListRoundTripsThroughTheStore() async throws {
