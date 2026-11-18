@@ -250,12 +250,12 @@ The allowed users live in `telegram.allowedUsers` in config.json. A bad token, a
 
 Voice notes are off by default. ironpet ships and downloads no speech model; it records the microphone as a 16 kHz mono WAV and posts it to any server that speaks the OpenAI transcription API (`POST {baseUrl}/audio/transcriptions`, with `file`, `model` and `response_format=json`). With the feature off, the microphone is never opened, no permission is requested and nothing is sent.
 
-Turn it on under **Settings → Voice**, then fill in:
+Turn it on under **Settings → Voice → Talk to Ghost**, then fill in the **Server** section below it:
 
 | Setting | `config.json` key | Notes |
 | --- | --- | --- |
 | Base URL | `voice.baseUrl` | Without `/audio/transcriptions` |
-| Model | `voice.model` | Sent as the `model` field |
+| Transcription model | `voice.model` | Sent as the `model` field |
 | API key | none | Optional. Stored in the Keychain (`ironpet.voice`), never in `~/.ironpet` |
 | Voice shortcut | `hotkeys.voice` | Default <kbd>⌥⌘V</kbd>. Registered only while voice notes are on |
 | Hold to talk | `voice.holdToTalk` | Default on: hold the shortcut to record and release to transcribe. Off: press once to start and again to stop |
@@ -276,7 +276,7 @@ To record, click the microphone button in the chat input (click again to stop) o
 
 ### Spoken replies
 
-Ghost can answer out loud. Spoken replies are off by default. Turn them on under **Settings → Voice → Spoken replies**: pick a voice and press **Preview**, and the switch turns on once the preview plays. They use the server, base URL and key above, with their own model and voice (`POST {baseUrl}/audio/speech`). Voice notes don't have to be on.
+Ghost can answer out loud. Spoken replies are off by default. Turn them on under **Settings → Voice → Ghost talks back**: pick a voice and press **Preview**, and the switch turns on once the preview plays. They use the server, base URL and key above, with their own model (**Speech model** in the Server section) and voice (`POST {baseUrl}/audio/speech`). Voice notes don't have to be on.
 
 | Setting | `config.json` key | Notes |
 | --- | --- | --- |

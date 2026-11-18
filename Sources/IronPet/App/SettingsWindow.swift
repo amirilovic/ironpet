@@ -406,28 +406,43 @@ struct VoiceSettings: View {
     @ObservedObject private var store = ConfigStore.shared
     @State private var baseUrl = ConfigStore.shared.config.voice.baseUrl
     @State private var modelName = ConfigStore.shared.config.voice.model
+    @State private var speechModel = ConfigStore.shared.config.speech.model
     @State private var key = ""
     @State private var keySaved = VoiceKey.isSet
     @State private var keyError = false
     @State private var testing = false
     @State private var testResult: (ok: Bool, text: String)?
 
+    private var name: String { store.config.pet.name }
+
     var body: some View {
         Form {
             Section {
                 Toggle("Voice notes", isOn: Binding(get: { store.config.voice.enabled },
                                                     set: { on in store.update { $0.voice.enabled = on } }))
+                Group {
+                    ShortcutRow(title: "Voice shortcut", path: \.voice, model: model)
+                    Toggle("Hold to talk", isOn: Binding(get: { store.config.voice.holdToTalk },
+                                                         set: { on in store.update { $0.voice.holdToTalk = on } }))
+                }
+                .disabled(!store.config.voice.enabled)
+            } header: {
+                Text("Talk to \(name)")
             } footer: {
-                Text("Off by default. When on, a microphone button appears in the chat, and what you record is sent to the server below. ironpet ships no speech model; point it at any server with an OpenAI-style /audio/transcriptions endpoint. Nothing is recorded or sent while this is off.")
+                Text("Hold the shortcut or the chat's microphone button, speak, and let go. The text lands in the chat box, or is sent at once when \"Send voice notes automatically\" is on in the chat's menu. With Hold to talk off, press once to start and again to stop. Esc cancels.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Server") {
+            SpokenReplySettings(speech: model.speech)
+            Section {
                 TextField("Base URL", text: $baseUrl)
                     .onSubmit(saveServer)
                     .onChange(of: baseUrl) { saveServer() }
-                TextField("Model", text: $modelName)
+                TextField("Transcription model", text: $modelName)
                     .onSubmit(saveServer)
                     .onChange(of: modelName) { saveServer() }
+                TextField("Speech model", text: $speechModel)
+                    .onSubmit(saveServer)
+                    .onChange(of: speechModel) { saveServer() }
                 LabeledContent("API key") {
                     HStack {
                         SecureField(keySaved ? "Saved in Keychain" : "Optional", text: $key)
@@ -457,15 +472,12 @@ struct VoiceSettings: View {
                         .foregroundStyle(testResult.ok ? Color.green : Color.red)
                         .textSelection(.enabled)
                 }
-            }
-            SpokenReplySettings(speech: model.speech)
-            Section {
-                ShortcutRow(title: "Voice shortcut", path: \.voice, model: model)
-                Toggle("Hold to talk", isOn: Binding(get: { store.config.voice.holdToTalk },
-                                                     set: { on in store.update { $0.voice.holdToTalk = on } }))
+            } header: {
+                Text("Server")
             } footer: {
-                Text("The transcript lands in the chat input, or is sent right away when \"Send voice notes automatically\" is on in the chat's settings menu. With Hold to talk on, hold the shortcut to record and release to transcribe. With it off, press once to start and again to stop. While recording, Enter also stops and transcribes, and Esc cancels. The key is kept in your Keychain, not in config.json.")
+                Text("One OpenAI-style server does both: /audio/transcriptions for voice notes and /audio/speech for replies. ironpet ships no models. Nothing is sent while both switches are off; with a remote server, recordings and reply text leave your Mac. The key is kept in your Keychain. For mlx-audio with Kokoro, run: uvx --from \"mlx-audio[server]\" --with \"misaki[en]\" mlx_audio.server")
                     .font(.caption).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
         }
         .formStyle(.grouped)
@@ -475,6 +487,7 @@ struct VoiceSettings: View {
         store.update {
             $0.voice.baseUrl = baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
             $0.voice.model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+            $0.speech.model = speechModel.trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
 
@@ -508,11 +521,10 @@ struct VoiceSettings: View {
     }()
 }
 
-/// The "Spoken replies" section of the Voice page: the switch, the speech model and voice, and Preview.
+/// The spoken replies section of the Voice page: the switch, the voice and Preview. The speech model is under Server.
 private struct SpokenReplySettings: View {
     let speech: SpeechPlayer?
     @ObservedObject private var store = ConfigStore.shared
-    @State private var modelName = ConfigStore.shared.config.speech.model
     @State private var voices: [String] = []
     @State private var previewing = false
     @State private var result: (ok: Bool, text: String)?
@@ -532,9 +544,6 @@ private struct SpokenReplySettings: View {
         Section {
             Toggle("Spoken replies", isOn: Binding(get: { store.config.speech.enabled }, set: setEnabled))
                 .disabled(previewing)
-            TextField("Speech model", text: $modelName)
-                .onSubmit(saveModel)
-                .onChange(of: modelName) { saveModel() }
             if voices.isEmpty {
                 TextField("Voice", text: voice)
             } else {
@@ -558,36 +567,33 @@ private struct SpokenReplySettings: View {
                     .foregroundStyle(result.ok ? Color.green : Color.red)
                     .textSelection(.enabled)
             }
+        } header: {
+            Text("\(store.config.pet.name) talks back")
         } footer: {
-            Text("Off by default. When on, \(store.config.pet.name) reads his replies to your chat messages aloud, and every reply gets a speaker button. Code blocks and tables are skipped, and reading stops after about a minute. Esc or a new voice note stops it, and replies are not read on their own during a call or a meeting recording. The reply text goes to the server above, so with a remote server it leaves your Mac. For mlx-audio with Kokoro, start the server with uvx --from \"mlx-audio[server]\" --with \"misaki[en]\" mlx_audio.server.")
+            Text("Reads each reply to your chat messages aloud, up to about a minute, skipping code, tables and emoji. Every reply also gets a speaker button. Esc, the button or your next message stops it, and replies stay silent during calls and meeting recordings.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .task(id: "\(store.config.speech.enabled) \(store.config.voice.baseUrl) \(modelName)") {
+        .task(id: "\(store.config.speech.enabled) \(store.config.voice.baseUrl) \(store.config.speech.model)") {
             // Only with the feature on: opening the page must not contact the server. Waits for typing to pause, so
             // every keystroke in the model field doesn't ask the server either.
             guard store.config.speech.enabled else { return }
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { return }
-            let list = await SpeechPlayer.synthesizer(model: modelName).voices()
+            let list = await SpeechPlayer.synthesizer().voices()
             if !Task.isCancelled { voices = list }
         }
-    }
-
-    private func saveModel() {
-        store.update { $0.speech.model = modelName.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
     /// Speaks one line with the saved settings. Turning the switch on goes through here, so a server that cannot
     /// speak shows up now and not after the next reply.
     private func preview(thenEnable enable: Bool = false) {
-        saveModel()
         previewing = true
         result = nil
         let player = speech ?? fallback
         let line = "Hi, I'm \(store.config.pet.name). This is how I'll read your replies."
         Task {
             do {
-                try await player.preview(line, using: SpeechPlayer.synthesizer(model: modelName))
+                try await player.preview(line, using: SpeechPlayer.synthesizer())
                 if enable { store.update { $0.speech.enabled = true } }
                 result = (true, enable ? "Spoken replies are on." : "The server spoke the preview.")
             } catch is CancellationError {
