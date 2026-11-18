@@ -37,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isEnabled: { ConfigStore.shared.config.meetings.enabled && ConfigStore.shared.config.meetings.offerToRecordCalls },
         isBusy: { [weak self] in self?.meeting.isBusy ?? true })
     private var callMonitor: CallMonitor?
-    /// Watches for calls while spoken replies are on, so a voice-note reply is not read aloud over one.
+    /// Watches for calls while spoken replies are on, so a reply is not read aloud over one.
     private let speechMic = MicWatch()
     private var meetingBubbleRemoving = false
     private var hotKeys: [HotKey] = []

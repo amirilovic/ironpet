@@ -38,27 +38,19 @@ final class ChatSpeechTests: XCTestCase {
         XCTAssertEqual(spoken, ["Two files changed."])
     }
 
-    func testTypedMessageReplyIsNotRead() async {
+    func testTypedMessageReplyIsReadAloud() async {
         session.input = "what changed?"
         session.send()
         await answer(0, "Two files changed.")
-        XCTAssertEqual(spoken, [])
+        XCTAssertEqual(spoken, ["Two files changed."])
     }
 
-    func testEditedVoiceNoteStillCountsUntilTheInputIsCleared() async {
-        session.sendAfterDictation = false
-        session.receiveTranscript("what changed")
-        session.input += " today?"
-        session.send()
-        await answer(0, "Nothing yet.")
-        XCTAssertEqual(spoken, ["Nothing yet."])
-
-        session.receiveTranscript("scrap that")
-        session.input = ""
-        session.input = "typed instead"
-        session.send()
-        await answer(1, "Okay.")
-        XCTAssertEqual(spoken, ["Nothing yet."])
+    func testTelegramAndAutomationRepliesAreNotRead() async {
+        session.submitFromTelegram("status?", chat: 42)
+        await answer(0, "All green.")
+        XCTAssertTrue(session.submitFromAutomation("check CI", automation: "ci"))
+        await answer(1, "CI passed.")
+        XCTAssertEqual(spoken, [])
     }
 
     func testQuietDuringACall() async {
@@ -84,26 +76,27 @@ final class ChatSpeechTests: XCTestCase {
         XCTAssertEqual(spoken, [])
     }
 
-    func testQueuedVoiceNoteKeepsItsFlag() async {
-        session.input = "typed first"
+    func testQueuedMessageIsReadWhenItsTurnEnds() async {
+        session.input = "first"
         session.send()
         await settle()
-        session.receiveTranscript("then this by voice")
+        session.input = "then this"
+        session.send()
         XCTAssertEqual(session.queue.count, 1)
         await answer(0, "First answer.")
-        XCTAssertEqual(spoken, [], "the typed turn's reply is not read")
+        XCTAssertEqual(spoken, ["First answer."])
         await answer(1, "Second answer.")
-        XCTAssertEqual(spoken, ["Second answer."])
+        XCTAssertEqual(spoken, ["First answer.", "Second answer."])
     }
 
     func testSpeakerButtonReadsAnyReply() async {
-        session.input = "typed"
-        session.send()
-        await answer(0, "A typed reply.")
+        XCTAssertTrue(session.submitFromAutomation("check CI", automation: "ci"))
+        await answer(0, "CI passed.")
+        XCTAssertEqual(spoken, [])
         let reply = try! XCTUnwrap(session.items.last { if case .assistant = $0.kind { true } else { false } })
         session.toggleSpeech(reply)
         await settle()
-        XCTAssertEqual(spoken, ["A typed reply."])
+        XCTAssertEqual(spoken, ["CI passed."])
     }
 
     func testSendingStopsSpeech() async {

@@ -53,8 +53,6 @@ final class ChatSession: ObservableObject {
         var reply: Reply? = nil
         /// The id of the automation that sent the message. Those are never put back in the Mac input.
         var automation: String? = nil
-        /// Sent from a voice note, so its reply is read aloud.
-        var spoken = false
     }
 
     /// What happened to a turn that an automation started, for `onAutomation`.
@@ -115,7 +113,6 @@ final class ChatSession: ObservableObject {
     @Published var findFocusTick = 0
     @Published var input = "" {
         didSet {
-            if input.isEmpty { inputFromVoice = false }
             if DraftPolicy.exceedsLimit(input) {
                 let result = DraftPolicy.apply(input, into: draftDirectory)
                 if let file = result.attachment { attachments.append(file) }
@@ -258,9 +255,7 @@ final class ChatSession: ObservableObject {
     private var voiceChanges: AnyCancellable?
     let speech = SpeechPlayer()
     private var speechChanges: [AnyCancellable] = []
-    /// The input holds a voice note's transcript, so sending it makes a spoken turn. Cleared when the input is emptied.
-    private var inputFromVoice = false
-    /// The running turn came from a voice note; its reply is read aloud when it ends.
+    /// The running turn was sent from the chat, not from Telegram or an automation; its reply is read aloud when it ends.
     private var turnSpoken = false
     /// True during a call or a meeting recording, when a reply is not read aloud on its own. Set by `AppDelegate`.
     var isQuiet: () -> Bool = { false }
@@ -301,7 +296,6 @@ final class ChatSession: ObservableObject {
     func receiveTranscript(_ text: String) {
         let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
         input = existing.isEmpty ? text : existing + " " + text
-        inputFromVoice = true
         if sendAfterDictation { send() }
     }
 
@@ -619,16 +613,15 @@ final class ChatSession: ObservableObject {
     func send() {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !attachments.isEmpty else { return }
-        let spoken = inputFromVoice
         speech.stop()
         if isRunning {
-            queue.append(QueuedMessage(text: prompt, attachments: attachments, reply: replyingTo, spoken: spoken))
+            queue.append(QueuedMessage(text: prompt, attachments: attachments, reply: replyingTo))
             input = ""
             attachments = []
             replyingTo = nil
             return
         }
-        if start(prompt: prompt, shots: attachments, reply: replyingTo, spoken: spoken) {
+        if start(prompt: prompt, shots: attachments, reply: replyingTo) {
             input = ""
             attachments = []
             replyingTo = nil
@@ -637,8 +630,7 @@ final class ChatSession: ObservableObject {
 
     /// Starts a turn. Returns false, without sending, when no folder is chosen or the hooks are missing.
     @discardableResult
-    private func start(prompt: String, shots: [URL], telegram: Int64? = nil, reply: Reply? = nil, automation: String? = nil,
-                       spoken: Bool = false) -> Bool {
+    private func start(prompt: String, shots: [URL], telegram: Int64? = nil, reply: Reply? = nil, automation: String? = nil) -> Bool {
         var prompt = prompt
         if telegram != nil || automation != nil, workspace == nil {
             // No chat has a folder yet. The no-project folder is what a chat with no code context uses.
@@ -658,7 +650,7 @@ final class ChatSession: ObservableObject {
         items.append(Item(kind: .user(prompt), origin: origin, reply: reply))
         let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
         telegramChat = telegram
-        turnSpoken = spoken
+        turnSpoken = telegram == nil && automation == nil
         if let telegram { onTelegram?(telegram, .started) }
         automationRun = automation
         if let automation { onAutomation?(automation, .started) }
@@ -714,8 +706,7 @@ final class ChatSession: ObservableObject {
     /// Sends the oldest queued message through the normal path.
     private func sendNextQueued() {
         guard let next = queue.first else { return }
-        if start(prompt: next.text, shots: next.attachments, telegram: next.telegram, reply: next.reply, automation: next.automation,
-                 spoken: next.spoken) {
+        if start(prompt: next.text, shots: next.attachments, telegram: next.telegram, reply: next.reply, automation: next.automation) {
             queue.removeFirst()
         } else {
             restoreQueue()

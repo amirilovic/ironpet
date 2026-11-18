@@ -559,7 +559,7 @@ private struct SpokenReplySettings: View {
                     .textSelection(.enabled)
             }
         } footer: {
-            Text("Off by default. When on, \(store.config.pet.name) reads the reply to a voice note aloud, and every reply gets a speaker button. Code blocks and tables are skipped, and reading stops after about a minute. Esc or a new voice note stops it, and replies are not read on their own during a call or a meeting recording. The reply text goes to the server above, so with a remote server it leaves your Mac. For mlx-audio with Kokoro, start the server with uvx --from \"mlx-audio[server]\" --with \"misaki[en]\" mlx_audio.server.")
+            Text("Off by default. When on, \(store.config.pet.name) reads his replies to your chat messages aloud, and every reply gets a speaker button. Code blocks and tables are skipped, and reading stops after about a minute. Esc or a new voice note stops it, and replies are not read on their own during a call or a meeting recording. The reply text goes to the server above, so with a remote server it leaves your Mac. For mlx-audio with Kokoro, start the server with uvx --from \"mlx-audio[server]\" --with \"misaki[en]\" mlx_audio.server.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .task(id: "\(store.config.speech.enabled) \(store.config.voice.baseUrl) \(modelName)") {
@@ -578,7 +578,7 @@ private struct SpokenReplySettings: View {
     }
 
     /// Speaks one line with the saved settings. Turning the switch on goes through here, so a server that cannot
-    /// speak shows up now and not after a voice note.
+    /// speak shows up now and not after the next reply.
     private func preview(thenEnable enable: Bool = false) {
         saveModel()
         previewing = true
