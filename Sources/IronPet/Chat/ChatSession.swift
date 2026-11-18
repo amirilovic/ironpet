@@ -459,6 +459,30 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    /// A reply with every text block, for the markdown previews.
+    static let sampleMarkdown = """
+    ## Plan
+    The first paragraph has `code`, **bold**, a [link](https://example.com) and the path /etc/hosts, and it runs long enough to wrap onto a second line.
+
+    - First item is long enough to wrap onto a second line at the narrow column width, so the hanging indent shows
+      - Nested item
+        - Deeper nested item
+    - [ ] Open task item
+    - [x] Done task item
+
+    1. One
+    2. Two is long enough to wrap onto a second line at the narrow column width, so the hanging indent shows
+    3. Three
+
+    > A quoted line that also wraps around when the column is narrow enough to need it, with `code` inside.
+
+    ```swift
+    let answer = 42
+    ```
+
+    Closing paragraph after the code block.
+    """
+
     private static let sampleForm: JSON = [
         "mode": "form", "message": "Please answer the following questions.",
         "requestedSchema": ["type": "object", "properties": [

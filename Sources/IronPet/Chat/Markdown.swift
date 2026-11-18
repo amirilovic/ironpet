@@ -224,58 +224,61 @@ enum Markdown {
     }
 }
 
-/// Renders a reply's markdown as SwiftUI views. The caller sets the base font.
+/// Renders a reply's markdown as SwiftUI views. Each run of text blocks (headings, paragraphs, lists, quotes)
+/// is one selectable text view, so a drag selects across them. Code, tables, diagrams and rules are views of
+/// their own and selection stops at them. `size` is the reply's base font size.
 struct MarkdownView: View {
     let text: String
+    var size: CGFloat = 13.5
     /// Highlights for the open find bar. Nil for rows with no match.
     var find: ChatFind.RowHighlight?
     /// Redraws when a background check finds that a path in the text exists, so it turns into a link.
     @ObservedObject private var paths = PathCache.shared
 
+    private enum Piece {
+        case text([Markdown.Block], segment: Int)
+        case block(Markdown.Block, segment: Int)
+    }
+
     var body: some View {
         let blocks = Markdown.parse(text)
         // Only a row with a match needs the segment numbers, so streaming without find parses nothing extra.
         let starts = find == nil ? [] : blocks.reduce(into: [0]) { $0.append($0.last! + Markdown.segments(of: $1).count) }
+        let pieces = Self.pieces(blocks, starts: starts)
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                view(for: block, segment: starts.isEmpty ? 0 : starts[index])
+            ForEach(Array(pieces.enumerated()), id: \.offset) { _, piece in
+                switch piece {
+                case .text(let blocks, let segment):
+                    MarkdownTextView(content: MarkdownText.attributed(blocks, size: size, firstSegment: segment, find: find))
+                case .block(let block, let segment):
+                    view(for: block, segment: segment)
+                        .textSelection(.enabled)
+                        .environment(\.openURL, OpenURLAction { FilePathLinks.handle($0) })
+                }
             }
         }
-        .textSelection(.enabled)
-        .environment(\.openURL, OpenURLAction { FilePathLinks.handle($0) })
     }
 
-    /// The reply font set by the caller, which the link cursor layout has to match.
-    static let baseSize: CGFloat = 13.5
-
-    private func linked(_ text: String, _ segment: Int, size: CGFloat = baseSize, lineSpacing: CGFloat = 0, weight: NSFont.Weight = .regular) -> some View {
-        let parsed = Markdown.inline(text)
-        return ChatFind.text(parsed, segment: segment, find: find).lineSpacing(lineSpacing)
-            .fixedSize(horizontal: false, vertical: true)
-            .linkCursor(parsed, size: size, lineSpacing: lineSpacing, weight: weight)
+    private static func pieces(_ blocks: [Markdown.Block], starts: [Int]) -> [Piece] {
+        var pieces: [Piece] = []
+        for (index, block) in blocks.enumerated() {
+            let segment = starts.isEmpty ? 0 : starts[index]
+            if MarkdownText.isTextBlock(block) {
+                if case .text(let run, let first)? = pieces.last {
+                    pieces[pieces.count - 1] = .text(run + [block], segment: first)
+                } else {
+                    pieces.append(.text([block], segment: segment))
+                }
+            } else {
+                pieces.append(.block(block, segment: segment))
+            }
+        }
+        return pieces
     }
 
     @ViewBuilder
     private func view(for block: Markdown.Block, segment: Int) -> some View {
         switch block {
-        case .heading(let level, let text):
-            linked(text, segment, size: level == 1 ? 17 : level == 2 ? 15.5 : 14, weight: level <= 2 ? .bold : .semibold)
-                .font(.system(size: level == 1 ? 17 : level == 2 ? 15.5 : 14, weight: level <= 2 ? .bold : .semibold))
-                .padding(.top, 2)
-        case .paragraph(let text):
-            linked(text, segment, lineSpacing: 2)
-        case .list(let ordered, let items):
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                    ListRow(item: item, ordered: ordered, segment: segment + index, find: find)
-                }
-            }
-        case .quote(let text):
-            HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 1.5).fill(Color.secondary.opacity(0.4)).frame(width: 3)
-                linked(text, segment).foregroundStyle(.secondary)
-            }
-            .fixedSize(horizontal: false, vertical: true)
         case .code(let language, let text, let closed):
             if language?.lowercased() == "mermaid", closed {
                 MermaidBlock(code: text)
@@ -286,39 +289,8 @@ struct MarkdownView: View {
             TableBlock(header: header, rows: rows, segment: segment, find: find)
         case .rule:
             Rectangle().fill(Color.primary.opacity(0.12)).frame(height: 1).padding(.vertical, 2)
-        }
-    }
-}
-
-private struct ListRow: View {
-    let item: Markdown.ListItem
-    let ordered: Bool
-    let segment: Int
-    let find: ChatFind.RowHighlight?
-    @ObservedObject private var paths = PathCache.shared
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            bullet.frame(minWidth: ordered ? 18 : 10, alignment: .trailing)
-            let text = Markdown.inline(task?.text ?? item.text)
-            ChatFind.text(text, segment: segment, find: find).lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .linkCursor(text, size: MarkdownView.baseSize, lineSpacing: 2)
-        }
-        .padding(.leading, CGFloat(item.indent) * 14)
-    }
-
-    private var task: (done: Bool, text: String)? { item.task }
-
-    @ViewBuilder
-    private var bullet: some View {
-        if let task {
-            Image(systemName: task.done ? "checkmark.square.fill" : "square").foregroundStyle(.secondary)
-        } else if item.marker.first?.isNumber == true {
-            // Per item, not per list: a bulleted sub-item under a numbered list keeps its bullet.
-            Text(item.marker).monospacedDigit().foregroundStyle(.secondary)
-        } else {
-            Text(item.indent == 0 ? "•" : "◦").foregroundStyle(.secondary)
+        case .heading, .paragraph, .list, .quote:
+            EmptyView()
         }
     }
 }
