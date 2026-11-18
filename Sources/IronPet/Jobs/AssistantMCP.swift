@@ -12,8 +12,8 @@ final class AssistantContext {
     var brief: (Brief.Kind) -> Brief? = { _ in nil }
     var meetings: () -> [MeetingRecord] = { [] }
     var projects: () -> [ProjectCandidate] = { [] }
-    /// Opens a job's thread in the chat. Returns an error to report when it can't, such as a chat turn in progress.
-    var openJob: (String) -> String? = { _ in "the chat is not available" }
+    /// Opens a job's thread in the chat, now or when the chat's turn ends. Returns what to tell the agent.
+    var openJob: (String) -> Result<String, JobError> = { _ in .failure(JobError(message: "the chat is not available")) }
     var now: () -> Date = Date.init
 }
 
@@ -139,8 +139,7 @@ enum AssistantMCP {
         case "jobs_open":
             let id = try required("id")
             guard try jobs().job(id) != nil else { throw JobError(message: "no job with id \"\(id)\"") }
-            if let error = context.openJob(id) { throw JobError(message: error) }
-            return ["opened": id]
+            return ["job": id, "result": try context.openJob(id).get()]
         case "projects_resolve":
             let candidates = context.projects()
             let result = ProjectResolver.resolve(string("name"), in: candidates)

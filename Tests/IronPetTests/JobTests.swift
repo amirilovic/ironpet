@@ -15,6 +15,8 @@ private final class FakeJobAgent: JobAgent {
     var firstError: String?
     /// Like an agent still starting: `cancel()` has no effect until the session is up, only `shutdown()` ends it.
     var slowStart = false
+    /// Like a stuck agent: `cancel()` does nothing.
+    var ignoresCancel = false
     private var startGate: CheckedContinuation<Void, Never>?
     private(set) var cancelled = false
     private(set) var shutDown = false
@@ -37,6 +39,7 @@ private final class FakeJobAgent: JobAgent {
             decisions.append(decision)
         }
         if hold, !cancelled { await withCheckedContinuation { gate = $0 } }
+        if shutDown { return onEvent(.finished(error: "The agent closed")) }
         onEvent(.toolFinished(id: "t\(turns.count)", ok: true))
         if cancelled { return onEvent(.finished(error: nil)) }
         onEvent(.assistant(reply))
@@ -52,7 +55,7 @@ private final class FakeJobAgent: JobAgent {
     }
 
     func cancel() {
-        guard startGate == nil else { return }
+        guard startGate == nil, !ignoresCancel else { return }
         cancelled = true
         gate?.resume()
         gate = nil
@@ -62,6 +65,8 @@ private final class FakeJobAgent: JobAgent {
         shutDown = true
         startGate?.resume()
         startGate = nil
+        gate?.resume()
+        gate = nil
     }
 }
 
@@ -189,6 +194,43 @@ final class JobTests: XCTestCase {
         await until { jobs.job(job.id)?.state == .stopped }
         XCTAssertTrue(agents[0].shutDown)
         XCTAssertNil(jobs.job(job.id)?.lastStep, "nothing ran after the stop")
+    }
+
+    func testAStuckTurnTimesOutAndFreesItsSlot() async throws {
+        let jobs = service(max: 1) { agent in
+            agent.hold = true
+            agent.ignoresCancel = true
+        }
+        jobs.turnTimeout = 0.05
+        jobs.stopGrace = 0.05
+        let job = try jobs.start(title: "Stuck", prompt: "Hang", folder: folder)
+        let next = try jobs.start(title: "Next", prompt: "Go", folder: folder)
+        await until { jobs.job(job.id)?.state == .failed }
+        XCTAssertTrue(agents[0].shutDown)
+        XCTAssertTrue(jobs.job(job.id)?.error?.contains("did not finish") == true)
+        await until { jobs.job(next.id)?.state == .running }
+        agents[1].shutdown()
+    }
+
+    func testQuittingClosesEveryJobsProcess() async throws {
+        let jobs = service { $0.hold = true }
+        _ = try jobs.start(title: "One", prompt: "1", folder: folder)
+        _ = try jobs.start(title: "Two", prompt: "2", folder: folder)
+        await until { agents.count == 2 && agents.allSatisfy(\.isWaiting) }
+        jobs.shutdownAll()
+        XCTAssertTrue(agents.allSatisfy(\.shutDown))
+        await until { jobs.running.isEmpty }
+    }
+
+    func testAFollowUpWaitsWhileTheChatUsesTheSession() async throws {
+        let jobs = service()
+        let job = try jobs.start(title: "Fix", prompt: "Fix it", folder: folder)
+        await until { jobs.job(job.id)?.state == .done }
+        jobs.sessionBusy = { $0 == "session-1" }
+        XCTAssertThrowsError(try jobs.followUp(job.id, message: "More")) { error in
+            XCTAssertTrue((error as? JobError)?.message.contains("chat is using") == true)
+        }
+        XCTAssertEqual(agents.count, 1)
     }
 
     func testAStoppedJobDeniesPermissionsThatArriveLate() async throws {

@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Nil until the database is open, a moment after launch.
     private var jobs: JobService?
     private lazy var assistant = makeAssistantContext()
+    /// A job `jobs_open` asked for while the chat was running the turn that asked. Opened when that turn ends.
+    private var jobToOpen: String?
     private var dueReminders: TaskDueReminders?
     /// Nil until the database is open, a moment after launch.
     private var activity: ActivityLog?
@@ -329,6 +331,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           .init(title: "Deny", destructive: true) { decide(false) }]))
         }
         service.clearApproval = { [weak self] id in self?.announcer.bubbles.dismiss(id) }
+        service.sessionBusy = { [weak self] thread in self.map { $0.chat.isRunning && $0.chat.threadID == thread } ?? false }
+        chat.$state.dropFirst().sink { [weak self] state in
+            guard let self, state != .running, let id = jobToOpen else { return }
+            jobToOpen = nil
+            // After the turn's own state change has been handled.
+            DispatchQueue.main.async { self.openJob(id) }
+        }.store(in: &cancellables)
         chat.jobFollowUp = { [weak service] thread, text in
             guard let service, let job = service.job(thread: thread), job.state.isActive else { return false }
             return (try? service.followUp(job.id, message: text)) != nil
@@ -362,11 +371,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                               scratch: ChatSession.scratchWorkspace)
         }
         context.openJob = { [weak self] id in
-            guard let self else { return "ironpet is quitting" }
-            // Opening a thread replaces the chat's, which would end the turn that asked.
-            if chat.isRunning { return "the chat is busy with this conversation; the job is in the Agents section of Ghost's window" }
-            openJob(id)
-            return nil
+            guard let self else { return .failure(JobError(message: "ironpet is quitting")) }
+            // Opening a thread replaces the chat's, which would end the turn that asked, so it waits for that turn.
+            guard chat.isRunning else {
+                openJob(id)
+                return .success("Opened the job's thread in the chat.")
+            }
+            jobToOpen = id
+            return .success("The job's thread opens in the chat when this reply ends.")
         }
         return context
     }
@@ -701,6 +713,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         meeting.prepareForQuit()
         chat.persistForRelaunch()
         chat.shutdown()
+        jobs?.shutdownAll()
         automations?.stop()
         try? FileManager.default.removeItem(at: Paths.portFile)
     }

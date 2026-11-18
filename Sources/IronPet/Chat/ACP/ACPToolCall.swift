@@ -129,6 +129,8 @@ enum ApprovalRules {
     /// Agents that name MCP tools `mcp__<server>__<tool>` must name the ironpet server; others report the bare tool name.
     static func isOwnTaskTool(server: String?, tool: String) -> Bool {
         guard ownTaskTools.contains(tool) else { return false }
+        // Names as plain as memory_forget could belong to another server, so those need ironpet named.
+        if AssistantMCP.ownTools.contains(tool) { return server == "ironpet" }
         return server == nil || server == "ironpet"
     }
 

@@ -1,6 +1,19 @@
 import XCTest
 @testable import IronPet
 
+/// An agent whose turn never ends on its own, for tests that only need a job to exist.
+@MainActor
+private final class FakeOpenAgent: JobAgent {
+    var onPermission: ((ACPToolCall, @escaping (ApprovalDecision) -> Void) -> Void)?
+    private var gate: CheckedContinuation<Void, Never>?
+    func runTurn(_ turn: ACPTurn, onEvent: @escaping (AgentEvent) -> Void) async {
+        await withCheckedContinuation { gate = $0 }
+        onEvent(.finished(error: nil))
+    }
+    func cancel() { gate?.resume(); gate = nil }
+    func shutdown() { cancel() }
+}
+
 @MainActor
 final class AssistantMCPTests: XCTestCase {
     private var folder: URL!
@@ -118,6 +131,28 @@ final class AssistantMCPTests: XCTestCase {
         XCTAssertEqual((overview.json["alerts"] as? [[String: Any]])?.first?["title"] as? String, "main is red")
     }
 
+    func testJobsOpenPassesOnWhenTheThreadOpens() async throws {
+        let database = Database.open(path: nil, migrations: TaskStore.migrations + JobService.migrations).database
+        let jobs = JobService(database: database, tasks: nil)
+        jobs.currentAgent = { (AgentCatalog.all[0], nil) }
+        jobs.makeAgent = { _ in FakeOpenAgent() }
+        jobs.preamble = { _ in "" }
+        context.jobs = { jobs }
+        context.projects = { [folder] in [ProjectCandidate(url: folder!, sources: [.chat])] }
+        var opened: [String] = []
+        context.openJob = { id in
+            opened.append(id)
+            return .success("The job's thread opens in the chat when this reply ends.")
+        }
+        let started = try await call("jobs_start", ["title": "Fix", "prompt": "Fix it", "folder": folder.path])
+        let id = try XCTUnwrap(started.json["id"] as? String, started.text)
+        let open = try await call("jobs_open", ["id": id])
+        XCTAssertFalse(open.isError)
+        XCTAssertEqual(open.json["result"] as? String, "The job's thread opens in the chat when this reply ends.")
+        XCTAssertEqual(opened, [id])
+        try jobs.stop(id)
+    }
+
     func testJobsOpenReportsWhyItCannotOpen() async throws {
         let database = Database.open(path: nil, migrations: JobService.migrations).database
         let jobs = JobService(database: database, tasks: nil)
@@ -180,6 +215,13 @@ final class ProjectResolverTests: XCTestCase {
         XCTAssertNotNil(ProjectResolver.candidate(at: folder.path + "/", in: list))
         XCTAssertNotNil(ProjectResolver.candidate(at: folder.path, in: list))
         XCTAssertNil(ProjectResolver.candidate(at: folder.path + "-other", in: list))
+    }
+
+    func testAShortFolderNameInsideALongerRequestIsNotAMatch() {
+        let list = ProjectResolver.candidates(frontmost: nil, chat: URL(fileURLWithPath: "/Users/me/api"), cursor: [], recents: [],
+                                              scratch: scratch, exists: { _ in true })
+        XCTAssertNil(ProjectResolver.resolve("the kokous api", in: list).best)
+        XCTAssertEqual(ProjectResolver.resolve("api", in: list).best?.name, "api")
     }
 
     func testNoNamePrefersTheFrontmostProject() {

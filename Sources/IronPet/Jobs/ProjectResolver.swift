@@ -89,11 +89,12 @@ enum ProjectResolver {
         return Result(matches: matches, best: leaders.count == 1 ? leaders[0] : nil)
     }
 
-    /// 3 for the same name, 2 when one contains the other, 1 for names that only start alike.
+    /// 3 for the same name, 2 when one contains the other, 1 for names that only start alike. A short name ("api", "ui")
+    /// inside a longer request is too likely to be a coincidence to count.
     private static func score(_ query: String, _ name: String) -> Int {
         guard !name.isEmpty else { return 0 }
         if query == name { return 3 }
-        if name.contains(query) || query.contains(name) { return 2 }
+        if name.contains(query) || name.count >= 4 && query.contains(name) { return 2 }
         return query.count >= 3 && name.hasPrefix(String(query.prefix(3))) ? 1 : 0
     }
 

@@ -29,8 +29,9 @@ enum Memory {
     When the user asks you to check or watch something regularly, add it to ~/.ironpet/HEARTBEAT.md. The heartbeat skill explains the format.
     """
 
-    /// Context prepended to the first turn of a thread.
-    static func preamble(for workspace: URL) -> String {
+    /// Context prepended to the first turn of a thread. A background job leaves out the task list rules: ironpet keeps the
+    /// job's own task.
+    static func preamble(for workspace: URL, keepsTasks: Bool = true) -> String {
         let project = projectFile(for: workspace)
         let name = Config.load().config.pet.name
         ensure(aboutMe, header: "# About me\n\nThings \(name) has learned about how I work.\n")
@@ -53,7 +54,7 @@ enum Memory {
         When you learn something durable (a preference, a workflow, a project convention, where things live), \
         append one short bullet to the right memory file. Never store secrets. Don't mention memory unless asked.
 
-        \(taskInstructions)
+        \(keepsTasks ? taskInstructions : "")
 
         User request:
         """

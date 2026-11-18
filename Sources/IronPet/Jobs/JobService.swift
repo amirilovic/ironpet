@@ -35,8 +35,6 @@ final class JobService: ObservableObject {
     static let retention: TimeInterval = 30 * 86_400
     /// Jobs kept in memory for `jobs_list`, newest first.
     static let listed = 50
-    /// One agent turn longer than this fails the job, so a stuck agent can't hold a slot forever.
-    static let turnTimeout: TimeInterval = 3_600
     /// Who job changes are recorded as in a task's history.
     static let taskAuthor = "agent:job"
 
@@ -48,6 +46,10 @@ final class JobService: ObservableObject {
     var maxRunning: () -> Int = { ConfigStore.shared.config.jobs.maxRunning }
     /// How long a stopped job's turn may take to end after `session/cancel` before its process is closed.
     var stopGrace: TimeInterval = 5
+    /// One agent turn longer than this fails the job, so a stuck agent can't hold a slot forever.
+    var turnTimeout: TimeInterval = 3_600
+    /// True while the chat runs a turn of its own on this session (a thread id). A job must not start a second process on it.
+    var sessionBusy: (String) -> Bool = { _ in false }
     var makeAgent: (ACPAgent) -> JobAgent = { agent in
         let backend = ACPBackend(agent: agent)
         backend.usageFeature = .jobs
@@ -57,7 +59,9 @@ final class JobService: ObservableObject {
         return backend
     }
     /// The text a job's first turn starts with, before the request.
-    var preamble: (Job) -> String = { job in JobService.instructions(job) + "\n\n" + Memory.preamble(for: URL(fileURLWithPath: job.folder)) }
+    var preamble: (Job) -> String = { job in
+        JobService.instructions(job) + "\n\n" + Memory.preamble(for: URL(fileURLWithPath: job.folder), keepsTasks: false)
+    }
     /// Shows Allow and Deny for a job's request. The id is unique per request; `clearApproval` takes it down.
     var askApproval: (_ id: String, _ job: Job, _ title: String, _ detail: String, _ decide: @escaping (Bool) -> Void) -> Void = { _, _, _, _, _ in }
     var clearApproval: (String) -> Void = { _ in }
@@ -153,11 +157,15 @@ final class JobService: ObservableObject {
             pendingFollowUps[id, default: []].append(message)
             return job
         }
-        guard job.thread != nil else { throw JobError(message: "the job ended before its agent session started; start a new job instead") }
+        guard let thread = job.thread else { throw JobError(message: "the job ended before its agent session started; start a new job instead") }
+        guard !sessionBusy(thread) else {
+            throw JobError(message: "the chat is using this job's session right now; the message can go there instead")
+        }
         pendingFollowUps[id, default: []].append(message)
         update(id) { job in
             job.state = .queued
             job.error = nil
+            job.started = nil
             job.ended = nil
         }
         if let task = job.task, tasks?.task(task)?.status != .inProgress {
@@ -174,25 +182,43 @@ final class JobService: ObservableObject {
         guard job.state.isActive else { return job }
         if let run = runs[id] {
             run.stopRequested = true
-            for (approval, pending) in run.approvals {
-                clearApproval(approval)
-                pending.decide(false)
-            }
-            run.approvals = [:]
-            run.agent.cancel()
-            // A cancel before the prompt is sent (the agent still starting) does nothing, so close the process if the turn
-            // has not ended a moment later.
-            Task { [weak self, weak run] in
-                guard let grace = self?.stopGrace else { return }
-                try? await Task.sleep(for: .seconds(grace))
-                guard let self, let run, runs[id] === run else { return }
-                run.agent.shutdown()
-            }
+            denyApprovals(run)
+            cancel(id, run)
         } else {
             pendingFollowUps[id] = nil
             finish(id, state: .stopped, note: "Stopped before it started.")
         }
         return self.job(id) ?? job
+    }
+
+    /// Closes every job's agent process, at quit. The jobs show as interrupted on the next launch.
+    func shutdownAll() {
+        for run in runs.values {
+            run.stopRequested = true
+            denyApprovals(run)
+            run.agent.shutdown()
+        }
+    }
+
+    private func denyApprovals(_ run: Run) {
+        let pending = run.approvals
+        run.approvals = [:]
+        for (approval, entry) in pending {
+            clearApproval(approval)
+            entry.decide(false)
+        }
+    }
+
+    /// Sends `session/cancel`, and closes the process if the turn has not ended `stopGrace` later: an agent that is still
+    /// starting, or stuck, ignores the cancel.
+    private func cancel(_ id: String, _ run: Run) {
+        run.agent.cancel()
+        Task { [weak self, weak run] in
+            guard let grace = self?.stopGrace else { return }
+            try? await Task.sleep(for: .seconds(grace))
+            guard let self, let run, runs[id] === run else { return }
+            run.agent.shutdown()
+        }
     }
 
     /// The last few transcript lines of a job, for `jobs_get`: reply text and tool rows, newest last.
@@ -256,8 +282,7 @@ final class JobService: ObservableObject {
             if run.stopRequested || error != nil && run.followUps.isEmpty { break }
             prompt = run.followUps.isEmpty ? nil : run.followUps.removeFirst()
         }
-        for approval in run.approvals.keys { clearApproval(approval) }
-        run.approvals = [:]
+        denyApprovals(run)
         run.agent.shutdown()
         runs[id] = nil
         let answer = run.transcript.answer
@@ -274,11 +299,12 @@ final class JobService: ObservableObject {
     /// One turn. Returns the error that ended it, or nil.
     private func turnResult(_ id: String, run: Run, turn: ACPTurn, agentName: String) async -> String? {
         var failure: String?
-        let watchdog = Task { [weak run] in
-            try? await Task.sleep(for: .seconds(Self.turnTimeout))
-            guard !Task.isCancelled, let run else { return }
-            failure = "The agent did not finish within \(Int(Self.turnTimeout / 60)) minutes."
-            run.agent.cancel()
+        let timeout = turnTimeout
+        let watchdog = Task { [weak self, weak run] in
+            try? await Task.sleep(for: .seconds(timeout))
+            guard !Task.isCancelled, let self, let run else { return }
+            failure = "The agent did not finish within \(max(1, Int(timeout / 60))) minutes."
+            cancel(id, run)
         }
         defer { watchdog.cancel() }
         await run.agent.runTurn(turn) { [weak self] event in

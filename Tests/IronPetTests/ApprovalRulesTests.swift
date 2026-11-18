@@ -96,6 +96,9 @@ final class ApprovalRulesTests: XCTestCase {
             XCTAssertEqual(policy(ACPToolCall(id: "1", title: "mcp__ironpet__\(tool)", kind: "other", rawInput: ["text": "x"])), .allow, tool)
             if case .allow = policy(ACPToolCall(id: "1", title: "mcp__other__\(tool)", kind: "other")) { XCTFail("another server must ask: \(tool)") }
         }
+        if case .allow = policy(ACPToolCall(id: "1", title: "memory_forget", kind: "other")) {
+            XCTFail("a bare assistant tool name could be another server's")
+        }
         for tool in ["jobs_start", "jobs_followup", "jobs_stop"] {
             if case .allow = policy(ACPToolCall(id: "1", title: "mcp__ironpet__\(tool)", kind: "other", rawInput: ["id": "job-1"])) {
                 XCTFail("\(tool) must ask without Auto")
