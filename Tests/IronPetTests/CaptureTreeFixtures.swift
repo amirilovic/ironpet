@@ -95,21 +95,28 @@ enum TreeFixtures {
     }
 
     static func mails(_ count: Int, from start: Int = 0) -> [Mail] {
-        (start..<(start + count)).map {
-            Mail(id: $0, sender: authors[$0 % authors.count], subject: "Update \($0): " + sentences[$0 % sentences.count],
-                 snippet: "Hi, " + sentences[($0 + 3) % sentences.count], date: "Wed, Nov 18, 2026, \(9 + $0 % 10):\(String(format: "%02d", $0 % 60)) AM")
+        var out: [Mail] = []
+        for n in start..<(start + count) {
+            let hour: Int = 9 + n % 10
+            let minute = String(format: "%02d", n % 60)
+            let subject: String = "Update \(n): " + sentences[n % sentences.count]
+            let snippet: String = "Hi, " + sentences[(n + 3) % sentences.count]
+            out.append(Mail(id: n, sender: authors[n % authors.count], subject: subject, snippet: snippet, date: "Wed, Nov 18, 2026, \(hour):\(minute) AM"))
         }
+        return out
     }
 
     /// A Gmail-shaped table: rows of cells with page ids, the full date only in a cell's description.
     static func gmail(mails list: [Mail], reply: String = "", labels: Int = 80) -> AXNode {
         let rows = list.map { m -> AXNode in
-            AXNode(role: "Row", domId: ":\(m.id)a", children: [
-                AXNode(role: "Cell", children: [AXNode(role: "CheckBox", description: "Select"), button("Star")]),
-                AXNode(role: "Cell", children: [text(m.sender)]),
-                AXNode(role: "Cell", children: [text(m.subject), text(" - "), text(m.snippet)]),
-                AXNode(role: "Cell", children: [AXNode(role: "StaticText", value: String(m.date.suffix(8)), description: m.date)]),
-            ])
+            let pick = AXNode(role: "Cell", children: [AXNode(role: "CheckBox", description: "Select"), button("Star")])
+            let sender = AXNode(role: "Cell", children: [text(m.sender)])
+            let parts: [AXNode] = [text(m.subject), text(" - "), text(m.snippet)]
+            let subject = AXNode(role: "Cell", children: parts)
+            let day = AXNode(role: "StaticText", value: String(m.date.suffix(8)), description: m.date)
+            let when = AXNode(role: "Cell", children: [day])
+            let cells: [AXNode] = [pick, sender, subject, when]
+            return AXNode(role: "Row", domId: ":\(m.id)a", children: cells)
         }
         let side = AXNode(role: "List", description: "Labels", children: (0..<labels).map { AXNode(role: "ListItem", children: [AXNode(role: "Link", title: "Label \($0)")]) })
         let table = AXNode(role: "Table", description: "Inbox", children: rows)

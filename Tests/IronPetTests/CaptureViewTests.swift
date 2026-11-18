@@ -70,7 +70,6 @@ final class CaptureViewTests: XCTestCase {
         try ingest(tree)
         let flat = CaptureText.lines(in: tree).joined(separator: "\n").utf8.count
         let list = json(try call("screen_window", ["since": "2h"]))
-        print("RATIO change list \(list) B, flat \(flat) B, \(Double(list) / Double(flat))")
         XCTAssertLessThan(Double(list), Double(flat) * 0.4, "change list \(list) B, flat text \(flat) B")
     }
 
