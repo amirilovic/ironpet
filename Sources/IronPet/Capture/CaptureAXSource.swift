@@ -198,7 +198,7 @@ final class AXCaptureSource: CaptureSource {
     }
 
     /// Reads one element and its subtree. A secure field is read for role and subrole only, so its value, selection and children never
-    /// enter this process's memory. A control that the text walk drops is read for its role and nothing under it.
+    /// enter this process's memory. A control that the text walk drops is read for its name and nothing under it.
     private static func convert(_ el: AXUIElement, depth: Int, budget: Budget) -> AXNode? {
         guard depth <= 64, budget.allow() else { return nil }
         var head: CFArray?
@@ -208,10 +208,13 @@ final class AXCaptureSource: CaptureSource {
         let subrole = headValues.count > 1 ? text(headValues[1]) : nil
         var node = AXNode(role: roleName.hasPrefix("AX") ? String(roleName.dropFirst(2)) : roleName,
                           subrole: subrole.map { $0.hasPrefix("AX") ? String($0.dropFirst(2)) : $0 })
-        if node.isSecure || CaptureText.chromeRoles.contains(node.role) || node.subrole.map(CaptureText.chromeSubroles.contains) == true { return node }
+        if node.isSecure { return node }
+        // A control is read for its name, which can be the only place a message's author is, but nothing under it is read.
+        let control = CaptureText.chromeRoles.contains(node.role) || node.subrole.map(CaptureText.chromeSubroles.contains) == true
 
         let visible = visibleChildrenAttribute(role: roleName)
-        var names = ["AXTitle", "AXValue", "AXDescription", "AXHidden", visible ?? "AXChildren"]
+        var names = ["AXTitle", "AXValue", "AXDescription", "AXHidden", "AXDOMIdentifier"]
+        if !control { names.append(visible ?? "AXChildren") }
         if roleName == "AXWebArea" { names.append("AXURL") }
         var raw: CFArray?
         AXUIElementCopyMultipleAttributeValues(el, names as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &raw)
@@ -227,7 +230,8 @@ final class AXCaptureSource: CaptureSource {
         node.value = get("AXValue").flatMap { text($0) }
         node.description = get("AXDescription").flatMap { text($0) }
         node.hidden = (get("AXHidden") as? NSNumber)?.boolValue ?? false
-        if node.hidden { return node }
+        node.domId = get("AXDOMIdentifier").flatMap { text($0) }
+        if node.hidden || control { return node }
         node.url = get("AXURL").flatMap { text($0) }
 
         var children: [AnyObject]?

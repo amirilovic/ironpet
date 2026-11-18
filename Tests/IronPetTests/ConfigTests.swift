@@ -36,7 +36,7 @@ final class ConfigTests: XCTestCase {
         let defaults = Config().screenCapture
         XCTAssertFalse(defaults.enabled)
         XCTAssertFalse(defaults.ocr)
-        XCTAssertEqual(defaults.retentionDays, 7)
+        XCTAssertEqual(defaults.retentionDays, 30)
         XCTAssertTrue(defaults.excludedApps.isEmpty)
         try write(#"{"screenCapture":{"enabled":true,"ocr":true,"retentionDays":9999}}"#)
         let (config, error) = Config.load(from: file)

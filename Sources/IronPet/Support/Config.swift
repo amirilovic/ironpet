@@ -65,7 +65,7 @@ struct Config: Codable, Equatable {
         /// on asks for Screen Recording permission.
         var ocr = false
         /// Captures older than this are deleted.
-        var retentionDays = 7
+        var retentionDays = 30
         /// Bundle ids or names of apps never captured at all. Password managers are always excluded and do not need to be listed.
         var excludedApps: [String] = []
     }

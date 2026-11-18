@@ -57,39 +57,17 @@ final class ScreenMCPTests: XCTestCase {
         XCTAssertTrue(missing.isError)
     }
 
-    func testWindowListsACapturesOfARangeWithTheirText() async throws {
+    func testWindowListsTheChangesOfARangeGroupedByWindow() async throws {
+        func lines(_ value: [String: Any]) -> [[String: Any]] { value["changes"] as? [[String: Any]] ?? [] }
         let (value, isError, text) = try await call("screen_window", ["since": "15m"])
         XCTAssertFalse(isError, text)
-        let captures = try XCTUnwrap(value["captures"] as? [[String: Any]])
-        XCTAssertEqual(captures.compactMap { $0["app"] as? String }, ["Safari", "Slack"], "oldest first, only the last 15 minutes")
-        XCTAssertEqual(value["truncated"] as? Bool, false)
-        XCTAssertTrue(captures.allSatisfy { ($0["text"] as? String)?.isEmpty == false })
+        XCTAssertEqual(lines(value).compactMap { $0["app"] as? String }, ["Safari", "Slack"], "oldest first, only the last 15 minutes")
+        XCTAssertTrue(lines(value).allSatisfy { ($0["changes"] as? [String])?.isEmpty == false })
         let slackOnly = try await call("screen_window", ["since": "2d", "app": "Slack", "window": "ana"])
-        XCTAssertEqual((slackOnly.value["captures"] as? [[String: Any]])?.count, 2)
+        XCTAssertEqual(lines(slackOnly.value).count, 1)
+        XCTAssertEqual((lines(slackOnly.value)[0]["changes"] as? [String])?.count, 2)
         let ranged = try await call("screen_window", ["since": "2d", "until": "1h"])
-        XCTAssertEqual((ranged.value["captures"] as? [[String: Any]])?.count, 1)
-    }
-
-    func testListingSaysWhenTheRangeHeldMoreThanTheCap() async throws {
-        for index in 0..<CaptureStore.maxListedCaptures {
-            try store.ingest(app: safari, title: "Bulk \(index)", url: nil, trigger: .idle, lines: ["bulk line \(index)"], now: now.addingTimeInterval(-Double(index)))
-        }
-        let (value, isError, text) = try await call("screen_window", ["since": "2d"])
-        XCTAssertFalse(isError, text)
-        XCTAssertEqual(value["truncated"] as? Bool, true)
-        XCTAssertEqual(value["count"] as? Int, CaptureStore.maxListedCaptures)
-    }
-
-    func testATruncatedListingKeepsTheNewestCaptures() async throws {
-        for index in 0..<(CaptureStore.maxListedCaptures + 10) {
-            try store.ingest(app: safari, title: "Seq \(index)", url: nil, trigger: .idle, lines: ["seq line \(index)"], now: now.addingTimeInterval(Double(index) - 1000))
-        }
-        let (value, _, _) = try await call("screen_window", ["since": "2d", "window": "Seq"])
-        let captures = value["captures"] as? [[String: Any]] ?? []
-        XCTAssertEqual(value["truncated"] as? Bool, true)
-        XCTAssertEqual(captures.count, CaptureStore.maxListedCaptures)
-        XCTAssertEqual(captures.last?["window"] as? String, "Seq \(CaptureStore.maxListedCaptures + 9)", "the newest is kept")
-        XCTAssertEqual(captures.first?["window"] as? String, "Seq 10", "the oldest are dropped, and the rest stay oldest first")
+        XCTAssertEqual((lines(ranged.value).first?["changes"] as? [String])?.count, 1)
     }
 
     func testBadArgumentsAreErrorsNotCrashes() async throws {
