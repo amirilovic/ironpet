@@ -34,6 +34,11 @@ final class SpeechTextTests: XCTestCase {
         XCTAssertEqual(spoken, ["See the PR or now."])
     }
 
+    func testEmojiAreSkippedButNumbersAndSymbolsStay() {
+        let spoken = SpeechText.spokenBlocks(of: "Hey! I'm great 👻 and ready ❤️ for #2 at 3*4.\n\n- Shipped it 🎉\n\n👍🏽")
+        XCTAssertEqual(spoken, ["Hey! I'm great and ready for #2 at 3*4.", "Shipped it."])
+    }
+
     func testFirstChunkIsOneSentence() {
         let chunks = SpeechText.chunks(of: "First one. Second one. Third one.")
         XCTAssertEqual(chunks, ["First one.", "Second one. Third one."])

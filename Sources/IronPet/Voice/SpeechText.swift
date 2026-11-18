@@ -56,7 +56,14 @@ enum SpeechText {
     static func clean(_ text: String) -> String {
         let range = NSRange(text.startIndex..., in: text)
         let withoutURLs = bareURL.stringByReplacingMatches(in: text, range: range, withTemplate: "")
-        return withoutURLs.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return withoutURLs.filter { !isEmoji($0) }.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// Emoji are read out by name ("ghost", "party popper"), so they are dropped. Digits, `#` and `*` also carry the
+    /// emoji property, so a lone scalar counts only when it shows as emoji by default.
+    private static func isEmoji(_ character: Character) -> Bool {
+        guard let first = character.unicodeScalars.first else { return false }
+        return first.properties.isEmojiPresentation || (first.properties.isEmoji && character.unicodeScalars.count > 1)
     }
 
     private static func ending(_ text: String) -> String {
