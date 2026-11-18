@@ -132,6 +132,12 @@ private struct ScreenSettingsBody: View {
 
     private var decisionSection: some View {
         Section {
+            Toggle("Filter with a local model", isOn: Binding(get: { capture.decision.enabled }, set: { v in update { $0.decision.enabled = v } }))
+            if !capture.decision.enabled {
+                Label("Only rule-based redaction runs before captures are sent to the agent.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            Group {
             Picker("API", selection: Binding(get: { capture.decision.api }, set: { v in update { $0.decision.api = v } })) {
                 Text("H2O-Lightning (/v1/systemone)").tag("systemone")
                 Text("OpenAI-compatible chat").tag("openai")
@@ -152,16 +158,19 @@ private struct ScreenSettingsBody: View {
             Stepper(value: Binding(get: { capture.decision.skipThreshold }, set: { v in update { $0.decision.skipThreshold = v } }), in: 0...1, step: 0.05) {
                 Text("Skip threshold: \(capture.decision.skipThreshold.formatted(.number.precision(.fractionLength(2)))) (0 skips nothing)")
             }
+            }.disabled(!capture.decision.enabled)
         } header: {
             Text("Local decision model")
         } footer: {
-            Text("Rules redact the secrets they know first, so a key in a useful message is sent as [redacted:aws-key] and the rest of the message still goes. A model on this Mac, such as H2O-Lightning-4B, then scores the redacted text. An item it still flags at or above the secret threshold stays on this Mac and its text is dropped. The unredacted text of an item that had a secret is kept for 24 hours so you can look at it under Screen, Captures, and is never sent. The address must be localhost. If no model is set or it does not answer, nothing is sent to the agent.")
+            Text("Rules redact the secrets they know first, so a key in a useful message is sent as [redacted:aws-key] and the rest of the message still goes. A model on this Mac, such as H2O-Lightning-4B, then scores the redacted text. An item it still flags at or above the secret threshold stays on this Mac and its text is dropped. The unredacted text of an item that had a secret is kept for 24 hours so you can look at it under Screen, Captures, and is never sent. The address must be localhost. If no model is set or it does not answer, nothing is sent to the agent. With the filter off, none of this applies.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder private var decisionStatus: some View {
         switch model.decision {
+        case .off:
+            Text("Off").font(.caption).foregroundStyle(.secondary)
         case .unknown:
             Text("Not tested").font(.caption).foregroundStyle(.secondary)
         case .ready(let name):
