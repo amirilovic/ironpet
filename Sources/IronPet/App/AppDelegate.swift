@@ -37,6 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isEnabled: { ConfigStore.shared.config.meetings.enabled && ConfigStore.shared.config.meetings.offerToRecordCalls },
         isBusy: { [weak self] in self?.meeting.isBusy ?? true })
     private var callMonitor: CallMonitor?
+    /// Watches for calls while spoken replies are on, so a voice-note reply is not read aloud over one.
+    private let speechMic = MicWatch()
     private var meetingBubbleRemoving = false
     private var hotKeys: [HotKey] = []
     private var previousApp: NSRunningApplication?
@@ -113,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         meetingPanel = MeetingPanel(controller: meeting)
         meeting.onChange = { [weak self] in self?.syncMeetingPanel() }
         settingsModel.meeting = meeting
+        settingsModel.speech = chat.speech
         meeting.onLabelSpeakers = { [weak self] in self?.showSettings(tab: "meetings") }
         announcer.bubbles.onDismissed = { [weak self] id in self?.meetingBubbleClosed(id) }
         pet.onRecordingClick = { [weak self] in self?.showMeetingBubble() }
@@ -140,6 +143,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             meeting.confirmConsent = { true }
         }
         startCallMonitor()
+        let quiet = Presence(
+            meetingActive: { [weak self] in self?.meeting.isRecording ?? false },
+            detectedCalls: { [weak self] in self?.callMonitor.flatMap { $0.isRunning ? $0.detector.activeApps : nil } },
+            micCalls: speechMic.calls)
+        chat.isQuiet = quiet.isPresent
+        syncSpeechQuiet()
         chat.onAttention = { [weak self] title in
             self?.activity?.record(.chatFinished(title))
             self?.announcer.chat(title)
@@ -434,8 +443,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || new.meetings.enabled != old.meetings.enabled { registerHotKeys() }
         if new.telegram.enabled != old.telegram.enabled { telegram.setEnabled(new.telegram.enabled) }
         if !new.voice.enabled { chat.voice.cancel() }
+        if !new.speech.enabled { chat.speech.stop() }
         if !new.meetings.enabled { meeting.dismiss() }
         startCallMonitor()
+        syncSpeechQuiet()
         if new.pet.sprite != old.pet.sprite { pet.reloadAtlas() }
         if new.screenCapture != old.screenCapture { capture?.apply(new.screenCapture) }
     }
@@ -984,6 +995,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Call detection
 
     /// Watches the microphone while meetings and call offers are on, and stops otherwise.
+    /// The first poll answers empty, so polling starts when spoken replies are turned on rather than when a reply ends.
+    private func syncSpeechQuiet() {
+        if config.config.speech.enabled { _ = speechMic.calls() } else { speechMic.stop() }
+    }
+
     private func startCallMonitor() {
         let meetings = config.config.meetings
         let on = meetings.enabled && meetings.offerToRecordCalls

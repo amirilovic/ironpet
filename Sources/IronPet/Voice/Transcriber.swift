@@ -200,7 +200,7 @@ struct Transcriber {
         return body
     }
 
-    private static func describe(_ error: URLError, host: String?, port: Int?) -> String {
+    static func describe(_ error: URLError, host: String?, port: Int?) -> String {
         let place = [host, port.map(String.init)].compactMap { $0 }.joined(separator: ":")
         switch error.code {
         case .cannotConnectToHost:
@@ -217,7 +217,7 @@ struct Transcriber {
     }
 
     /// The start of an error body, which servers usually send as JSON or plain text.
-    private static func snippet(of data: Data) -> String {
+    static func snippet(of data: Data) -> String {
         let text = String(decoding: data.prefix(300), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let error = object["error"] as? [String: Any], let message = error["message"] as? String { return message }

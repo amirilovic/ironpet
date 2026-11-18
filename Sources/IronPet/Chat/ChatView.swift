@@ -772,7 +772,9 @@ struct ChatView: View {
             case .assistant(let text):
                 AssistantBubble(text: text, date: item.date, highlighted: highlightedID == item.id,
                                 onReply: { session.reply(to: item) }, onAsk: { askAbout(item) }, onCopy: { copyText(item, text) },
-                                onHoverChange: { hoverChanged(item.id, $0) }, find: highlights[item.id])
+                                onHoverChange: { hoverChanged(item.id, $0) }, find: highlights[item.id],
+                                speech: config.config.speech.enabled ? SpeakButton.State(speaking: session.speech.speakingID == item.id,
+                                                                                         toggle: { session.toggleSpeech(item) }) : nil)
             case .tool:
                 EmptyView()
             case .form(let record):
@@ -1271,11 +1273,40 @@ private struct RowMenu: View {
     let onReply: () -> Void
     let onAsk: () -> Void
     let onCopy: () -> Void
+    var speech: SpeakButton.State?
 
     var body: some View {
         Button("Reply", action: onReply)
         Button("Ask about selection", action: onAsk)
         Button("Copy", action: onCopy)
+        if let speech { Button(speech.speaking ? "Stop Reading" : "Read Aloud", action: speech.toggle) }
+    }
+}
+
+/// Reads a reply aloud with spoken replies on. Stays visible while its reply is being read, so it can be stopped.
+private struct SpeakButton: View {
+    struct State {
+        var speaking: Bool
+        var toggle: () -> Void
+    }
+
+    let state: State
+    let hovering: Bool
+
+    var body: some View {
+        let visible = hovering || state.speaking
+        let label = state.speaking ? "Stop reading" : "Read aloud"
+        Button(action: state.toggle) {
+            Image(systemName: state.speaking ? "stop.circle.fill" : "speaker.wave.2").font(.system(size: 10))
+                .foregroundStyle(state.speaking ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier("speak-button")
+        .pointerCursor()
+        .opacity(visible ? 1 : 0)
+        .allowsHitTesting(visible)
     }
 }
 
@@ -1288,6 +1319,8 @@ private struct AssistantBubble: View {
     var onCopy: () -> Void = {}
     var onHoverChange: (Bool) -> Void = { _ in }
     var find: ChatFind.RowHighlight?
+    /// Nil with spoken replies off.
+    var speech: SpeakButton.State?
     @State private var hovering = false
 
     var body: some View {
@@ -1300,6 +1333,7 @@ private struct AssistantBubble: View {
                 HStack(spacing: 4) {
                     if let date { Text(timeFormatter.string(from: date)).font(.system(size: 10)) }
                     ReplyButton(visible: hovering, action: onReply)
+                    if let speech { SpeakButton(state: speech, hovering: hovering) }
                 }
                 .foregroundStyle(.tertiary)
             }
@@ -1308,7 +1342,7 @@ private struct AssistantBubble: View {
         .background { if highlighted { RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.18)) } }
         .contentShape(Rectangle())
         .onHover { hovering = $0; onHoverChange($0) }
-        .contextMenu { RowMenu(onReply: onReply, onAsk: onAsk, onCopy: onCopy) }
+        .contextMenu { RowMenu(onReply: onReply, onAsk: onAsk, onCopy: onCopy, speech: speech) }
     }
 }
 

@@ -180,6 +180,27 @@ enum PreviewRenderer {
         for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
             render(ScreenSettings(model: settingsModel).frame(width: 560, height: 900).panel(), to: dir, "settings-screen" + suffix, scheme: scheme)
         }
+        // Settings → Voice with spoken replies on, and a reply being read aloud with its Stop button showing.
+        var speechOn = patterned
+        speechOn.voice.enabled = true
+        speechOn.speech.enabled = true
+        ConfigStore.shared.usePreview(speechOn)
+        for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
+            render(VoiceSettings(model: settingsModel).frame(width: 560, height: 1000).panel(), to: dir, "settings-voice" + suffix, scheme: scheme)
+        }
+        let speaking = ChatSession(restore: false)
+        speaking.loadPreview(.done)
+        if let reply = speaking.items.last(where: { if case .assistant = $0.kind { true } else { false } }) {
+            speaking.speech.loadPreview(speaking: reply.id)
+        }
+        for (suffix, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
+            model.sidebarCollapsed = true
+            model.section = .chat
+            let view = IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: speaking,
+                                         meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
+            renderWindow(model: model, session: speaking, content: view, to: dir, "real-chat-speaking-\(suffix)", scheme: scheme)
+        }
         ConfigStore.shared.usePreview(config)
 
         let done = Bubble(id: "done", symbol: AgentStatus.done.symbol, tint: AgentStatus.done.tint, title: "demo-app: Done",

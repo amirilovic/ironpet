@@ -381,6 +381,10 @@ final class IronPetPanel: NSPanel {
             dismissFind()
             return
         }
+        if session.speech.isSpeaking {
+            session.speech.stop()
+            return
+        }
         if session.isRunning { session.stop() } else { close() }
     }
 
