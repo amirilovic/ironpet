@@ -25,6 +25,7 @@ final class SpeechPlayer: ObservableObject {
     var synthesize: (String) async throws -> Data = { try await SpeechPlayer.synthesizer().speak($0) }
     private let player: ClipPlaying
     private var reading: Task<Void, Never>?
+    private var previewing: Task<Void, Error>?
     private var prefetch: Task<Data, Error>?
 
     init(player: ClipPlaying? = nil) {
@@ -56,14 +57,24 @@ final class SpeechPlayer: ObservableObject {
         }
     }
 
-    /// Speaks one short line regardless of the switch, for Settings' Preview. Throws what the server answered.
+    /// Speaks one short line regardless of the switch, for Settings' Preview. Throws what the server answered, or
+    /// `CancellationError` when `stop()` or a reply cut it short.
     func preview(_ text: String, using synthesizer: Synthesizer) async throws {
         stop()
         phase = .preparing
-        defer { phase = .idle }
-        let audio = try await synthesizer.speak(text)
-        phase = .playing
-        try await player.play(audio)
+        let player = player
+        let task = Task { [weak self] in
+            let audio = try await synthesizer.speak(text)
+            try Task.checkCancellation()
+            self?.phase = .playing
+            try await player.play(audio)
+        }
+        previewing = task
+        defer {
+            // A reply that started meanwhile owns the phase now.
+            if speakingID == nil { phase = .idle }
+        }
+        try await task.value
     }
 
     /// Shows a reply as being read, for preview renders. Nothing plays.
@@ -73,6 +84,8 @@ final class SpeechPlayer: ObservableObject {
     }
 
     func stop() {
+        previewing?.cancel()
+        previewing = nil
         reading?.cancel()
         reading = nil
         prefetch?.cancel()

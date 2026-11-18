@@ -68,6 +68,16 @@ final class ChatSpeechTests: XCTestCase {
         XCTAssertEqual(spoken, [])
     }
 
+    func testOffNeverAsksWhetherItIsQuiet() async {
+        var quietChecks = 0
+        session.isQuiet = { quietChecks += 1; return false }
+        session.speech.isEnabled = { false }
+        session.receiveTranscript("status?")
+        await answer(0, "All green.")
+        XCTAssertEqual(spoken, [])
+        XCTAssertEqual(quietChecks, 0, "the quiet check polls the microphone list, so it must not run while off")
+    }
+
     func testFailedTurnIsNotRead() async {
         session.receiveTranscript("status?")
         await answer(0, "Partial", error: "agent crashed")

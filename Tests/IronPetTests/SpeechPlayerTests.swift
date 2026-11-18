@@ -85,6 +85,27 @@ final class SpeechPlayerTests: XCTestCase {
         XCTAssertEqual(clips.played, ["Old reply.", "New reply."])
     }
 
+    func testStopCutsAPreviewShort() async {
+        clips.hold = true
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubProtocol.self]
+        let audio = WAV.encode([Int16](repeating: 1, count: 64))
+        StubProtocol.respond = { _ in (200, audio, nil) }
+        let synthesizer = Synthesizer(baseURL: "http://stub.test/v1", model: "m", voice: "v", apiKey: nil,
+                                      session: URLSession(configuration: configuration))
+        let preview = Task { try await speech.preview("Hi.", using: synthesizer) }
+        for _ in 0..<200 where clips.played.isEmpty { try? await Task.sleep(nanoseconds: 5_000_000) }
+        XCTAssertEqual(speech.phase, .playing)
+        speech.stop()
+        do {
+            try await preview.value
+            XCTFail("expected the preview to be cut short")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+        XCTAssertEqual(speech.phase, .idle)
+    }
+
     func testAFailedRequestIsReported() async {
         var failures: [String] = []
         speech.onFailure = { failures.append($0) }

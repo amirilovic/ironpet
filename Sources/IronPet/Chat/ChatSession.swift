@@ -1069,7 +1069,9 @@ final class ChatSession: ObservableObject {
                 let name = ConfigStore.shared.config.pet.name
                 onAttention?(error == nil ? "\(name) finished your task" : "\(name)'s task failed")
             }
-            if error == nil, turnSpoken, !hidden, !isQuiet(), let answer = lastAnswerItem(), case .assistant(let text) = answer.kind {
+            // The switch comes first: the quiet check starts polling the microphone list, which must not happen while off.
+            if error == nil, turnSpoken, !hidden, speech.isEnabled(), !isQuiet(), let answer = lastAnswerItem(),
+               case .assistant(let text) = answer.kind {
                 speech.speak(text, id: answer.id)
             }
             turnSpoken = false

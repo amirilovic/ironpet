@@ -558,8 +558,10 @@ private struct SpokenReplySettings: View {
             Text("Off by default. When on, \(store.config.pet.name) reads the reply to a voice note aloud, and every reply gets a speaker button. Code blocks and tables are skipped, and reading stops after about a minute. Esc or a new voice note stops it, and replies are not read on their own during a call or a meeting recording. The reply text goes to the server above, so with a remote server it leaves your Mac. For mlx-audio with Kokoro, start the server with uvx --from \"mlx-audio[server]\" --with \"misaki[en]\" mlx_audio.server.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .task(id: "\(store.config.voice.baseUrl) \(modelName)") {
-            // Waits for typing to pause, so every keystroke in the model field doesn't ask the server.
+        .task(id: "\(store.config.speech.enabled) \(store.config.voice.baseUrl) \(modelName)") {
+            // Only with the feature on: opening the page must not contact the server. Waits for typing to pause, so
+            // every keystroke in the model field doesn't ask the server either.
+            guard store.config.speech.enabled else { return }
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { return }
             let list = await SpeechPlayer.synthesizer(model: modelName).voices()
