@@ -15,6 +15,8 @@ enum Paths {
     static let meetings = root.appendingPathComponent("meetings")
     /// Files sent to the Telegram bot, one folder per Telegram chat.
     static let telegramFiles = root.appendingPathComponent("telegram/files")
+    /// The checklist the heartbeat automation works through. The user and the agent edit it.
+    static let heartbeat = root.appendingPathComponent("HEARTBEAT.md")
     static let petDir = root.appendingPathComponent("pet")
     static let cursorHooks = home.appendingPathComponent(".cursor/hooks.json")
     static let claudeSettings = home.appendingPathComponent(".claude/settings.json")

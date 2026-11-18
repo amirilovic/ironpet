@@ -76,6 +76,9 @@ struct Automation: Codable, Equatable, Identifiable {
         var timeoutSeconds: Double?
         /// `digest`: `brief` (what needs you today) or `recap` (what happened today), built from data on this Mac.
         var digest: String?
+        /// `prompt`: a reply that means nothing happened. A run whose final reply is exactly this text is hidden from the
+        /// chat and recorded as "no changes".
+        var quiet: String?
     }
 
     struct Presentation: Codable, Equatable {
@@ -178,7 +181,7 @@ enum AutomationValidator {
         "automation": ["id", "name", "enabled", "trigger", "action", "presentation", "createdBy", "note"],
         "trigger": ["type", "minutes", "clock", "times", "weekdays", "at", "source", "mode", "items", "id", "version", "script", "cooldownMinutes", "catchUpMinutes", "command", "when", "debounceSeconds", "throttleSeconds"],
         "source": ["type", "command", "timeoutSeconds", "url", "headers"],
-        "action": ["type", "title", "body", "prompt", "agent", "model", "command", "timeoutSeconds", "digest"],
+        "action": ["type", "title", "body", "prompt", "agent", "model", "command", "timeoutSeconds", "digest", "quiet"],
         "presentation": ["mood", "symbol", "buttons", "notification", "expiresSeconds"],
     ]
 
@@ -378,6 +381,7 @@ enum AutomationValidator {
         case "prompt":
             if (a.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errors.append("action.prompt is empty") }
             if let agent = a.agent, AgentCatalog.agent(id: agent) == nil { errors.append("action.agent \"\(agent)\" is not a known agent") }
+            if let quiet = a.quiet, quiet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errors.append("action.quiet is empty") }
         case "digest":
             if !digestKinds.contains(a.digest ?? "") { errors.append("action.digest must be one of \(digestKinds.joined(separator: ", "))") }
             if trigger.type == "poll" || trigger.type == "stream" { errors.append("a digest action runs on an interval, daily or once trigger, not a \(trigger.type)") }

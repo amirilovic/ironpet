@@ -46,7 +46,7 @@ struct SkillInstaller {
     var name: String
     var content: String
 
-    init(home: URL, skill: BundledSkill = BundledSkills.all[0]) {
+    init(home: URL, skill: BundledSkill = BundledSkills.named("ironpet-automations") ?? BundledSkills.all[0]) {
         self.home = home
         name = skill.name
         content = skill.content

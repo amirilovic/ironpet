@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var bubblePanel: BubblePanel!
     private var server: EventServer?
     private var pet: PetController!
+    private let dockIcon = DockIconController()
     private let meetings = MeetingLibrary()
     private let meeting = MeetingController()
     private var meetingPanel: MeetingPanel!
@@ -108,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return meeting.folder
         }
         pet.show()
+        dockIcon.update(sprite: config.config.pet.sprite)
 
         wispr.onDictation = { [weak self] text in self?.chat.receiveDictation(text) }
         pet.onChatShown = { [weak self] shown in self?.chatShown(shown) }
@@ -206,6 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Builds the automation service: the file, the clock and the places an automation can show or run something.
     private func setUpAutomations() {
+        HeartbeatChecklist.ensureExists()
         let store = AutomationStore(defaults: { [config] in
             AutomationMigration.defaults(from: config.config, sentryConfigured: AutomationDefaults.sentryConfigured)
         }, builtIns: AutomationDefaults.builtIns)
@@ -262,7 +265,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         service.suggested = { [weak self] added in self?.offerSuggestions(added) }
         let workspace = store.paths.workspace
         service.runPrompt = { automation, prompt in await AutomationPrompt.run(automation, prompt: prompt, workspace: workspace) }
-        service.hasOpenTasks = { [tasks] in tasks.tasks.contains { $0.status != .done } }
+        service.checklistHasEntries = { HeartbeatChecklist.hasEntries() }
+        chat.quietReply = { [weak store] id in store?.automations.first { $0.id == id }?.action.quiet }
         setUpBrief(service, tasks: tasks)
         service.sendToChat = { [weak self] id, message in self?.chat.submitFromAutomation(message, automation: id) ?? false }
         service.chatRunPending = { [weak self] id in self?.chat.hasAutomationRun(id) ?? false }
@@ -447,7 +451,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !new.meetings.enabled { meeting.dismiss() }
         startCallMonitor()
         syncSpeechQuiet()
-        if new.pet.sprite != old.pet.sprite { pet.reloadAtlas() }
+        if new.pet.sprite != old.pet.sprite {
+            pet.reloadAtlas()
+            dockIcon.update(sprite: new.pet.sprite)
+        }
         if new.screenCapture != old.screenCapture { capture?.apply(new.screenCapture) }
     }
 
