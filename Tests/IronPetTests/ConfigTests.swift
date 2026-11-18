@@ -215,6 +215,16 @@ final class ConfigTests: XCTestCase {
         XCTAssertFalse(config.speech.enabled)
         XCTAssertEqual(config.speech.model, "mlx-community/Kokoro-82M-bf16")
         XCTAssertEqual(config.speech.voice, "am_puck")
+        XCTAssertEqual(config.speech.speed, 1)
+    }
+
+    func testSpeechSpeedIsClamped() throws {
+        try write(#"{"speech":{"speed":1.6}}"#)
+        XCTAssertEqual(Config.load(from: file).config.speech.speed, 1.6)
+        try write(#"{"speech":{"speed":9}}"#)
+        XCTAssertEqual(Config.load(from: file).config.speech.speed, Config.Speech.speedRange.upperBound)
+        try write(#"{"speech":{"speed":0}}"#)
+        XCTAssertEqual(Config.load(from: file).config.speech.speed, Config.Speech.speedRange.lowerBound)
     }
 
     func testBlankSpeechModelAndVoiceMeanDefaults() throws {

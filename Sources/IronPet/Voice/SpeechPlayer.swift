@@ -36,7 +36,7 @@ final class SpeechPlayer: ObservableObject {
     static func synthesizer(model: String? = nil, voice: String? = nil) -> Synthesizer {
         let config = ConfigStore.shared.config
         return Synthesizer(baseURL: config.voice.baseUrl, model: model ?? config.speech.model,
-                           voice: voice ?? config.speech.voice, apiKey: VoiceKey.load())
+                           voice: voice ?? config.speech.voice, speed: config.speech.speed, apiKey: VoiceKey.load())
     }
 
     var isSpeaking: Bool { speakingID != nil }

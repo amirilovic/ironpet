@@ -34,6 +34,7 @@ struct Synthesizer {
     var baseURL: String
     var model: String
     var voice: String
+    var speed = 1.0
     /// Sent as `Authorization: Bearer` only when non-empty.
     var apiKey: String?
     var session: URLSession = .shared
@@ -45,7 +46,7 @@ struct Synthesizer {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": model, "input": text, "voice": voice, "response_format": "wav",
+            "model": model, "input": text, "voice": voice, "speed": speed, "response_format": "wav",
         ])
         let data = try await send(request)
         // mlx-audio answers 200 with an empty body when the model fails to load (Kokoro without misaki).

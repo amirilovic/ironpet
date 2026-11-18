@@ -551,6 +551,14 @@ private struct SpokenReplySettings: View {
                     ForEach(voiceChoices, id: \.self) { Text(Synthesizer.label(for: $0)).tag($0) }
                 }
             }
+            LabeledContent("Speed") {
+                HStack {
+                    Slider(value: Binding(get: { store.config.speech.speed }, set: { v in store.update { $0.speech.speed = v } }),
+                           in: Config.Speech.speedRange, step: 0.1)
+                    Text(String(format: "%.1f×", store.config.speech.speed))
+                        .monospacedDigit().frame(width: 36, alignment: .trailing)
+                }
+            }
             LabeledContent("Preview") {
                 HStack {
                     if previewing {

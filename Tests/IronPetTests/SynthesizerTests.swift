@@ -4,10 +4,10 @@ import XCTest
 final class SynthesizerTests: XCTestCase {
     private let audio = WAV.encode([Int16](repeating: 100, count: 64))
 
-    private func synthesizer(baseURL: String = "http://stub.test/v1", key: String? = nil) -> Synthesizer {
+    private func synthesizer(baseURL: String = "http://stub.test/v1", key: String? = nil, speed: Double = 1) -> Synthesizer {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubProtocol.self]
-        return Synthesizer(baseURL: baseURL, model: "some/tts", voice: "am_puck", apiKey: key,
+        return Synthesizer(baseURL: baseURL, model: "some/tts", voice: "am_puck", speed: speed, apiKey: key,
                            session: URLSession(configuration: configuration))
     }
 
@@ -25,8 +25,14 @@ final class SynthesizerTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.url?.absoluteString, "http://stub.test/v1/audio/speech")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: StubProtocol.bodies[0]) as? [String: String])
-        XCTAssertEqual(body, ["model": "some/tts", "input": "Hi there.", "voice": "am_puck", "response_format": "wav"])
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: StubProtocol.bodies[0]) as? NSDictionary)
+        XCTAssertEqual(body, ["model": "some/tts", "input": "Hi there.", "voice": "am_puck", "speed": 1, "response_format": "wav"])
+    }
+
+    func testSendsTheSpeed() async throws {
+        _ = try await synthesizer(speed: 1.6).speak("a")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: StubProtocol.bodies[0]) as? [String: Any])
+        XCTAssertEqual(body["speed"] as? Double, 1.6)
     }
 
     func testBearerOnlyWhenKeySet() async throws {

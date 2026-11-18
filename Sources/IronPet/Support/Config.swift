@@ -45,9 +45,13 @@ struct Config: Codable, Equatable {
         var model = Speech.defaultModel
         /// One of the model's voices, such as Kokoro's `am_puck` or OpenAI's `nova`.
         var voice = Speech.defaultVoice
+        /// Playback speed sent with each request; 1 is the model's normal pace.
+        var speed = Speech.defaultSpeed
 
         static let defaultModel = "mlx-community/Kokoro-82M-bf16"
         static let defaultVoice = "am_puck"
+        static let defaultSpeed = 1.0
+        static let speedRange = 0.5...2.0
     }
 
     /// Meeting transcripts: the mic and one app's audio go to the voice server in chunks, and an agent summarizes the
@@ -278,6 +282,8 @@ struct Config: Codable, Equatable {
         if c.speech.model.isEmpty { c.speech.model = Speech.defaultModel }
         c.speech.voice = c.speech.voice.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.speech.voice.isEmpty { c.speech.voice = Speech.defaultVoice }
+        c.speech.speed = c.speech.speed.isFinite
+            ? min(Speech.speedRange.upperBound, max(Speech.speedRange.lowerBound, c.speech.speed)) : Speech.defaultSpeed
         if c.meetings.summaryModel?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.meetings.summaryModel = nil }
         c.screenCapture.retentionDays = min(365, max(1, c.screenCapture.retentionDays))
         return c
