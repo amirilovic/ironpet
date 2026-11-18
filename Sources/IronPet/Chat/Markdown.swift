@@ -251,6 +251,7 @@ struct MarkdownView: View {
     private func linked(_ text: String, _ segment: Int, size: CGFloat = baseSize, lineSpacing: CGFloat = 0, weight: NSFont.Weight = .regular) -> some View {
         let parsed = Markdown.inline(text)
         return ChatFind.text(parsed, segment: segment, find: find).lineSpacing(lineSpacing)
+            .fixedSize(horizontal: false, vertical: true)
             .linkCursor(parsed, size: size, lineSpacing: lineSpacing, weight: weight)
     }
 
@@ -301,6 +302,7 @@ private struct ListRow: View {
             bullet.frame(minWidth: ordered ? 18 : 10, alignment: .trailing)
             let text = Markdown.inline(task?.text ?? item.text)
             ChatFind.text(text, segment: segment, find: find).lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
                 .linkCursor(text, size: MarkdownView.baseSize, lineSpacing: 2)
         }
         .padding(.leading, CGFloat(item.indent) * 14)
