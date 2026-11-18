@@ -109,9 +109,7 @@ enum AssistantMCP {
         switch name {
         case "jobs_start":
             let path = try required("folder")
-            let folder = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
-            let candidates = context.projects()
-            guard let candidate = candidates.first(where: { $0.url == folder }) else {
+            guard let candidate = ProjectResolver.candidate(at: path, in: context.projects()) else {
                 throw JobError(message: "\(path) is not a folder ironpet knows. Call projects_resolve and use a path it returns.")
             }
             if candidate.sources.contains(.noProject) {

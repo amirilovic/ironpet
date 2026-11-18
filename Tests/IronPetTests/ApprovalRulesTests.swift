@@ -90,6 +90,20 @@ final class ApprovalRulesTests: XCTestCase {
         }
     }
 
+    func testAssistantReadsAndMemoryRunWithoutACardButJobControlAsks() {
+        for tool in ["status_overview", "status_sessions", "jobs_list", "jobs_get", "jobs_open", "projects_resolve",
+                     "memory_recall", "memory_remember", "memory_forget", "memory_list"] {
+            XCTAssertEqual(policy(ACPToolCall(id: "1", title: "mcp__ironpet__\(tool)", kind: "other", rawInput: ["text": "x"])), .allow, tool)
+            if case .allow = policy(ACPToolCall(id: "1", title: "mcp__other__\(tool)", kind: "other")) { XCTFail("another server must ask: \(tool)") }
+        }
+        for tool in ["jobs_start", "jobs_followup", "jobs_stop"] {
+            if case .allow = policy(ACPToolCall(id: "1", title: "mcp__ironpet__\(tool)", kind: "other", rawInput: ["id": "job-1"])) {
+                XCTFail("\(tool) must ask without Auto")
+            }
+            XCTAssertEqual(policy(ACPToolCall(id: "1", title: "mcp__ironpet__\(tool)", kind: "other", rawInput: ["id": "job-1"]), auto: true), .allow, tool)
+        }
+    }
+
     func testMCPNameFromAgentMetadata() {
         let call = ACPToolCall(json: ["toolCallId": "1", "title": "Query", "kind": "other", "_meta": ["claudeCode": ["toolName": "mcp__langfuse__getHealth"]]])
         XCTAssertEqual(call.mcp?.server, "langfuse")

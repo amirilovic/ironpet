@@ -14,6 +14,7 @@ private final class FakeJobAgent: JobAgent {
     private(set) var cancelled = false
     private(set) var shutDown = false
     private var gate: CheckedContinuation<Void, Never>?
+    var isWaiting: Bool { gate != nil }
 
     func runTurn(_ turn: ACPTurn, onEvent: @escaping (AgentEvent) -> Void) async {
         turns.append(turn)
@@ -33,8 +34,9 @@ private final class FakeJobAgent: JobAgent {
         onEvent(.finished(error: error))
     }
 
-    func release() {
-        hold = false
+    /// Ends the turn that waits. Later turns wait too only with `holdingNext`.
+    func release(holdingNext: Bool = false) {
+        hold = holdingNext
         gate?.resume()
         gate = nil
     }
@@ -209,6 +211,22 @@ final class JobTests: XCTestCase {
         XCTAssertEqual(agents[0].turns[1].resume, "session-1")
     }
 
+    func testTheThreadShowsEachPromptAsSoonAsItsTurnStarts() async throws {
+        let jobs = service { $0.hold = true }
+        var saved: [ChatThread] = []
+        jobs.onThreadSaved = { saved.append($0) }
+        let job = try jobs.start(title: "Fix", prompt: "Fix it", folder: folder)
+        await until { agents.count == 1 }
+        try jobs.followUp(job.id, message: "Also update the README")
+        await until { agents[0].isWaiting }
+        agents[0].release(holdingNext: true)
+        await until { agents[0].turns.count == 2 }
+        let texts = saved.last?.items.compactMap { item -> String? in if case .user(let text) = item.kind { text } else { nil } }
+        XCTAssertEqual(texts, ["Fix it", "Also update the README"], "the follow-up is in the thread while its turn runs")
+        agents[0].release()
+        await until { jobs.job(job.id)?.state == .done }
+    }
+
     func testFollowUpOnAFinishedJobResumesItsSession() async throws {
         let jobs = service()
         let job = try jobs.start(title: "Fix", prompt: "Fix it", folder: folder)
@@ -268,6 +286,31 @@ final class JobTests: XCTestCase {
         job.state = .stopped
         store.setJob(key, job.agentSession)
         XCTAssertNil(store.sessions[key])
+    }
+
+    func testAMessageTypedInARunningJobsThreadGoesToTheJobAndStaysVisible() {
+        let chat = ChatSession(restore: false)
+        func thread(_ prompts: [String]) -> ChatThread {
+            ChatThread(id: "session-1", title: "Fix", workspace: folder.path, updatedAt: Date(),
+                       items: prompts.map { .init(kind: .user($0), origin: ChatSession.jobOrigin) }, agent: AgentCatalog.all[0].id, job: "job-1")
+        }
+        chat.open(thread(["Fix it"]))
+        var routed: [(String, String)] = []
+        chat.jobFollowUp = { thread, text in
+            routed.append((thread, text))
+            return true
+        }
+        chat.input = "Also update the README"
+        chat.send()
+        XCTAssertEqual(routed.map(\.1), ["Also update the README"])
+        XCTAssertEqual(routed.map(\.0), ["session-1"])
+        XCTAssertEqual(chat.input, "")
+
+        func prompts() -> [String] { chat.items.compactMap { if case .user(let text) = $0.kind { text } else { nil } } }
+        chat.threadSaved(thread(["Fix it"]))
+        XCTAssertEqual(prompts(), ["Fix it", "Also update the README"], "kept until the job starts on it")
+        chat.threadSaved(thread(["Fix it", "Also update the README"]))
+        XCTAssertEqual(prompts(), ["Fix it", "Also update the README"], "not shown twice")
     }
 
     func testHookEventsCannotPoseAsAJob() {

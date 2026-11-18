@@ -3,12 +3,14 @@ import Foundation
 /// A folder a job may run in, and why ironpet knows it.
 struct ProjectCandidate: Equatable {
     enum Source: String {
-        /// The folder of the app the user was in (the front Cursor window or iTerm tab).
+        /// The folder of the front Cursor window, when Cursor is the app the user was in.
         case frontmost
         /// The chat's current folder.
         case chat
         /// A folder open in Cursor.
         case cursor
+        /// The folder of an agent session ironpet watches (Claude Code in iTerm, Cursor and the others).
+        case session
         /// A folder the chat used before.
         case recent
         /// `~/.ironpet/scratch`, for work that is not about code.
@@ -33,24 +35,38 @@ enum ProjectResolver {
         var ambiguous: Bool { best == nil && matches.count > 1 }
     }
 
-    /// Merges the sources in order of preference, one candidate per folder. Missing folders are dropped.
-    static func candidates(frontmost: URL?, chat: URL?, cursor: [URL], recents: [URL], scratch: URL,
+    /// Merges the sources in order of preference, one candidate per folder. Missing folders are dropped. Folders are compared
+    /// by path: Cursor's `file://` URLs end in a slash and `fileURLWithPath` ones may not.
+    static func candidates(frontmost: URL?, chat: URL?, cursor: [URL], sessions: [URL] = [], recents: [URL], scratch: URL,
                            exists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }) -> [ProjectCandidate] {
         var list: [ProjectCandidate] = []
+        let scratchPath = path(scratch)
         func add(_ url: URL?, _ source: ProjectCandidate.Source) {
-            guard let url = url?.standardizedFileURL else { return }
-            if let index = list.firstIndex(where: { $0.url == url }) {
+            guard let url, url.isFileURL else { return }
+            let key = path(url)
+            guard source == .noProject || key != scratchPath else { return }
+            if let index = list.firstIndex(where: { path($0.url) == key }) {
                 if !list[index].sources.contains(source) { list[index].sources.append(source) }
             } else if source == .noProject || exists(url) {
-                list.append(ProjectCandidate(url: url, sources: [source]))
+                list.append(ProjectCandidate(url: URL(fileURLWithPath: key, isDirectory: true), sources: [source]))
             }
         }
         add(frontmost, .frontmost)
-        add(chat == scratch ? nil : chat, .chat)
+        add(chat, .chat)
         cursor.forEach { add($0, .cursor) }
-        recents.filter { $0 != scratch }.forEach { add($0, .recent) }
+        sessions.forEach { add($0, .session) }
+        recents.forEach { add($0, .recent) }
         add(scratch, .noProject)
         return list
+    }
+
+    /// The standardized path, without a trailing slash, that two spellings of a folder share.
+    static func path(_ url: URL) -> String { url.standardizedFileURL.path }
+
+    /// The candidate for `path`, however it is spelled (`~`, a trailing slash, `..`).
+    static func candidate(at path: String, in candidates: [ProjectCandidate]) -> ProjectCandidate? {
+        let key = self.path(URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
+        return candidates.first { self.path($0.url) == key }
     }
 
     static func resolve(_ name: String?, in candidates: [ProjectCandidate]) -> Result {

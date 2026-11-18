@@ -353,8 +353,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return [] }
             let front = NSWorkspace.shared.frontmostApplication
             let app = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? previousApp : front
-            return ProjectResolver.candidates(frontmost: WorkspaceDetector.workspace(of: app), chat: chat.workspace,
-                                              cursor: WorkspaceDetector.cursorOpenFolders(), recents: chat.recents,
+            // Only Cursor's window: iTerm's folder needs an Apple Event, which could block here and prompt mid tool call.
+            // A terminal agent's folder comes in through its session instead.
+            let frontmost = app?.bundleIdentifier == SourceJumper.cursorBundleID ? WorkspaceDetector.workspace(of: app) : nil
+            let sessions = store.sessions.values.sorted { $0.updatedAt > $1.updatedAt }.compactMap { $0.origin.workspace }
+            return ProjectResolver.candidates(frontmost: frontmost, chat: chat.workspace, cursor: WorkspaceDetector.cursorOpenFolders(),
+                                              sessions: sessions.map { URL(fileURLWithPath: $0) }, recents: chat.recents,
                                               scratch: ChatSession.scratchWorkspace)
         }
         context.openJob = { [weak self] id in

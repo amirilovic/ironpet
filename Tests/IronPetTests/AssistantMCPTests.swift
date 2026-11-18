@@ -71,7 +71,8 @@ final class AssistantMCPTests: XCTestCase {
         let jobs = JobService(database: database, tasks: nil)
         jobs.currentAgent = { nil }
         context.jobs = { jobs }
-        context.projects = { [folder] in [ProjectCandidate(url: folder!.standardizedFileURL, sources: [.chat])] }
+        let cursorURL = try XCTUnwrap(URL(string: "file://" + folder.path + "/"))
+        context.projects = { ProjectResolver.candidates(frontmost: cursorURL, chat: nil, cursor: [], recents: [], scratch: URL(fileURLWithPath: "/tmp/scratch")) }
 
         let invented = try await call("jobs_start", ["title": "Fix", "prompt": "Fix it", "folder": "/tmp/made-up"])
         XCTAssertTrue(invented.isError)
@@ -164,6 +165,21 @@ final class ProjectResolverTests: XCTestCase {
         let unknown = ProjectResolver.resolve("zebra", in: candidates())
         XCTAssertNil(unknown.best)
         XCTAssertFalse(unknown.ambiguous)
+    }
+
+    func testCursorURLsAndPathsOfTheSameFolderAreOneCandidate() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("resolver-\(UUID().uuidString)/ironpet")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent()) }
+        let cursor = try XCTUnwrap(URL(string: "file://" + folder.path + "/"))
+        let list = ProjectResolver.candidates(frontmost: cursor, chat: nil, cursor: [cursor], sessions: [URL(fileURLWithPath: folder.path)],
+                                              recents: [URL(fileURLWithPath: folder.path, isDirectory: true)], scratch: scratch)
+        XCTAssertEqual(list.count, 2)
+        XCTAssertEqual(list[0].sources, [.frontmost, .cursor, .session, .recent])
+        XCTAssertEqual(ProjectResolver.resolve("ironpet", in: list).best?.url.path, folder.path)
+        XCTAssertNotNil(ProjectResolver.candidate(at: folder.path + "/", in: list))
+        XCTAssertNotNil(ProjectResolver.candidate(at: folder.path, in: list))
+        XCTAssertNil(ProjectResolver.candidate(at: folder.path + "-other", in: list))
     }
 
     func testNoNamePrefersTheFrontmostProject() {

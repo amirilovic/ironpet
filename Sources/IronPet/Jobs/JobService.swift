@@ -22,7 +22,7 @@ struct JobError: Error, LocalizedError {
 /// a job that was running when ironpet quit shows as interrupted on the next launch.
 @MainActor
 final class JobService: ObservableObject {
-    static let migrations: [Database.Migration] = [
+    nonisolated static let migrations: [Database.Migration] = [
         .init(500, "jobs: background jobs", sql: """
             CREATE TABLE jobs(id TEXT PRIMARY KEY, title TEXT NOT NULL, prompt TEXT NOT NULL, folder TEXT NOT NULL, agent TEXT NOT NULL,
                               model TEXT, thread TEXT, task TEXT, state TEXT NOT NULL, last_step TEXT, summary TEXT, error TEXT,
@@ -94,8 +94,8 @@ final class JobService: ObservableObject {
         self.tasks = tasks
         self.now = now
         prune()
-        jobs = load()
         interruptLeftovers()
+        jobs = load()
     }
 
     var unavailable: String? { database.unavailableReason }
@@ -128,6 +128,7 @@ final class JobService: ObservableObject {
             job.task = task?.id
         }
         jobs.insert(job, at: 0)
+        trim()
         save(job)
         onChange(job)
         pump()
@@ -237,6 +238,7 @@ final class JobService: ObservableObject {
                                workspace: URL(fileURLWithPath: job.folder), resume: self.job(id)?.thread, model: job.model,
                                images: [], files: [])
             run.transcript.beginTurn(.init(kind: .user(text), origin: ChatSession.jobOrigin))
+            saveThread(id, run: run)
             let error = await turnResult(id, run: run, turn: turn, agentName: agent.name)
             outcome = .some(error)
             saveThread(id, run: run)
@@ -376,16 +378,29 @@ final class JobService: ObservableObject {
 
     /// A job that was queued or running when ironpet quit has no process any more. Its task goes back to the backlog.
     private func interruptLeftovers() {
-        for job in jobs where job.state.isActive {
-            update(job.id) { job in
-                job.state = .interrupted
-                job.ended = self.now()
-                job.waitingFor = nil
-            }
-            if let task = job.task, tasks?.task(task)?.status == .inProgress {
-                _ = try? tasks?.update(task, status: .backlog, note: "ironpet quit while this job was running. Ask Ghost to run it again.",
-                                       by: Self.taskAuthor)
-            }
+        let active = JobState.allCases.filter(\.isActive).map(\.rawValue)
+        let marks = Array(repeating: "?", count: active.count).joined(separator: ", ")
+        let tasks = (try? database.read { db in
+            try db.rows("SELECT task FROM jobs WHERE state IN (\(marks)) AND task IS NOT NULL", active)
+        })?.compactMap { $0[0] as? String } ?? []
+        try? database.write { db in
+            try db.execute("UPDATE jobs SET state = ?, ended = ? WHERE state IN (\(marks))",
+                           [JobState.interrupted.rawValue, now().timeIntervalSince1970] + active)
+        }
+        for task in tasks where self.tasks?.task(task)?.status == .inProgress {
+            _ = try? self.tasks?.update(task, status: .backlog, note: "ironpet quit while this job was running. Ask Ghost to run it again.",
+                                        by: Self.taskAuthor)
+        }
+    }
+
+    /// Keeps the active jobs and the newest finished ones, `listed` in all.
+    private func trim() {
+        guard jobs.count > Self.listed else { return }
+        var finished = Self.listed - jobs.filter(\.state.isActive).count
+        jobs = jobs.filter { job in
+            if job.state.isActive { return true }
+            finished -= 1
+            return finished >= 0
         }
     }
 

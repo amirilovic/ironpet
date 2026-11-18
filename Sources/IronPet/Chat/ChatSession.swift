@@ -580,6 +580,7 @@ final class ChatSession: ObservableObject {
         replyingTo = nil
         items = []
         threadID = nil
+        jobMessages = []
         state = .idle
         lastRunDuration = nil
     }
@@ -596,6 +597,7 @@ final class ChatSession: ObservableObject {
         replyingTo = nil
         items = thread.items
         threadID = thread.id
+        jobMessages = []
         state = .idle
         let url = URL(fileURLWithPath: thread.workspace)
         workspace = url
@@ -633,8 +635,16 @@ final class ChatSession: ObservableObject {
     func threadSaved(_ thread: ChatThread) {
         refreshHistory()
         guard thread.id == threadID, !isRunning else { return }
-        items = thread.items
+        let sent = Set(thread.items.compactMap { item -> String? in
+            if case .user(let text) = item.kind { return text } else { return nil }
+        })
+        // Messages typed here that the job has not started on yet are not in its transcript.
+        jobMessages.removeAll { item in if case .user(let text) = item.kind { sent.contains(text) } else { true } }
+        items = thread.items + jobMessages
     }
+
+    /// Messages typed into the open job thread that are waiting for the job's current turn to end.
+    private var jobMessages: [Item] = []
 
     /// Takes a message typed in a thread whose background job is still running (thread id, text). Returns false when no
     /// job runs there, so the chat sends it itself.
@@ -645,7 +655,9 @@ final class ChatSession: ObservableObject {
         guard !prompt.isEmpty || !attachments.isEmpty else { return }
         speech.stop()
         if !isRunning, attachments.isEmpty, replyingTo == nil, let threadID, jobFollowUp?(threadID, prompt) == true {
-            items.append(Item(kind: .user(prompt), origin: Self.jobOrigin))
+            let item = Item(kind: .user(prompt), origin: Self.jobOrigin)
+            items.append(item)
+            jobMessages.append(item)
             input = ""
             return
         }
