@@ -544,8 +544,12 @@ private struct SpokenReplySettings: View {
             }
             LabeledContent("Preview") {
                 HStack {
-                    if previewing { ProgressView().controlSize(.small) }
-                    Button("Preview", action: { preview() }).disabled(previewing)
+                    if previewing {
+                        ProgressView().controlSize(.small)
+                        Button("Stop") { (speech ?? fallback).stop() }
+                    } else {
+                        Button("Preview", action: { preview() })
+                    }
                 }
             }
             if let result {

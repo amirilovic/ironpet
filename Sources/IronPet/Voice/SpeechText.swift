@@ -12,9 +12,9 @@ enum SpeechText {
     static func chunks(of markdown: String, limit: Int = maxCharacters) -> [String] {
         var sentences: [String] = []
         var total = 0
-        for text in spokenBlocks(of: markdown) {
+        blocks: for text in spokenBlocks(of: markdown) {
             for sentence in self.sentences(in: text) {
-                guard total < limit else { break }
+                guard total < limit else { break blocks }
                 // A single run-on sentence must not blow through the limit on its own.
                 let kept = sentence.count > limit ? truncated(sentence, to: limit) : sentence
                 sentences.append(kept)

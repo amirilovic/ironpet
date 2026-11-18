@@ -994,12 +994,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Call detection
 
-    /// Watches the microphone while meetings and call offers are on, and stops otherwise.
     /// The first poll answers empty, so polling starts when spoken replies are turned on rather than when a reply ends.
+    /// While the meeting call monitor runs, it answers instead and this watch stays off.
     private func syncSpeechQuiet() {
-        if config.config.speech.enabled { _ = speechMic.calls() } else { speechMic.stop() }
+        if config.config.speech.enabled, callMonitor?.isRunning != true { _ = speechMic.calls() } else { speechMic.stop() }
     }
 
+    /// Watches the microphone while meetings and call offers are on, and stops otherwise.
     private func startCallMonitor() {
         let meetings = config.config.meetings
         let on = meetings.enabled && meetings.offerToRecordCalls
