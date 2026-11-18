@@ -340,6 +340,7 @@ final class TestControl {
         var reason = ""
         switch screen.filter.status {
         case .unknown: break
+        case .off: status = "off"
         case .ready(let model): status = "ready"; reason = model
         case .unavailable(let why): status = "unavailable"; reason = why
         }

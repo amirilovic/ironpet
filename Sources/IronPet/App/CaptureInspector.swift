@@ -87,6 +87,7 @@ struct CaptureInspectorView: View {
                         line("State", row.state + (row.reason.map { ": \($0)" } ?? ""))
                         line("Outcome", store.outcome(of: row))
                         if let sent = row.sentAt { line("Sent", sent.formatted(date: .abbreviated, time: .standard)) }
+                        if let label = CaptureDecisionFilter.notCheckedLabel(state: row.state, secret: row.secret) { line("Model", label) }
                         if let secret = row.secret { line("Secret score", secret.formatted(.number.precision(.fractionLength(2)))) }
                         if let calendar = row.calendar { line("Calendar score", calendar.formatted(.number.precision(.fractionLength(2)))) }
                         if let task = row.task { line("New-task score", task.formatted(.number.precision(.fractionLength(2)))) }

@@ -63,6 +63,8 @@ struct Config: Codable, Equatable {
     struct ScreenCapture: Codable, Equatable {
         /// The local model that filters captures before anything is sent to a larger one. It must run on this Mac.
         struct Decision: Codable, Equatable {
+            /// False skips the model: after rule-based redaction an item goes straight to `ready`. Anything the rules miss can then be sent.
+            var enabled = true
             /// `"systemone"` (H2O-Lightning-4B's `/v1/systemone`) or `"openai"` (an OpenAI-compatible `/v1/chat/completions`).
             var api = "systemone"
             /// Must point at this Mac (localhost, 127.0.0.1 or ::1). A remote address is refused, because captures would leave the Mac.

@@ -124,6 +124,8 @@ struct CaptureVerdict: Equatable {
 final class CaptureDecisionFilter {
     enum Status: Equatable {
         case unknown
+        /// The user turned the model off. Only rule-based redaction runs before items are sent.
+        case off
         case ready(model: String)
         /// The reason an item cannot be filtered, shown in Settings.
         case unavailable(String)
@@ -148,6 +150,7 @@ final class CaptureDecisionFilter {
     }
 
     var status: Status {
+        if !settings().enabled { return .off }
         lock.lock()
         defer { lock.unlock() }
         return _status
@@ -223,11 +226,27 @@ final class CaptureDecisionFilter {
     /// How the inspector words a flagged item when the rules redacted nothing.
     static let flaggedByModelReason = "flagged by the model as possibly secret, kept local"
 
-    /// Filters every `new` item in the store. Items the model cannot be asked about stay `new`.
+    /// The inspector line for an item's scores, or nil when it has scores to show. An item that passed with the model off has none.
+    static func notCheckedLabel(state: String, secret: Double?) -> String? {
+        (state == "ready" || state == "sent") && secret == nil ? "Not checked by a model" : nil
+    }
+
+    /// Filters every `new` item in the store. Items the model cannot be asked about stay `new`. With the model off, every `new` item
+    /// moves to `ready` without a call and without scores.
     @discardableResult
     func run(on store: CaptureStore, tasks: CaptureTaskList) async -> FilterResult {
         var done = 0
         var ready = 0
+        if !settings().enabled {
+            set(.off)
+            for item in store.items(inState: "new") {
+                guard isEnabled() else { break }
+                store.setState(item.id, "ready")
+                done += 1
+                ready += 1
+            }
+            return FilterResult(done: done, ready: ready)
+        }
         let open = await tasks.open()
         for item in store.items(inState: "new") {
             guard isEnabled() else { return FilterResult(done: done, ready: ready) }

@@ -181,6 +181,37 @@ final class CaptureFlowTests: XCTestCase {
         XCTAssertEqual(store.sendLog().count, 0)
     }
 
+    func testTheDecisionModelIsOnWhenTheConfigHasNoKey() throws {
+        XCTAssertTrue(Config.ScreenCapture.Decision().enabled)
+        let merged = Config.load(from: FileManager.default.temporaryDirectory.appendingPathComponent("no-such-ironpet-config.json")).config
+        XCTAssertTrue(merged.screenCapture.decision.enabled)
+    }
+
+    func testWithTheModelOffItemsGoStraightToReadyWithoutAnyCallOrScore() async throws {
+        let store = CaptureStore.inMemory()
+        let decision = FakeDecision()
+        decision.down = true
+        let runner = FakeRunner()
+        let filter = CaptureDecisionFilter(settings: { Config.ScreenCapture.Decision(enabled: false, baseUrl: "") }, makeClient: { _, _ in decision })
+        let analyzer = CaptureAnalyzer(store: store, tasks: tasks, settings: settings(), runner: runner, resolveAgent: { _ in self.agent },
+                                       workspace: FileManager.default.temporaryDirectory.appendingPathComponent("capture-agent-test"))
+        let id = try XCTUnwrap(chat(store, messages: ["Please send the report"], at: Date().addingTimeInterval(-3600)))
+        let result = await filter.run(on: store, tasks: tasks)
+        XCTAssertEqual(result, CaptureDecisionFilter.FilterResult(done: 1, ready: 1))
+        XCTAssertEqual(decision.calls, 0)
+        let item = try XCTUnwrap(store.item(id: id))
+        XCTAssertEqual(item.state, "ready")
+        let row = try XCTUnwrap(store.inspect().first { $0.id == id })
+        XCTAssertNil(row.secret); XCTAssertNil(row.calendar); XCTAssertNil(row.task)
+        XCTAssertEqual(CaptureDecisionFilter.notCheckedLabel(state: row.state, secret: row.secret), "Not checked by a model")
+        XCTAssertNil(CaptureDecisionFilter.notCheckedLabel(state: "ready", secret: 0.1))
+        XCTAssertEqual(filter.status, .off)
+        XCTAssertEqual(store.count(inState: "new"), 0)
+        _ = await analyzer.runIfDue(now: Date())
+        _ = await analyzer.run()
+        XCTAssertEqual(runner.prompts.count, 1, "the item is in the next batch")
+    }
+
     /// A raised secret threshold lets an item scored 0.38 through, and the default keeps it local.
     func testTheSecretThresholdFromSettingsDecidesWhetherAnItemStaysLocal() async throws {
         final class Scored: CaptureDecisionClient {
