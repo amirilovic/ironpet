@@ -14,6 +14,7 @@ enum CallApps {
         "com.apple.Siri", "com.apple.assistant", "com.apple.speech", "com.apple.SpeechRecognition",
         "com.apple.corespeech", "com.apple.voicememos", "com.apple.VoiceOver", "com.apple.accessibility",
         "com.apple.audio", "com.apple.coreaudio", "com.apple.controlcenter", "com.apple.dictation",
+        "com.electron.wispr-flow",
     ]
 
     /// Other apps' helper processes report their own bundle IDs. Chrome, Electron apps and WhatsApp use a `.helper`

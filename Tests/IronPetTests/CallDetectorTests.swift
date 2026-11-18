@@ -79,6 +79,14 @@ final class CallDetectorTests: XCTestCase {
         XCTAssertEqual(started, [])
     }
 
+    func testIgnoresWisprFlowDictation() {
+        let d = detector()
+        clients = [MicClient(pid: 200, bundleID: "com.electron.wispr-flow"), MicClient(pid: 201, bundleID: "com.electron.wispr-flow.helper")]
+        d.tick()
+        advance(60, d)
+        XCTAssertEqual(started, [])
+    }
+
     func testEndsAfterTenSecondsOfSilence() {
         let d = detector()
         clients = [whatsapp]
