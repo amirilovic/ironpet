@@ -1,7 +1,7 @@
 import Foundation
 
 /// Reads text out of an accessibility tree without knowing which app it came from. It keeps the text of static text, headings, text
-/// areas and text fields, and drops the chrome around them: buttons, menus, toolbars, tabs, checkboxes and similar controls, whose
+/// areas and text fields, and drops the controls around them: buttons, menus, toolbars, tabs, checkboxes and similar controls, whose
 /// labels ("Bold: off", "Reply") are not what the window says. A secure field is never read.
 enum CaptureText {
     /// A control and everything inside it is dropped. Its label is not content, and its children are more labels.
@@ -50,6 +50,11 @@ enum CaptureText {
             if textRoles.contains(node.role) {
                 // An input holds what was typed. Its title and description name the field ("Message to Ana"), which is not content.
                 let isInput = inputRoles.contains(node.role)
+                if node.role == "Heading" {
+                    // The value of a heading is its level, so a heading reads by its name.
+                    add(nonEmpty(node.title) ?? nonEmpty(node.description) ?? nonEmpty(node.value).flatMap { Int($0) == nil ? $0 : nil })
+                    return
+                }
                 add(nonEmpty(node.value) ?? (isInput ? nil : nonEmpty(node.title) ?? nonEmpty(node.description)), input: isInput)
                 // Rich text areas hold their text in styled children as well as in the value, so they are not walked again.
                 return

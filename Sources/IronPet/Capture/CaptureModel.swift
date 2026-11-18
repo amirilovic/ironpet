@@ -35,23 +35,34 @@ struct AXNode: Equatable, Sendable {
     var description: String?
     /// For a web area: the page address.
     var url: String?
+    /// The element's id in the page (`AXDOMIdentifier`), when a web view has one. Stable across captures.
+    var domId: String?
     var hidden = false
     var children: [AXNode] = []
+    /// The subtree hash `CaptureTree` gave this node. Empty for a node that came straight from the source.
+    var ref = ""
 
     init(role: String, subrole: String? = nil, title: String? = nil, value: String? = nil, description: String? = nil, url: String? = nil,
-         hidden: Bool = false, children: [AXNode] = []) {
+         domId: String? = nil, hidden: Bool = false, children: [AXNode] = []) {
         self.role = role
         self.subrole = subrole
         self.title = title
         self.value = value
         self.description = description
         self.url = url
+        self.domId = domId
         self.hidden = hidden
         self.children = children
     }
 
     /// A password field. Its value is never read, here or by the source.
     var isSecure: Bool { subrole == "SecureTextField" || role == "SecureTextField" }
+
+    /// What the app calls this element: its title, else its description.
+    var name: String? {
+        for text in [title, description] { if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return text } }
+        return nil
+    }
 }
 
 /// The focused window of an app as the source read it.
@@ -96,6 +107,8 @@ struct StoredCapture: Equatable, Identifiable, Sendable {
     var url: String?
     var trigger: String
     var text: String
+    /// The root hash of the stored accessibility tree. Nil for a capture of text only.
+    var root: String? = nil
 }
 
 /// A search result: the capture without its whole text.

@@ -50,21 +50,23 @@ final class CapturePipelineTests: XCTestCase {
             XCTAssertEqual(store.captureCount, 1, "no capture while typing, step \(step)")
         }
         advance(to: clock + 0.6)
-        XCTAssertEqual(store.captureCount, 2, "one capture after the typing pause")
-        XCTAssertTrue(store.recent(limit: 1)[0].text.contains("word word"), "the pause capture holds the draft")
+        XCTAssertEqual(store.captureCount, 1, "typing alone stores no capture, even after the pause")
+        let draft = try? store.database.read { try $0.rows("SELECT text FROM capture_draft WHERE status = 'draft'") }
+        XCTAssertEqual(draft?.count, 1, "one draft row, updated in place")
+        XCTAssertTrue((draft?.first?.first as? String)?.contains("word word") == true, "the draft holds what was typed")
 
         // Enter: the draft is cleared and the message joins the list.
         source.root = CaptureFixtures.slack(messages: history + [typed.trimmingCharacters(in: .whitespaces)])
         scheduler.signal(.key, at: clock)
         advance(to: clock + 0.6)
-        XCTAssertEqual(store.captureCount, 3, "one capture after the send")
+        XCTAssertEqual(store.captureCount, 2, "one capture after the send")
         XCTAssertTrue(store.recent(limit: 1)[0].text.contains("word word"), "the sent message is stored although it equals the draft")
 
         let everything = store.list(limit: 60).map(\.text).joined(separator: "\n")
         for label in ["Bold: off", "Italic: off", "Send now", "Strikethrough", "Message to Ana"] {
             XCTAssertFalse(everything.contains(label), "stored text has the control label \(label)")
         }
-        XCTAssertEqual(outcomes.filter { if case .stored = $0 { return true } else { return false } }.count, 3)
+        XCTAssertEqual(outcomes.filter { if case .stored = $0 { return true } else { return false } }.count, 2)
     }
 
     // MARK: S2
