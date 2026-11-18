@@ -639,12 +639,19 @@ final class ChatSession: ObservableObject {
             if case .user(let text) = item.kind { return text } else { return nil }
         })
         // Messages typed here that the job has not started on yet are not in its transcript.
-        jobMessages.removeAll { item in if case .user(let text) = item.kind { sent.contains(text) } else { true } }
-        items = thread.items + jobMessages
+        jobMessages.removeAll { sent.contains($0.sent) }
+        items = thread.items + jobMessages.map(\.item)
+    }
+
+    /// What a message typed in a job's thread sends to the job.
+    static func jobMessage(_ text: String, reply: Reply?, files: [URL]) -> String {
+        var message = reply.map { replyPrompt($0, text: text) } ?? text
+        if !files.isEmpty { message += (message.isEmpty ? "" : "\n\n") + "Attached files:\n" + files.map { "- \($0.path)" }.joined(separator: "\n") }
+        return message
     }
 
     /// Messages typed into the open job thread that are waiting for the job's current turn to end.
-    private var jobMessages: [Item] = []
+    private var jobMessages: [(item: Item, sent: String)] = []
 
     /// Takes a message typed in a thread whose background job is still running (thread id, text). Returns false when no
     /// job runs there, so the chat sends it itself.
@@ -654,10 +661,15 @@ final class ChatSession: ObservableObject {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !attachments.isEmpty else { return }
         speech.stop()
-        if !isRunning, attachments.isEmpty, replyingTo == nil, let threadID, jobFollowUp?(threadID, prompt) == true {
-            let item = Item(kind: .user(prompt), origin: Self.jobOrigin)
+        // A second process on the job's session would race it, so everything typed here goes to the job: a reply as its
+        // quoted prompt, attachments as their paths.
+        let message = Self.jobMessage(prompt, reply: replyingTo, files: attachments)
+        if !isRunning, let threadID, jobFollowUp?(threadID, message) == true {
+            let item = Item(kind: .user(prompt.isEmpty ? "Attached files" : prompt), origin: Self.jobOrigin, reply: replyingTo)
+            attachments = []
+            replyingTo = nil
             items.append(item)
-            jobMessages.append(item)
+            jobMessages.append((item, message))
             input = ""
             return
         }

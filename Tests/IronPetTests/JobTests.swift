@@ -11,6 +11,11 @@ private final class FakeJobAgent: JobAgent {
     var decisions: [ApprovalDecision] = []
     var reply = "Fixed the flaky test. It waited on a fixed sleep."
     var error: String?
+    /// The first turn fails with this; later ones use `error`.
+    var firstError: String?
+    /// Like an agent still starting: `cancel()` has no effect until the session is up, only `shutdown()` ends it.
+    var slowStart = false
+    private var startGate: CheckedContinuation<Void, Never>?
     private(set) var cancelled = false
     private(set) var shutDown = false
     private var gate: CheckedContinuation<Void, Never>?
@@ -18,6 +23,10 @@ private final class FakeJobAgent: JobAgent {
 
     func runTurn(_ turn: ACPTurn, onEvent: @escaping (AgentEvent) -> Void) async {
         turns.append(turn)
+        if slowStart {
+            await withCheckedContinuation { startGate = $0 }
+            if shutDown { return onEvent(.finished(error: "The agent closed")) }
+        }
         onEvent(.session("session-1"))
         onEvent(.toolStarted(id: "t\(turns.count)", summary: "Run swift test"))
         if let call = permission {
@@ -31,7 +40,8 @@ private final class FakeJobAgent: JobAgent {
         onEvent(.toolFinished(id: "t\(turns.count)", ok: true))
         if cancelled { return onEvent(.finished(error: nil)) }
         onEvent(.assistant(reply))
-        onEvent(.finished(error: error))
+        let failure = turns.count == 1 ? firstError ?? error : error
+        onEvent(.finished(error: failure))
     }
 
     /// Ends the turn that waits. Later turns wait too only with `holdingNext`.
@@ -42,12 +52,17 @@ private final class FakeJobAgent: JobAgent {
     }
 
     func cancel() {
+        guard startGate == nil else { return }
         cancelled = true
         gate?.resume()
         gate = nil
     }
 
-    func shutdown() { shutDown = true }
+    func shutdown() {
+        shutDown = true
+        startGate?.resume()
+        startGate = nil
+    }
 }
 
 @MainActor
@@ -163,6 +178,43 @@ final class JobTests: XCTestCase {
         XCTAssertTrue(agents[0].cancelled)
         XCTAssertEqual(agents.count, 1, "a stopped job never starts")
         XCTAssertNil(jobs.job(first.id)?.agentSession, "a stopped job leaves the Agents section")
+    }
+
+    func testStopWhileTheAgentIsStartingClosesItsProcess() async throws {
+        let jobs = service { $0.slowStart = true }
+        jobs.stopGrace = 0.05
+        let job = try jobs.start(title: "Fix", prompt: "Fix it", folder: folder)
+        await until { agents.first?.turns.count == 1 }
+        try jobs.stop(job.id)
+        await until { jobs.job(job.id)?.state == .stopped }
+        XCTAssertTrue(agents[0].shutDown)
+        XCTAssertNil(jobs.job(job.id)?.lastStep, "nothing ran after the stop")
+    }
+
+    func testAStoppedJobDeniesPermissionsThatArriveLate() async throws {
+        let call = ACPToolCall(id: "1", title: "Run", kind: "execute", rawInput: ["command": "swift test"])
+        let jobs = service { $0.hold = true }
+        let job = try jobs.start(title: "Fix", prompt: "Fix it", folder: folder)
+        await until { agents.first?.isWaiting == true }
+        try jobs.stop(job.id)
+        var decision: ApprovalDecision?
+        agents[0].onPermission?(call) { decision = $0 }
+        XCTAssertEqual(decision?.allow, false)
+        await until { jobs.job(job.id)?.state == .stopped }
+    }
+
+    func testAFollowUpStillRunsAfterAFailedTurn() async throws {
+        let jobs = service { agent in
+            agent.firstError = "Tests failed"
+            agent.hold = true
+        }
+        let job = try jobs.start(title: "Fix", prompt: "Fix it", folder: folder)
+        await until { agents.first?.isWaiting == true }
+        try jobs.followUp(job.id, message: "Try again with Node 22")
+        agents[0].release()
+        await until { jobs.job(job.id)?.state.isActive == false }
+        XCTAssertEqual(agents[0].turns.map(\.prompt), ["Fix it", "Try again with Node 22"])
+        XCTAssertEqual(jobs.job(job.id)?.state, .done)
     }
 
     func testDestructiveCommandWaitsForAClick() async throws {
@@ -311,6 +363,27 @@ final class JobTests: XCTestCase {
         XCTAssertEqual(prompts(), ["Fix it", "Also update the README"], "kept until the job starts on it")
         chat.threadSaved(thread(["Fix it", "Also update the README"]))
         XCTAssertEqual(prompts(), ["Fix it", "Also update the README"], "not shown twice")
+    }
+
+    func testRepliesAndAttachmentsInAJobThreadGoToTheJobToo() {
+        let chat = ChatSession(restore: false)
+        chat.open(ChatThread(id: "session-1", title: "Fix", workspace: folder.path, updatedAt: Date(), items: [],
+                             agent: AgentCatalog.all[0].id, job: "job-1"))
+        var routed: [String] = []
+        chat.jobFollowUp = { _, text in
+            routed.append(text)
+            return true
+        }
+        let shot = folder.appendingPathComponent("shot.png")
+        chat.attachments = [shot]
+        chat.input = "Use this design"
+        chat.send()
+        XCTAssertEqual(routed, ["Use this design\n\nAttached files:\n- \(shot.path)"])
+        XCTAssertTrue(chat.attachments.isEmpty)
+        XCTAssertFalse(chat.isRunning, "the chat starts no agent of its own on the job's session")
+        chat.threadSaved(ChatThread(id: "session-1", title: "Fix", workspace: folder.path, updatedAt: Date(),
+                                    items: [.init(kind: .user(routed[0]), origin: ChatSession.jobOrigin)], agent: AgentCatalog.all[0].id, job: "job-1"))
+        XCTAssertEqual(chat.items.count, 1, "the typed row is replaced by the job's own once it starts on it")
     }
 
     func testHookEventsCannotPoseAsAJob() {

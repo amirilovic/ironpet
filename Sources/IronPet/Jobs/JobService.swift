@@ -46,6 +46,8 @@ final class JobService: ObservableObject {
     /// The agent and model a new job runs with: the chat's.
     var currentAgent: () -> (agent: ACPAgent, model: String?)? = { nil }
     var maxRunning: () -> Int = { ConfigStore.shared.config.jobs.maxRunning }
+    /// How long a stopped job's turn may take to end after `session/cancel` before its process is closed.
+    var stopGrace: TimeInterval = 5
     var makeAgent: (ACPAgent) -> JobAgent = { agent in
         let backend = ACPBackend(agent: agent)
         backend.usageFeature = .jobs
@@ -178,6 +180,14 @@ final class JobService: ObservableObject {
             }
             run.approvals = [:]
             run.agent.cancel()
+            // A cancel before the prompt is sent (the agent still starting) does nothing, so close the process if the turn
+            // has not ended a moment later.
+            Task { [weak self, weak run] in
+                guard let grace = self?.stopGrace else { return }
+                try? await Task.sleep(for: .seconds(grace))
+                guard let self, let run, runs[id] === run else { return }
+                run.agent.shutdown()
+            }
         } else {
             pendingFollowUps[id] = nil
             finish(id, state: .stopped, note: "Stopped before it started.")
@@ -242,7 +252,8 @@ final class JobService: ObservableObject {
             let error = await turnResult(id, run: run, turn: turn, agentName: agent.name)
             outcome = .some(error)
             saveThread(id, run: run)
-            if run.stopRequested || error != nil { break }
+            // A follow-up the user sent still runs after a failed turn; it may be the fix ("try again with Node 22").
+            if run.stopRequested || error != nil && run.followUps.isEmpty { break }
             prompt = run.followUps.isEmpty ? nil : run.followUps.removeFirst()
         }
         for approval in run.approvals.keys { clearApproval(approval) }
@@ -272,6 +283,8 @@ final class JobService: ObservableObject {
         defer { watchdog.cancel() }
         await run.agent.runTurn(turn) { [weak self] event in
             guard let self else { return }
+            // Stopped while the agent was starting: the prompt is in flight now, so the cancel can reach it.
+            if run.stopRequested { return run.agent.cancel() }
             run.transcript.record(event)
             switch event {
             case .session(let session):
@@ -297,6 +310,7 @@ final class JobService: ObservableObject {
     /// Answers with the Auto policy. Anything it would still ask about (a destructive command) waits for a click.
     private func permission(_ id: String, _ call: ACPToolCall, _ respond: @escaping (ApprovalDecision) -> Void) {
         guard let run = runs[id], let job = job(id) else { return respond(.deny("The job ended")) }
+        if run.stopRequested { return respond(.deny("The user stopped this job")) }
         switch ApprovalRules.policy(for: call, auto: true) {
         case .allow:
             respond(.allow)

@@ -101,4 +101,13 @@ final class MemoryStoreTests: XCTestCase {
         try store.remember("New one", kind: .fact, workspace: nil)
         XCTAssertEqual(text(store.aboutMe), "# About me\n\nThings I wrote myself.\n\n- Existing bullet\n- New one\n")
     }
+
+    func testSectionsTheUserMadeKeepTheirBullets() throws {
+        let organised = "# About me\n\n## Work\n\n- Reviews PRs in the morning\n\n## Home\n\n- Picks up the kids at 16:00\n"
+        try organised.write(to: store.aboutMe, atomically: true, encoding: .utf8)
+        try store.remember("Prefers short answers", kind: .fact, workspace: nil)
+        XCTAssertEqual(text(store.aboutMe), organised + "- Prefers short answers\n")
+        _ = try store.forget("kids")
+        XCTAssertEqual(text(store.aboutMe), "# About me\n\n## Work\n\n- Reviews PRs in the morning\n\n## Home\n\n- Prefers short answers\n")
+    }
 }

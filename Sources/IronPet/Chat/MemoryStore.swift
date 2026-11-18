@@ -91,13 +91,10 @@ final class FileMemoryStore: MemoryStore {
         }
         let file = try self.file(for: kind, workspace: workspace)
         let stored = kind == .conversation ? "\(Self.stamp(now())): \(line)" : line
-        var existing = bullets(in: file)
-        if kind != .conversation, let same = existing.first(where: { $0.caseInsensitiveCompare(line) == .orderedSame }) {
+        if kind != .conversation, let same = bullets(in: file).first(where: { $0.caseInsensitiveCompare(line) == .orderedSame }) {
             return MemoryEntry(kind: kind, text: same)
         }
-        existing.append(stored)
-        if kind == .conversation { existing = Array(existing.suffix(Self.keptConversations)) }
-        try write(existing, to: file, kind: kind, workspace: workspace)
+        try append(stored, to: file, kind: kind, workspace: workspace)
         return MemoryEntry(kind: kind, text: stored)
     }
 
@@ -151,14 +148,24 @@ final class FileMemoryStore: MemoryStore {
             + projects.filter { $0.pathExtension == "md" }.map { ($0, .project) }
     }
 
-    /// Rewrites the file with the header it had (or a new one) and these bullets, keeping any text that is not a bullet.
-    private func write(_ entries: [String], to file: URL, kind: MemoryKind, workspace: URL?) throws {
+    /// Adds a bullet at the end of the file (a new file starts with its header). Everything else in the file stays where the
+    /// user put it. Conversations drop their oldest bullets past `keptConversations`.
+    private func append(_ entry: String, to file: URL, kind: MemoryKind, workspace: URL?) throws {
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let content = (try? String(contentsOf: file, encoding: .utf8)) ?? header(kind, workspace: workspace)
-        var head = content.components(separatedBy: "\n").filter { Self.bullet($0) == nil }
-        while head.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { head.removeLast() }
-        let body = entries.map { "- \($0)" }.joined(separator: "\n")
-        try (head.joined(separator: "\n") + "\n\n" + body + "\n").write(to: file, atomically: true, encoding: .utf8)
+        let existing = try? String(contentsOf: file, encoding: .utf8)
+        var lines = (existing ?? header(kind, workspace: workspace)).components(separatedBy: "\n")
+        while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeLast() }
+        if !lines.contains(where: { Self.bullet($0) != nil }) { lines.append("") }
+        lines.append("- \(entry)")
+        if kind == .conversation {
+            var extra = lines.filter { Self.bullet($0) != nil }.count - Self.keptConversations
+            lines.removeAll { line in
+                guard extra > 0, Self.bullet(line) != nil else { return false }
+                extra -= 1
+                return true
+            }
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
     }
 
     private func header(_ kind: MemoryKind, workspace: URL?) -> String {
