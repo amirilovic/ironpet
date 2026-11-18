@@ -54,11 +54,11 @@ final class CapturePipelineTests: XCTestCase {
         XCTAssertTrue(store.recent(limit: 1)[0].text.contains("word word"), "the pause capture holds the draft")
 
         // Enter: the draft is cleared and the message joins the list.
-        source.root = CaptureFixtures.slack(messages: history + ["On it, I will look at it now."])
+        source.root = CaptureFixtures.slack(messages: history + [typed.trimmingCharacters(in: .whitespaces)])
         scheduler.signal(.key, at: clock)
         advance(to: clock + 0.6)
         XCTAssertEqual(store.captureCount, 3, "one capture after the send")
-        XCTAssertTrue(store.recent(limit: 1)[0].text.contains("On it, I will look at it now."))
+        XCTAssertTrue(store.recent(limit: 1)[0].text.contains("word word"), "the sent message is stored although it equals the draft")
 
         let everything = store.list(limit: 60).map(\.text).joined(separator: "\n")
         for label in ["Bold: off", "Italic: off", "Send now", "Strikethrough", "Message to Ana"] {
@@ -78,6 +78,26 @@ final class CapturePipelineTests: XCTestCase {
         guard case .stored = capture(ocr: true) else { return XCTFail("expected a stored capture") }
         XCTAssertEqual(source.ocrCalls, 1)
         XCTAssertEqual(store.recent(limit: 1)[0].text, "Invoice 4649\nDue on Friday")
+    }
+
+    func testTheScreenshotIsOfTheWindowThatWasReadAndNeverGuessed() {
+        source.root = AXNode(role: "Window", children: [AXNode(role: "Button", title: "Close")])
+        source.ocrLines = ["Invoice 4649"]
+        source.windowID = 77
+        _ = capture(ocr: true)
+        XCTAssertEqual(source.ocrWindowIDs, [77])
+        // A private window is judged on the window that was read, before any screenshot of it.
+        source.app = CaptureApp(bundleId: "com.apple.Safari", name: "Safari", pid: 7)
+        source.title = "Example - Private Browsing"
+        XCTAssertEqual(capture(ocr: true), .skipped(.privateWindow))
+        XCTAssertEqual(source.ocrWindowIDs.count, 1, "no screenshot of a skipped window")
+    }
+
+    func testABrowserWindowWithoutAnAddressFailsClosed() {
+        source.app = CaptureApp(bundleId: "com.google.Chrome", name: "Chrome", pid: 7)
+        source.root = CaptureFixtures.slack(messages: ["hi"], url: nil)
+        XCTAssertEqual(capture(), .skipped(.unsafeURL))
+        XCTAssertEqual(store.captureCount, 0)
     }
 
     func testAWindowWithTextNeverTakesAScreenshot() {

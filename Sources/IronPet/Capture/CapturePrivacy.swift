@@ -163,6 +163,7 @@ final class CapturePrivacy {
         if let skip = checkApp(read.app, now: now) { return skip }
         if isPrivateWindow(app: read.app, title: read.title) { return .privateWindow }
         if let url = read.url { return CaptureFloor.checkURL(bundleId: read.app.bundleId, raw: url) }
-        return nil
+        // A browser window whose address could not be read might be on a denied host, so it fails closed like a malformed address.
+        return CaptureFloor.isBrowser(read.app.bundleId) ? .unsafeURL : nil
     }
 }

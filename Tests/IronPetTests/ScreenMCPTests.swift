@@ -80,6 +80,18 @@ final class ScreenMCPTests: XCTestCase {
         XCTAssertEqual(value["count"] as? Int, CaptureStore.maxListedCaptures)
     }
 
+    func testATruncatedListingKeepsTheNewestCaptures() async throws {
+        for index in 0..<(CaptureStore.maxListedCaptures + 10) {
+            try store.ingest(app: safari, title: "Seq \(index)", url: nil, trigger: .idle, lines: ["seq line \(index)"], now: now.addingTimeInterval(Double(index) - 1000))
+        }
+        let (value, _, _) = try await call("screen_window", ["since": "2d", "window": "Seq"])
+        let captures = value["captures"] as? [[String: Any]] ?? []
+        XCTAssertEqual(value["truncated"] as? Bool, true)
+        XCTAssertEqual(captures.count, CaptureStore.maxListedCaptures)
+        XCTAssertEqual(captures.last?["window"] as? String, "Seq \(CaptureStore.maxListedCaptures + 9)", "the newest is kept")
+        XCTAssertEqual(captures.first?["window"] as? String, "Seq 10", "the oldest are dropped, and the rest stay oldest first")
+    }
+
     func testBadArgumentsAreErrorsNotCrashes() async throws {
         for (name, args) in [("screen_search", [String: Any]()), ("screen_search", ["query": "x", "since": "last tuesday-ish"]),
                              ("screen_window", [:]), ("screen_window", ["since": "never"])] as [(String, [String: Any])] {

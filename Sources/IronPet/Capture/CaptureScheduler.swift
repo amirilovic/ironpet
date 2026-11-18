@@ -47,7 +47,7 @@ struct CaptureScheduler {
     /// When the next capture is due, for arming a timer: a pending signal's time or the idle time, whichever is first.
     func nextDue(now: TimeInterval) -> TimeInterval {
         let idleAt = (lastCapture ?? anchor ?? now) + timing.idle
-        var at = min(due?.at ?? .infinity, idleAt)
+        var at = due?.at ?? idleAt
         if let lastCapture { at = max(at, lastCapture + timing.minGap) }
         return at
     }

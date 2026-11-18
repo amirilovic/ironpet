@@ -22,7 +22,7 @@ final class IdleCaptureSource: CaptureSource {
     var isTrusted: Bool { false }
     func frontmostApp() -> CaptureApp? { nil }
     func readFocusedWindow(of app: CaptureApp, budget: CaptureReadBudget) -> WindowRead? { nil }
-    func recognizeFocusedWindow(of app: CaptureApp) -> [String]? { nil }
+    func recognizeFocusedWindow(of app: CaptureApp, windowID: UInt32?) -> [String]? { nil }
 }
 
 /// Runs the capture loop and owns the master switch. With the switch off nothing here starts: no source, no timer, no accessibility or

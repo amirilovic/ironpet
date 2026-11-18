@@ -87,7 +87,7 @@ struct ScreenSection: View {
     private func row(id: Int64, at: Date, app: String, window: String, text: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Button {
-                if open.contains(id) { open.remove(id) } else { open.insert(id); openText[id] = store?.capture(id: id)?.text }
+                if open.contains(id) { open.remove(id) } else { open.insert(id); loadText(id) }
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
@@ -108,8 +108,25 @@ struct ScreenSection: View {
         }
     }
 
+    /// Reads the database off the main thread. An answer for a search the user has since changed is dropped.
     private func refresh() {
         guard let store else { return }
-        if query.isEmpty { recent = store.recent(limit: 50) } else { hits = store.search(query, limit: 50) }
+        let asked = query
+        Task.detached(priority: .userInitiated) {
+            let found = asked.isEmpty ? store.recent(limit: 50) : []
+            let matched = asked.isEmpty ? [] : store.search(asked, limit: 50)
+            await MainActor.run {
+                guard asked == query else { return }
+                if asked.isEmpty { recent = found } else { hits = matched }
+            }
+        }
+    }
+
+    private func loadText(_ id: Int64) {
+        guard let store else { return }
+        Task.detached(priority: .userInitiated) {
+            let text = store.capture(id: id)?.text
+            await MainActor.run { openText[id] = text }
+        }
     }
 }

@@ -26,7 +26,7 @@ enum ScreenMCP {
             ["name": "screen_window",
              "description": "Read screen captures. With id, returns that one capture's text. Without id, lists the captures from since to until "
                 + "(until defaults to now) with their text, oldest first, optionally only one app or window. At most \(CaptureStore.maxListedCaptures) "
-                + "captures come back; narrow the range when truncated is true.\n\n" + guide,
+                + "captures come back, the newest ones; when truncated is true the oldest of the range are left out, so narrow since.\n\n" + guide,
              "inputSchema": ["type": "object",
                              "properties": ["id": ["type": "integer", "description": "A capture id from screen_search or a listing"],
                                             "app": time("Only this app, by bundle id or name"),
@@ -71,12 +71,14 @@ enum ScreenMCP {
             }
             guard let since else { return .failure(Failure(message: "give an id, or since to list a time range")) }
             let listed = store.list(app: text("app"), window: text("window"), since: since, until: until ?? now, limit: CaptureStore.maxListedCaptures + 1)
+            // Fill from the newest back, so a long range drops its oldest captures, not the latest activity.
             var captures: [[String: Any]] = [], characters = 0, truncated = listed.count > CaptureStore.maxListedCaptures
-            for capture in listed.prefix(CaptureStore.maxListedCaptures) {
+            for capture in listed.suffix(CaptureStore.maxListedCaptures).reversed() {
                 if characters + capture.text.count > CaptureStore.maxListedCharacters, !captures.isEmpty { truncated = true; break }
                 characters += capture.text.count
                 captures.append(row(capture, calendar))
             }
+            captures.reverse()
             return .success(["count": captures.count, "truncated": truncated, "captures": captures])
         default:
             return .failure(Failure(message: "unknown tool \(name)"))

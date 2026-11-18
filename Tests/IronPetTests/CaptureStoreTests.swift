@@ -26,12 +26,30 @@ final class CaptureStoreTests: XCTestCase {
     }
 
     func testWindowsAreKeyedByAppAndTitleOrByPageAddress() throws {
-        try add(slack, "Ana", ["shared line", "x"])
+        try add(slack, "Ana", ["shared line", "x"], ago: 120)
         guard case .stored = try add(slack, "Ben", ["shared line", "x"]) else { return XCTFail("another window starts with its own history") }
         guard case .stored = try add(safari, "Ana", ["shared line", "x"]) else { return XCTFail("another app does too") }
         try add(safari, "Page", ["a", "b"], url: "https://example.com/p?id=1#top")
         XCTAssertEqual(try add(safari, "Page, renamed", ["a", "b"], url: "https://example.com/p?id=1#other"), .unchanged, "a page is keyed by address without the fragment")
         guard case .stored = try add(safari, "Page", ["a", "b", "c"], url: "https://example.com/p?id=2") else { return XCTFail("another address is another window") }
+    }
+
+    func testAWindowKeepsDigestsNotText() throws {
+        try add(slack, "Ana", ["a secret-looking line", "b"])
+        let rows = try store.database.read { try $0.rows("SELECT last_lines FROM capture_window") }
+        let kept = rows[0][0] as? String ?? ""
+        XCTAssertFalse(kept.contains("secret-looking"))
+        XCTAssertEqual(kept.split(separator: "\n").count, 2)
+    }
+
+    func testATitleThatChangesEveryCaptureStaysOneWindow() throws {
+        try add(slack, "Terminal - 1 task", ["l1", "l2", "l3", "l4"], ago: 20)
+        guard case .stored(let id) = try add(slack, "Terminal - 2 tasks", ["l1", "l2", "l3", "l4", "l5"], ago: 10) else { return XCTFail() }
+        XCTAssertEqual(store.capture(id: id)?.text, "l3\nl4\nl5", "only the new line with context, not the whole window again")
+        XCTAssertEqual(try add(slack, "Terminal - 3 tasks", ["l1", "l2", "l3", "l4", "l5"]), .unchanged)
+        let windows = try store.database.read { try $0.rows("SELECT COUNT(*) FROM capture_window") }
+        XCTAssertEqual(windows[0][0] as? Int64, 1)
+        guard case .stored = try add(slack, "Other chat", ["x1", "x2", "x3"]) else { return XCTFail("different content is another window") }
     }
 
     func testALineThatLeavesAndComesBackIsNewAgain() throws {

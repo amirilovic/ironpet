@@ -25,16 +25,15 @@ enum ScreenOCR {
         return lines.map(\.text)
     }
 
-    /// A screenshot of the front window of `pid`, taken without writing a file. Blocks the calling thread, so it must not be the main one.
-    static func screenshot(ofWindowOwnedBy pid: pid_t, timeout: TimeInterval = 3) -> CGImage? {
+    /// A screenshot of the window `id`, which must belong to `pid`, taken without writing a file. Blocks the calling thread, so it must not be the main one.
+    static func screenshot(ofWindow id: CGWindowID, ownedBy pid: pid_t, timeout: TimeInterval = 3) -> CGImage? {
         guard CGPreflightScreenCaptureAccess() else { return nil }
         let done = DispatchSemaphore(value: 0)
         let box = ImageBox()
         Task.detached {
             defer { done.signal() }
             guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true),
-                  let window = content.windows.filter({ $0.owningApplication?.processID == pid && $0.windowLayer == 0 && $0.frame.width > 1 })
-                    .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else { return }
+                  let window = content.windows.first(where: { $0.windowID == id && $0.owningApplication?.processID == pid && $0.frame.width > 1 }) else { return }
             let configuration = SCStreamConfiguration()
             configuration.width = Int(window.frame.width * 2)
             configuration.height = Int(window.frame.height * 2)
@@ -47,9 +46,9 @@ enum ScreenOCR {
 
     private final class ImageBox: @unchecked Sendable { var image: CGImage? }
 
-    /// The text of the front window of `pid`: screenshot, recognize, drop the image.
-    static func recognizeWindow(ownedBy pid: pid_t) -> [String]? {
-        guard let image = screenshot(ofWindowOwnedBy: pid) else { return nil }
+    /// The text of window `id`: screenshot, recognize, drop the image.
+    static func recognizeWindow(id: CGWindowID, ownedBy pid: pid_t) -> [String]? {
+        guard let image = screenshot(ofWindow: id, ownedBy: pid) else { return nil }
         return recognize(image)
     }
 }

@@ -10,6 +10,9 @@ final class FakeCaptureSource: CaptureSource {
     var trusted = true
     private(set) var reads = 0
     private(set) var ocrCalls = 0
+    private(set) var ocrWindowIDs: [UInt32?] = []
+    var url: String?
+    var windowID: UInt32? = 42
     private(set) var started = false
     private(set) var stopped = false
     private var onSignal: ((CaptureSignal) -> Void)?
@@ -25,11 +28,12 @@ final class FakeCaptureSource: CaptureSource {
 
     func readFocusedWindow(of app: CaptureApp, budget: CaptureReadBudget) -> WindowRead? {
         reads += 1
-        return WindowRead(app: app, title: title, url: nil, root: root)
+        return WindowRead(app: app, title: title, url: url, root: root, windowID: windowID)
     }
 
-    func recognizeFocusedWindow(of app: CaptureApp) -> [String]? {
+    func recognizeFocusedWindow(of app: CaptureApp, windowID: UInt32?) -> [String]? {
         ocrCalls += 1
+        ocrWindowIDs.append(windowID)
         return ocrLines
     }
 

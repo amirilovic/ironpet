@@ -348,7 +348,7 @@ Screen capture is off by default. When on, ironpet reads the text of the window 
 
 **When.** A capture runs after an app switch or window focus change (0.3 s later), a pause in typing (0.5 s after the last key), the end of scrolling (0.4 s), a click (0.2 s), and every 10 s when nothing else happened. Captures are at least 0.2 s apart and nothing is captured per keystroke. Key events are used as timing only. No key is read.
 
-**What is stored.** Each window (app plus window title, or page address in a browser) keeps the lines of its last capture. A new capture stores only the lines that were not there, with two lines of context on each side, and nothing is stored when no line is new. Text is searchable with SQLite FTS5.
+**What is stored.** Each window (app plus window title, or page address in a browser) keeps a short hash of each line of its last capture, not the text. A new capture stores only the lines whose hash was not there, with two lines of context on each side, and nothing is stored when no line is new. Text is searchable with SQLite FTS5.
 
 **Redaction.** Before storage, every capture goes through the rules: AWS, GitHub, GitLab, Anthropic and other `sk-` keys, Stripe, Slack, Google, npm and SendGrid keys, JWTs, private key blocks, `user:password@` in URLs and secret query parameters, `password=`, `token:` and `.env`-style assignments, card and bank numbers, and long random strings. Each span becomes `[redacted:<kind>]`. The code has a hook (`CapturePrivacyFilter`) for an on-device privacy filter on write and on read. No filter ships yet.
 

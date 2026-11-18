@@ -26,15 +26,21 @@ enum CaptureText {
     static let maxCharacters = 120_000
 
     /// The lines of text in a window, top to bottom, with spacing trimmed and a line that repeats directly after itself kept once.
-    static func lines(in root: AXNode) -> [String] {
+    static func lines(in root: AXNode) -> [String] { read(in: root).lines }
+
+    /// The lines of a window, and the lines among them that came from an input field. The diff keeps those apart, because a draft
+    /// reappears as a sent message and must not hide it.
+    static func read(in root: AXNode) -> (lines: [String], inputs: [String]) {
         var out: [String] = []
+        var inputs: [String] = []
         var size = 0
-        func add(_ text: String?) {
+        func add(_ text: String?, input: Bool = false) {
             guard let text else { return }
             for piece in text.split(whereSeparator: \.isNewline) {
                 let line = piece.trimmingCharacters(in: .whitespaces)
                 guard !line.isEmpty, line != out.last, size < maxCharacters else { continue }
                 out.append(line)
+                if input { inputs.append(line) }
                 size += line.count + 1
             }
         }
@@ -44,7 +50,7 @@ enum CaptureText {
             if textRoles.contains(node.role) {
                 // An input holds what was typed. Its title and description name the field ("Message to Ana"), which is not content.
                 let isInput = inputRoles.contains(node.role)
-                add(nonEmpty(node.value) ?? (isInput ? nil : nonEmpty(node.title) ?? nonEmpty(node.description)))
+                add(nonEmpty(node.value) ?? (isInput ? nil : nonEmpty(node.title) ?? nonEmpty(node.description)), input: isInput)
                 // Rich text areas hold their text in styled children as well as in the value, so they are not walked again.
                 return
             }
@@ -54,7 +60,7 @@ enum CaptureText {
             if node.role == "Link", out.count == before { add(nonEmpty(node.title) ?? nonEmpty(node.description)) }
         }
         walk(root)
-        return out
+        return (out, inputs)
     }
 
     private static func nonEmpty(_ text: String?) -> String? {
@@ -79,9 +85,14 @@ enum CaptureDiff {
     /// separated by a line holding `…`. Nil when nothing is new.
     static func fresh(previous: [String], current: [String], context: Int = context) -> String? {
         let known = Set(previous)
+        return fresh(current: current, isKnown: known.contains, context: context)
+    }
+
+    /// Same, for a caller that knows the previous lines only by a test, such as a digest lookup.
+    static func fresh(current: [String], isKnown: (String) -> Bool, context: Int = context) -> String? {
         var keep = Set<Int>()
         var anyNew = false
-        for (index, line) in current.enumerated() where !known.contains(line) {
+        for (index, line) in current.enumerated() where !isKnown(line) {
             anyNew = true
             for neighbour in max(0, index - context)...min(current.count - 1, index + context) { keep.insert(neighbour) }
         }

@@ -61,6 +61,8 @@ struct WindowRead: Equatable, Sendable {
     /// The page address of a web view in the window, when there is one.
     var url: String?
     var root: AXNode
+    /// The window server id of the window that was read, so a screenshot is of that window and no other. Nil when it is unknown.
+    var windowID: UInt32? = nil
 }
 
 /// What the source may spend on one window read.
@@ -79,9 +81,9 @@ protocol CaptureSource: AnyObject {
     func frontmostApp() -> CaptureApp?
     /// Reads the focused window's accessibility tree. Nil when there is no window or no access.
     func readFocusedWindow(of app: CaptureApp, budget: CaptureReadBudget) -> WindowRead?
-    /// Lines of text from a screenshot of the app's focused window, read on this Mac. The image is never written to disk.
-    /// Nil when Screen Recording is not allowed or there is no window.
-    func recognizeFocusedWindow(of app: CaptureApp) -> [String]?
+    /// Lines of text from a screenshot of the window `windowID` (the one `readFocusedWindow` returned), read on this Mac. The image is
+    /// never written to disk. Nil when Screen Recording is not allowed, the id is unknown or that window is gone.
+    func recognizeFocusedWindow(of app: CaptureApp, windowID: UInt32?) -> [String]?
 }
 
 /// One capture's text, as stored and as the MCP tools return it.

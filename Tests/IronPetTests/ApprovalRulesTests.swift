@@ -82,6 +82,14 @@ final class ApprovalRulesTests: XCTestCase {
         XCTAssertEqual(policy(ACPToolCall(id: "1", title: "mcp__ironpet__tasks_list", kind: "other")), .allow)
     }
 
+    func testScreenToolsOfTheIronpetServerAreAllowedButOtherServersAsk() {
+        for tool in ["screen_search", "screen_window"] {
+            XCTAssertEqual(policy(ACPToolCall(id: "1", title: "mcp__ironpet__\(tool)", kind: "other")), .allow, tool)
+            XCTAssertEqual(policy(ACPToolCall(id: "1", title: tool, kind: "other")), .allow, "bare \(tool)")
+            if case .allow = policy(ACPToolCall(id: "1", title: "mcp__other__\(tool)", kind: "other")) { XCTFail("another server must ask") }
+        }
+    }
+
     func testMCPNameFromAgentMetadata() {
         let call = ACPToolCall(json: ["toolCallId": "1", "title": "Query", "kind": "other", "_meta": ["claudeCode": ["toolName": "mcp__langfuse__getHealth"]]])
         XCTAssertEqual(call.mcp?.server, "langfuse")

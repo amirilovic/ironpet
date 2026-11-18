@@ -25,15 +25,16 @@ final class CapturePipeline {
         guard var read = source.readFocusedWindow(of: app, budget: budget) else { return .skipped(.noWindow) }
         read.url = read.url ?? CaptureText.pageURL(in: read.root)
         if let skip = privacy.check(read, now: now) { return .skipped(skip) }
-        var lines = CaptureText.lines(in: read.root)
+        var (lines, inputs) = CaptureText.read(in: read.root)
         if lines.isEmpty {
             // The tree has no text: a canvas, a game, a remote desktop or an app that does not expose its views. The screenshot is
             // read in memory and dropped, and only if the user turned this on.
-            guard ocr, let recognized = source.recognizeFocusedWindow(of: app), !recognized.isEmpty else { return .skipped(.noText) }
+            guard ocr, let recognized = source.recognizeFocusedWindow(of: app, windowID: read.windowID), !recognized.isEmpty else { return .skipped(.noText) }
             lines = recognized
+            inputs = []
         }
         do {
-            switch try store.ingest(app: read.app, title: read.title, url: read.url, trigger: trigger, lines: lines, now: now) {
+            switch try store.ingest(app: read.app, title: read.title, url: read.url, trigger: trigger, lines: lines, inputLines: inputs, now: now) {
             case .stored(let id): return .stored(id: id)
             case .unchanged: return .unchanged
             case .empty: return .skipped(.noText)

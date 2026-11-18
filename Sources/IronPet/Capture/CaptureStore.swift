@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// An on-device filter that can rewrite or empty captured text. Capture calls it on write, after the rule-based redaction and before
@@ -15,8 +16,8 @@ struct PassthroughPrivacyFilter: CapturePrivacyFilter {
 
 /// Screen captures in ironpet's shared database: one row per window, one row per capture, and an FTS5 index over the text.
 ///
-/// Text is redacted (`CaptureRedactor`) before it is stored. A window keeps the lines of its last capture, and a new capture stores
-/// only the lines that were not in it, with a few lines of context. Tables are prefixed `capture_`. Captured text never goes into logs.
+/// Text is redacted (`CaptureRedactor`) before it is stored. A window keeps a short hash of each line of its last capture, not the
+/// lines, and a new capture stores only the lines whose hash was not there, with a few lines of context. Tables are prefixed `capture_`. Captured text never goes into logs.
 final class CaptureStore: @unchecked Sendable {
     /// Versions start at 440, after every migration of the other features that the old capture pipeline's tables were created beside.
     /// The old capture tables are dropped without being read: nothing is carried over.
@@ -32,7 +33,7 @@ final class CaptureStore: @unchecked Sendable {
             DROP TABLE IF EXISTS capture;
             DROP TABLE IF EXISTS capture_window;
             CREATE TABLE capture_window(id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, app TEXT NOT NULL, app_name TEXT NOT NULL,
-                                        title TEXT NOT NULL, url TEXT, last_text TEXT NOT NULL DEFAULT '', first_seen REAL NOT NULL,
+                                        title TEXT NOT NULL, url TEXT, last_lines TEXT NOT NULL DEFAULT '', first_seen REAL NOT NULL,
                                         last_seen REAL NOT NULL);
             CREATE TABLE capture(id INTEGER PRIMARY KEY AUTOINCREMENT, window_id INTEGER NOT NULL, at REAL NOT NULL, app TEXT NOT NULL,
                                  app_name TEXT NOT NULL, title TEXT NOT NULL, url TEXT, trigger TEXT NOT NULL, text TEXT NOT NULL);
@@ -71,6 +72,8 @@ final class CaptureStore: @unchecked Sendable {
         case empty
     }
 
+    private static let inputMark = "\u{1}"
+
     /// The key of a window: the app and, for a page, its address without secrets and fragment, otherwise the window title.
     static func windowKey(app: String, title: String, url: String?) -> String {
         if let url, !url.isEmpty {
@@ -81,30 +84,52 @@ final class CaptureStore: @unchecked Sendable {
         return app + "\u{1F}" + title
     }
 
+    /// A short digest of a line. The window row keeps these instead of the text, so only new lines are ever stored.
+    static func digest(_ line: String) -> String {
+        SHA256.hash(data: Data(line.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Stores what is new in a window since its last capture. The text is redacted, then passed through the privacy filter, then compared
-    /// with the window's last lines. The window keeps the whole of the new text as its last lines, so a line that goes away and comes
+    /// with the digests of the window's last lines. The window keeps the digests of the new text, so a line that goes away and comes
     /// back counts as new again.
+    ///
+    /// A window without an address is keyed by its title. When the title changes between captures (a counter, a clock, the text being
+    /// typed), the app's window seen in the last 30 s that shares at least half of these lines is reused instead of starting a new one.
     @discardableResult
-    func ingest(app: CaptureApp, title: String?, url: String?, trigger: CaptureTrigger, lines: [String], now: Date = Date()) throws -> IngestResult {
+    func ingest(app: CaptureApp, title: String?, url: String?, trigger: CaptureTrigger, lines: [String], inputLines: [String] = [], now: Date = Date()) throws -> IngestResult {
         let windowTitle = CaptureRedactor.redact(title ?? "").text
         let pageURL = url.map(CaptureURL.redact)
         let redacted = CaptureRedactor.redact(lines.joined(separator: "\n")).text
         let filtered = filter.filterOnWrite(redacted, app: app.bundleId)
         let current = filtered.split(whereSeparator: \.isNewline).map(String.init).filter { !$0.isEmpty }
         guard !current.isEmpty else { return .empty }
+        // A line from an input field is compared only with earlier input lines, so a draft that is sent still counts as new in the list.
+        let inputs = Set(inputLines.map { filter.filterOnWrite(CaptureRedactor.redact($0).text, app: app.bundleId) })
+        let marked = current.map { inputs.contains($0) ? Self.inputMark + $0 : $0 }
         let at = now.timeIntervalSince1970
-        let key = Self.windowKey(app: app.bundleId, title: windowTitle, url: pageURL)
+        var key = Self.windowKey(app: app.bundleId, title: windowTitle, url: pageURL)
+        let digests = marked.map(Self.digest)
         return try database.write { db in
+            if pageURL == nil, try db.rows("SELECT 1 FROM capture_window WHERE key = ?", [key]).isEmpty {
+                let recent = try db.rows("SELECT key, last_lines FROM capture_window WHERE app = ? AND url IS NULL AND last_seen >= ? ORDER BY last_seen DESC",
+                                         [app.bundleId, at - 30])
+                let mine = Set(digests)
+                for row in recent {
+                    let theirs = Set((row[1] as? String ?? "").split(separator: "\n").map(String.init))
+                    if !theirs.isEmpty, mine.intersection(theirs).count * 2 >= mine.count, let existing = row[0] as? String { key = existing; break }
+                }
+            }
             try db.execute("""
                 INSERT INTO capture_window(key, app, app_name, title, url, first_seen, last_seen) VALUES(?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET app_name = excluded.app_name, title = excluded.title,
                                                url = COALESCE(excluded.url, capture_window.url), last_seen = excluded.last_seen
                 """, [key, app.bundleId, app.name, windowTitle, pageURL, at, at])
-            let row = try db.rows("SELECT id, last_text FROM capture_window WHERE key = ?", [key])[0]
+            let row = try db.rows("SELECT id, last_lines FROM capture_window WHERE key = ?", [key])[0]
             let windowId = row[0] as! Int64
-            let previous = (row[1] as? String ?? "").split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
-            try db.execute("UPDATE capture_window SET last_text = ? WHERE id = ?", [current.joined(separator: "\n"), windowId])
-            guard let text = CaptureDiff.fresh(previous: previous, current: current) else { return .unchanged }
+            let previous = Set((row[1] as? String ?? "").split(separator: "\n").map(String.init))
+            try db.execute("UPDATE capture_window SET last_lines = ? WHERE id = ?", [digests.joined(separator: "\n"), windowId])
+            guard let fresh = CaptureDiff.fresh(current: marked, isKnown: { previous.contains(Self.digest($0)) }) else { return .unchanged }
+            let text = fresh.replacingOccurrences(of: Self.inputMark, with: "")
             try db.execute("INSERT INTO capture(window_id, at, app, app_name, title, url, trigger, text) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
                            [windowId, at, app.bundleId, app.name, windowTitle, pageURL, trigger.rawValue, text])
             return .stored(id: (try db.rows("SELECT last_insert_rowid()")[0][0] as? Int64) ?? 0)
@@ -146,8 +171,9 @@ final class CaptureStore: @unchecked Sendable {
         let filter = clauses.isEmpty ? "" : "WHERE " + clauses.joined(separator: " AND ")
         // One more than the cap, so a caller can tell that the range held more.
         args.append(max(1, min(limit, Self.maxListedCaptures + 1)))
-        let rows = (try? database.read { try $0.rows("SELECT \(Self.columns) FROM capture \(filter) ORDER BY at, id LIMIT ?", args) }) ?? []
-        return rows.map(capture)
+        let rows = (try? database.read { try $0.rows("SELECT \(Self.columns) FROM capture \(filter) ORDER BY at DESC, id DESC LIMIT ?", args) }) ?? []
+        // The newest are kept when the range holds more than the cap, and handed back oldest first.
+        return rows.reversed().map(capture)
     }
 
     private static func likeEscaped(_ text: String) -> String {

@@ -5,6 +5,11 @@ import ApplicationServices
 /// global event monitors (key, scroll and click, as timing only: no key is read). A read is one budgeted walk of the focused window.
 ///
 /// Nothing is requested until `CaptureService` starts it, so with the master switch off no permission prompt appears.
+/// The window server id of an accessibility window element. It is a long-standing private symbol of HIServices that Screenpipe and most
+/// window managers use; without it OCR is skipped, never pointed at another window.
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
+
 final class AXCaptureSource: CaptureSource {
     static let ownBundleId = Bundle.main.bundleIdentifier ?? "com.ironpet.app"
 
@@ -12,17 +17,9 @@ final class AXCaptureSource: CaptureSource {
     /// process. Always pass these instances, never a fresh bridge.
     static let notifications: [CFString] = ["AXFocusedWindowChanged", "AXMainWindowChanged", "AXTitleChanged"].map { $0 as NSString as CFString }
 
-    private final class Context {
-        let emit: (CaptureSignal) -> Void
-        init(emit: @escaping (CaptureSignal) -> Void) { self.emit = emit }
-    }
-
     private let lock = NSLock()
     private var onSignal: ((CaptureSignal) -> Void)?
-    private var observer: AXObserver?
-    private var observerSource: CFRunLoopSource?
-    private var context: Unmanaged<Context>?
-    private var observerApp: pid_t?
+    private lazy var host = AXObserverHost(attach: Self.observe, onEvent: { [weak self] in self?.emit(.windowFocus) })
     private var activation: NSObjectProtocol?
     private var monitors: [Any] = []
     private var webBundles: [String: Bool] = [:]
@@ -31,6 +28,7 @@ final class AXCaptureSource: CaptureSource {
 
     func start(onSignal: @escaping (CaptureSignal) -> Void) {
         lock.withLock { self.onSignal = onSignal }
+        host.start()
         DispatchQueue.main.async { [self] in
             guard activation == nil else { return }
             activation = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
@@ -57,7 +55,7 @@ final class AXCaptureSource: CaptureSource {
             activation = nil
             for monitor in monitors { NSEvent.removeMonitor(monitor) }
             monitors = []
-            detach()
+            host.stop()
         }
     }
 
@@ -67,41 +65,36 @@ final class AXCaptureSource: CaptureSource {
     }
 
     private func attach(to app: CaptureApp) {
-        detach()
+        host.detach()
         guard app.bundleId != Self.ownBundleId, isTrusted else { return }
-        var created: AXObserver?
-        let callback: AXObserverCallback = { _, _, _, refcon in
-            guard let refcon else { return }
-            Unmanaged<Context>.fromOpaque(refcon).takeUnretainedValue().emit(.windowFocus)
-        }
-        guard AXObserverCreate(app.pid, callback, &created) == .success, let observer = created else { return }
-        let element = AXUIElementCreateApplication(app.pid)
-        let context = Unmanaged.passRetained(Context(emit: { [weak self] in self?.emit($0) }))
-        for name in Self.notifications { AXObserverAddNotification(observer, element, name, context.toOpaque()) }
-        let source = AXObserverGetRunLoopSource(observer)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
-        self.observer = observer
-        observerApp = app.pid
-        observerSource = source
-        self.context = context
+        host.attach(to: app.pid)
     }
 
-    private func detach() {
-        let (source, context, observer, pid) = (observerSource, self.context, self.observer, observerApp)
-        self.observer = nil
-        observerApp = nil
-        observerSource = nil
-        self.context = nil
-        // Order matters: stop HIServices from calling back, then drop the refcon it was given.
-        if let observer, let pid {
-            let element = AXUIElementCreateApplication(pid)
-            for name in Self.notifications { AXObserverRemoveNotification(observer, element, name) }
+    /// Runs on the host's thread. The callback runs there too, so the teardown cannot overlap it.
+    private static func observe(pid: pid_t, fire: @escaping () -> Void) -> (() -> Void)? {
+        final class Context {
+            let fire: () -> Void
+            init(_ fire: @escaping () -> Void) { self.fire = fire }
         }
-        if let source {
+        let callback: AXObserverCallback = { _, _, _, refcon in
+            guard let refcon else { return }
+            Unmanaged<Context>.fromOpaque(refcon).takeUnretainedValue().fire()
+        }
+        var created: AXObserver?
+        guard AXObserverCreate(pid, callback, &created) == .success, let observer = created else { return nil }
+        let element = AXUIElementCreateApplication(pid)
+        let context = Unmanaged.passRetained(Context(fire))
+        for name in notifications { AXObserverAddNotification(observer, element, name, context.toOpaque()) }
+        let source = AXObserverGetRunLoopSource(observer)
+        let loop = CFRunLoopGetCurrent()
+        CFRunLoopAddSource(loop, source, .defaultMode)
+        // The closure holds the observer, so it lives until the teardown has run.
+        return {
             CFRunLoopSourceInvalidate(source)
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .defaultMode)
+            CFRunLoopRemoveSource(loop, source, .defaultMode)
+            for name in notifications { AXObserverRemoveNotification(observer, element, name) }
+            context.release()
         }
-        context?.release()
     }
 
     // MARK: Apps
@@ -157,10 +150,15 @@ final class AXCaptureSource: CaptureSource {
         let tracker = Budget(budget)
         guard let root = Self.convert(window, depth: 0, budget: tracker) else { return nil }
         let title = Self.string(window, "AXTitle").flatMap { $0.isEmpty ? nil : $0 }
-        return WindowRead(app: app, title: title, url: nil, root: root)
+        var id: CGWindowID = 0
+        let windowID = _AXUIElementGetWindow(window, &id) == .success && id != 0 ? id : nil
+        return WindowRead(app: app, title: title, url: nil, root: root, windowID: windowID)
     }
 
-    func recognizeFocusedWindow(of app: CaptureApp) -> [String]? { ScreenOCR.recognizeWindow(ownedBy: app.pid) }
+    func recognizeFocusedWindow(of app: CaptureApp, windowID: UInt32?) -> [String]? {
+        guard let windowID else { return nil }
+        return ScreenOCR.recognizeWindow(id: windowID, ownedBy: app.pid)
+    }
 
     // MARK: AX helpers
 

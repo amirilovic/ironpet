@@ -44,6 +44,13 @@ final class CaptureSchedulerTests: XCTestCase {
         XCTAssertEqual(after[0].0, 6.5, accuracy: 0.06, "0.5 s after the last key at 6.0")
     }
 
+    func testNextDueIsThePendingSignalNotAnOverdueIdleTime() {
+        var scheduler = CaptureScheduler()
+        _ = scheduler.poll(now: 0)
+        scheduler.signal(.key, at: 12)
+        XCTAssertEqual(scheduler.nextDue(now: 12), 12.5, accuracy: 0.001, "the idle time passed at 10 s and must not wake the timer")
+    }
+
     func testAKeyThenAClickCapturesAtTheClickAndThenTheTypingPause() {
         var scheduler = CaptureScheduler()
         _ = scheduler.poll(now: 0)

@@ -120,9 +120,11 @@ enum ApprovalRules {
         return readOnlyMCPVerbs.contains { name == $0 || name.hasPrefix($0 + "_") || name.hasPrefix($0) && tool.dropFirst($0.count).first?.isUppercase == true }
     }
 
-    /// ironpet's own task tools only read and write rows in `ironpet.db` and run nothing, like memory-note edits. Delete still asks.
+    /// ironpet's own task tools only read and write rows in `ironpet.db` and run nothing, like memory-note edits. Delete still asks. The
+    /// `screen_*` tools only read the stored, redacted captures.
     static let ownTaskTools: Set<String> = ["tasks_list", "tasks_get", "tasks_create", "tasks_update", "tasks_close",
-                                         "tasks_suggestions_list", "tasks_suggestion_accept", "tasks_suggestion_reject"]
+                                         "tasks_suggestions_list", "tasks_suggestion_accept", "tasks_suggestion_reject",
+                                         "screen_search", "screen_window"]
 
     /// Agents that name MCP tools `mcp__<server>__<tool>` must name the ironpet server; others report the bare tool name.
     static func isOwnTaskTool(server: String?, tool: String) -> Bool {
