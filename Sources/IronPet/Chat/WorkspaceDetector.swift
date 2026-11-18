@@ -15,13 +15,7 @@ enum WorkspaceDetector {
     /// Matches the front Cursor window title against Cursor's list of open folders.
     /// Window titles need Screen Recording permission; without it, fall back to Cursor's last active window.
     private static func cursorWorkspace(pid: pid_t) -> URL? {
-        let storage = Paths.home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/storage.json")
-        guard let data = try? Data(contentsOf: storage),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let windows = root["windowsState"] as? [String: Any] else { return nil }
-        func folder(_ window: Any?) -> URL? {
-            ((window as? [String: Any])?["folder"] as? String).flatMap(URL.init(string:))
-        }
+        guard let windows = cursorWindows() else { return nil }
         let open = (windows["openedWindows"] as? [Any] ?? []).compactMap(folder)
 
         let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
@@ -33,6 +27,23 @@ enum WorkspaceDetector {
             if let match = open.first(where: { parts.contains($0.lastPathComponent) }) { return match }
         }
         return open.count == 1 ? open[0] : folder(windows["lastActiveWindow"])
+    }
+
+    /// The local folders open in Cursor windows, from Cursor's saved window state. Needs no permission.
+    static func cursorOpenFolders() -> [URL] {
+        let windows = cursorWindows()
+        return ((windows?["openedWindows"] as? [Any] ?? []) + [windows?["lastActiveWindow"] as Any]).compactMap(folder).filter(\.isFileURL)
+    }
+
+    private static func cursorWindows() -> [String: Any]? {
+        let storage = Paths.home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/storage.json")
+        guard let data = try? Data(contentsOf: storage),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return root["windowsState"] as? [String: Any]
+    }
+
+    private static func folder(_ window: Any?) -> URL? {
+        ((window as? [String: Any])?["folder"] as? String).flatMap(URL.init(string:))
     }
 
     private static func itermPath() -> URL? {

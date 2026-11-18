@@ -7,7 +7,7 @@ enum Memory {
     static let aboutMe = directory.appendingPathComponent("me.md")
     private static let maxBytes = 8_000
 
-    static func projectFile(for workspace: URL) -> URL {
+    static func projectFile(for workspace: URL, in directory: URL = directory) -> URL {
         let digest = SHA256.hash(data: Data(workspace.standardizedFileURL.path.utf8))
         let suffix = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
         return directory.appendingPathComponent("projects/\(workspace.lastPathComponent)-\(suffix).md")
@@ -49,7 +49,7 @@ enum Memory {
         <memory file="\(project.lastPathComponent)">
         \(read(project))
         </memory>
-
+        \(peopleBlock())
         When you learn something durable (a preference, a workflow, a project convention, where things live), \
         append one short bullet to the right memory file. Never store secrets. Don't mention memory unless asked.
 
@@ -57,6 +57,14 @@ enum Memory {
 
         User request:
         """
+    }
+
+    /// The people the user works with, when the memory tools have stored any. Empty otherwise, so the preamble is unchanged.
+    private static func peopleBlock() -> String {
+        let file = directory.appendingPathComponent("people.md")
+        let text = read(file)
+        guard text.contains("\n- ") || text.hasPrefix("- ") else { return "" }
+        return "<memory file=\"people.md\">\n\(text)\n</memory>\n"
     }
 
     private static func ensure(_ file: URL, header: String) {

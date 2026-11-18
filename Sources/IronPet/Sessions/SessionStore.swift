@@ -49,6 +49,7 @@ final class SessionStore: ObservableObject {
         case .gemini: applyGemini(event, to: &session)
         case .copilot: applyCopilot(event, to: &session)
         case .pi: applyPi(event, to: &session)
+        case .job: return
         }
 
         if session.ended, session.status == .idle {
@@ -57,6 +58,21 @@ final class SessionStore: ObservableObject {
             sessions[key] = session
         }
         if session.status != previous, [.needsInput, .failed, .done].contains(session.status) {
+            onAttention?(session)
+        }
+    }
+
+    /// Shows a background job's row (`Job.agentSession`), or removes it when `session` is nil. A row the user already
+    /// acknowledged stays hidden until the job changes again.
+    func setJob(_ key: String, _ session: AgentSession?) {
+        guard let session else {
+            sessions[key] = nil
+            return
+        }
+        let previous = sessions[key]
+        if let previous, previous.status == .idle, previous.updatedAt == session.updatedAt { return }
+        sessions[key] = session
+        if session.status != previous?.status, [.needsInput, .failed, .done].contains(session.status) {
             onAttention?(session)
         }
     }
@@ -79,7 +95,7 @@ final class SessionStore: ObservableObject {
 
     /// Drops sessions whose agent went quiet without a closing event.
     func sweep(now: Date = Date()) {
-        for (id, session) in sessions {
+        for (id, session) in sessions where session.source != .job {
             let age = now.timeIntervalSince(session.updatedAt)
             if (session.status == .running || session.status == .needsInput), age > 30 * 60 {
                 sessions[id]?.status = .idle

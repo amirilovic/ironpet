@@ -426,6 +426,8 @@ enum PreviewRenderer {
                     detail: "Run `npm install express-rate-limit`?", minutes: 3, iTerm: true),
             session("2", .cursor, .running, "web-app", prompt: "Make the settings page work on mobile",
                     detail: "Editing SettingsPage.tsx", minutes: 2),
+            session("job-k3m9qa", .job, .running, "ironpet", prompt: "Write up last week's merged PRs",
+                    detail: "Run gh pr list --state merged", minutes: 4),
             session("3", .claude, .done, "demo-app", prompt: "Why is the login test flaky?",
                     edited: ["a", "b", "c"], reply: "Fixed the flaky login test.", minutes: 6, iTerm: true),
             session("4", .cursor, .failed, "docs-site", prompt: "Upgrade to the new docs theme",

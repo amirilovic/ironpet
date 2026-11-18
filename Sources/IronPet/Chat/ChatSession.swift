@@ -84,6 +84,8 @@ final class ChatSession: ObservableObject {
 
     static let telegramOrigin = "telegram"
     static let automationOrigin = "automation"
+    /// A prompt or follow-up that a background job ran (`JobService`).
+    static let jobOrigin = "job"
 
     struct Approval: Identifiable {
         let id = UUID()
@@ -615,6 +617,10 @@ final class ChatSession: ObservableObject {
             thread.automationName = earlier.automationName
             thread.runs = earlier.runs
         }
+        if let earlier = ThreadStore.load(threadID), earlier.job != nil {
+            thread.title = earlier.title
+            thread.job = earlier.job
+        }
         ThreadStore.save(thread)
         history = ThreadStore.recent()
     }
@@ -622,10 +628,27 @@ final class ChatSession: ObservableObject {
     /// Reloads the thread list after something else saved a thread, such as an automation run.
     func refreshHistory() { history = ThreadStore.recent() }
 
+    /// A background job saved `thread`. When it is the one on screen and no turn of the chat's own is running, the
+    /// transcript shows the job's new steps.
+    func threadSaved(_ thread: ChatThread) {
+        refreshHistory()
+        guard thread.id == threadID, !isRunning else { return }
+        items = thread.items
+    }
+
+    /// Takes a message typed in a thread whose background job is still running (thread id, text). Returns false when no
+    /// job runs there, so the chat sends it itself.
+    var jobFollowUp: ((String, String) -> Bool)?
+
     func send() {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !attachments.isEmpty else { return }
         speech.stop()
+        if !isRunning, attachments.isEmpty, replyingTo == nil, let threadID, jobFollowUp?(threadID, prompt) == true {
+            items.append(Item(kind: .user(prompt), origin: Self.jobOrigin))
+            input = ""
+            return
+        }
         if isRunning {
             queue.append(QueuedMessage(text: prompt, attachments: attachments, reply: replyingTo))
             input = ""

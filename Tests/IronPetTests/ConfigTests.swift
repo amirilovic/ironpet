@@ -196,6 +196,14 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(Config.load(from: file).config.tasks.keepDoneDays, 365)
     }
 
+    func testJobsRunThreeAtOnceAndAreClamped() throws {
+        XCTAssertEqual(Config().jobs.maxRunning, 3)
+        try write(#"{"jobs":{"maxRunning":0}}"#)
+        XCTAssertEqual(Config.load(from: file).config.jobs.maxRunning, 1)
+        try write(#"{"jobs":{"maxRunning":40}}"#)
+        XCTAssertEqual(Config.load(from: file).config.jobs.maxRunning, 5)
+    }
+
     func testPartialTasksKeepOtherDefaults() throws {
         try write(#"{"tasks":{"meetingSuggestions":false}}"#)
         let (config, error) = Config.load(from: file)

@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var capture: CaptureService?
     private var desktop: DesktopService?
     private var desktopApprovals: DesktopApprovals?
+    /// Nil until the database is open, a moment after launch.
+    private var jobs: JobService?
+    private lazy var assistant = makeAssistantContext()
     private var dueReminders: TaskDueReminders?
     /// Nil until the database is open, a moment after launch.
     private var activity: ActivityLog?
@@ -79,6 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task.detached { _ = LoginShell.path }
         store.onAttention = { [weak self] session in
             if let event = ActivityEvent.session(session) { self?.activity?.record(event) }
+            // A job waits for input only on an approval, which has its own bubble.
+            guard session.source != .job || session.status != .needsInput else { return }
             self?.announcer.session(session)
             self?.testControl?.recordAttention(session)
         }
@@ -98,6 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.showChat()
         }
         pet.onOpenSession = { [weak self] id in self?.openSession(id) }
+        pet.onOpenJob = { [weak self] id in self?.openJob(id) }
         bubblePanel = BubblePanel(store: announcer.bubbles)
         pet.extraMenuItems = { [weak self] in self?.hookMenuItems() ?? [] }
         pet.chatMood = { [weak self] in self?.chat.mood }
@@ -244,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.showScreenSection = { [weak self] in self?.pet.showWindow(.screen) }
         setUpScreenCapture(database)
         setUpDesktopControl()
+        setUpJobs(database, tasks: tasks)
         let service = AutomationService(store: store, engine: engine, database: database)
         service.notice = { [weak self] notice in
             if let event = ActivityEvent.automationNotice(notice) { self?.activity?.record(event) }
@@ -305,6 +312,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !TestControl.isEnabled {
             DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.checkSkills() }
         }
+    }
+
+    /// Background jobs (`jobs_start`): rows in the Agents section, Allow and Deny bubbles for their approvals, and their
+    /// threads in the chat.
+    private func setUpJobs(_ database: Database, tasks: TaskStore) {
+        let service = JobService(database: database, tasks: tasks)
+        service.currentAgent = { [weak self] in self.map { ($0.chat.agent, $0.chat.model) } }
+        service.onChange = { [weak self] job in self?.store.setJob(Job.sessionKey(job.id), job.agentSession) }
+        service.onThreadSaved = { [weak self] thread in self?.chat.threadSaved(thread) }
+        service.askApproval = { [weak self] id, job, title, detail, decide in
+            self?.announcer.automation(AutomationNotice(
+                id: id, symbol: "exclamationmark.shield.fill", tint: .warn, title: "\(job.title) wants to \(title.prefix(1).lowercased() + title.dropFirst())",
+                subtitle: "Background job", body: detail,
+                buttons: [.init(title: "Allow", primary: true) { decide(true) },
+                          .init(title: "Deny", destructive: true) { decide(false) }]))
+        }
+        service.clearApproval = { [weak self] id in self?.announcer.bubbles.dismiss(id) }
+        chat.jobFollowUp = { [weak service] thread, text in
+            guard let service, let job = service.job(thread: thread), job.state.isActive else { return false }
+            return (try? service.followUp(job.id, message: text)) != nil
+        }
+        jobs = service
+    }
+
+    /// What the `jobs_*`, `status_*`, `memory_*` and `projects_resolve` tools read.
+    private func makeAssistantContext() -> AssistantContext {
+        let context = AssistantContext()
+        context.jobs = { [weak self] in self?.jobs }
+        context.sessions = { [weak self] in self?.store.ordered.filter { $0.source != .job } ?? [] }
+        context.tasks = { TaskStore.shared }
+        context.alerts = { [weak self] in self?.signals.signals ?? [] }
+        context.brief = { [weak self] kind in self?.brief?.build(kind) }
+        context.meetings = { [weak self] in
+            guard let self else { return [] }
+            if meetings.meetings.isEmpty { meetings.reload() }
+            return meetings.meetings
+        }
+        context.projects = { [weak self] in
+            guard let self else { return [] }
+            let front = NSWorkspace.shared.frontmostApplication
+            let app = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? previousApp : front
+            return ProjectResolver.candidates(frontmost: WorkspaceDetector.workspace(of: app), chat: chat.workspace,
+                                              cursor: WorkspaceDetector.cursorOpenFolders(), recents: chat.recents,
+                                              scratch: ChatSession.scratchWorkspace)
+        }
+        context.openJob = { [weak self] id in
+            guard let self else { return "ironpet is quitting" }
+            // Opening a thread replaces the chat's, which would end the turn that asked.
+            if chat.isRunning { return "the chat is busy with this conversation; the job is in the Agents section of Ghost's window" }
+            openJob(id)
+            return nil
+        }
+        return context
+    }
+
+    /// Opens a job's thread in the chat, and shows its waiting approvals again. A job with no thread yet opens the Agents section.
+    private func openJob(_ id: String) {
+        guard let jobs, let job = jobs.job(id) else { return pet.showWindow(.agents) }
+        jobs.showApprovals(id)
+        guard let thread = job.thread.flatMap(ThreadStore.load) else { return pet.showWindow(.agents) }
+        chat.open(thread)
+        showChat()
     }
 
     /// The morning brief and the recap: built from the stores for `digest` automations and the Today page. The Today row is
@@ -765,7 +834,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         }
         server.onAgentAPI = { [weak self] request, respond in
-            MCPEndpoint.route(request, automations: { self?.automations }, tasks: { TaskStore.shared }, screen: { self?.capture?.store }, desktop: { self?.desktop }, respond: respond)
+            MCPEndpoint.route(request, automations: { self?.automations }, tasks: { TaskStore.shared }, screen: { self?.capture?.store },
+                              desktop: { self?.desktop }, assistant: { self?.assistant }, respond: respond)
         }
         try server.start()
         self.server = server
@@ -999,6 +1069,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch target {
         case .session(let id, let workspace, let app, let iterm):
             if store.sessions[id] != nil { return openSession(id) }
+            if let job = Job.id(fromSessionKey: id) { return openJob(job) }
             guard let source = AgentSource(rawValue: String(id.prefix { $0 != ":" })) else { return pet.showWindow(.agents) }
             var session = AgentSession(id: id, source: source)
             session.origin = SessionOrigin(workspace: workspace, itermSessionID: iterm, ownerBundleID: app)
