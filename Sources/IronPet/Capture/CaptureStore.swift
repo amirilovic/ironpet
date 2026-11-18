@@ -397,7 +397,8 @@ extension CaptureStore {
         switch row.state {
         case "sent": return "\(redaction), sent"
         case "ready": return "\(redaction), waiting to be sent"
-        case "local" where row.reason == CaptureDecisionFilter.flaggedReason: return "\(redaction), \(CaptureDecisionFilter.flaggedReason)"
+        case "local" where row.reason == CaptureDecisionFilter.flaggedReason:
+            return row.redactions.isEmpty ? CaptureDecisionFilter.flaggedByModelReason : "\(redaction), \(CaptureDecisionFilter.flaggedReason)"
         case "local": return "\(redaction), kept local" + (row.reason.map { " (\($0))" } ?? "")
         default: return "\(redaction), waiting for the filter"
         }

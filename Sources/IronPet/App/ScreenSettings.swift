@@ -57,6 +57,7 @@ private struct ScreenSettingsBody: View {
             if capture.enabled {
                 statusSection
                 decisionSection
+                thresholdsSection
                 agentSection
                 appsSection
                 excludeSection
@@ -152,18 +153,43 @@ private struct ScreenSettingsBody: View {
                 if testing { ProgressView().controlSize(.small) }
                 decisionStatus
             }
-            Stepper(value: Binding(get: { capture.decision.secretThreshold }, set: { v in update { $0.decision.secretThreshold = v } }), in: 0...1, step: 0.05) {
-                Text("Secret threshold: \(capture.decision.secretThreshold.formatted(.number.precision(.fractionLength(2))))")
-            }
-            Stepper(value: Binding(get: { capture.decision.skipThreshold }, set: { v in update { $0.decision.skipThreshold = v } }), in: 0...1, step: 0.05) {
-                Text("Skip threshold: \(capture.decision.skipThreshold.formatted(.number.precision(.fractionLength(2)))) (0 skips nothing)")
-            }
             }.disabled(!capture.decision.enabled)
         } header: {
             Text("Local decision model")
         } footer: {
-            Text("Rules redact the secrets they know first, so a key in a useful message is sent as [redacted:aws-key] and the rest of the message still goes. A model on this Mac, such as H2O-Lightning-4B, then scores the redacted text. An item it still flags at or above the secret threshold stays on this Mac and its text is dropped. The unredacted text of an item that had a secret is kept for 24 hours so you can look at it under Screen, Captures, and is never sent. The address must be localhost. If no model is set or it does not answer, nothing is sent to the agent. With the filter off, none of this applies.")
+            Text("Rules redact the secrets they know first, so a key in a useful message is sent as [redacted:aws-key] and the rest of the message still goes. A model on this Mac, such as H2O-Lightning-4B, then scores the redacted text. An item it flags at or above the secret threshold stays on this Mac and its text is dropped. The unredacted text of an item that had a secret is kept for 24 hours so you can look at it under Screen, Captures, and is never sent. The address must be localhost. If no model is set or it does not answer, nothing is sent to the agent. With the filter off, none of this applies.")
                 .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var thresholdsSection: some View {
+        Section {
+            thresholdRow("Secret", \.secretThreshold, "Kept on this Mac when the model's secret score is at or above this. Lower is stricter.")
+            thresholdRow("Calendar", \.calendarThreshold, "A calendar score at or above this keeps an item in play as a calendar candidate.")
+            thresholdRow("Skip", \.skipThreshold, "Items whose follow-up and new-task scores are both below this are not sent. 0 sends everything that passes.")
+            Button("Reset to defaults") {
+                let defaults = Config.ScreenCapture.Decision()
+                update {
+                    $0.decision.secretThreshold = defaults.secretThreshold
+                    $0.decision.calendarThreshold = defaults.calendarThreshold
+                    $0.decision.skipThreshold = defaults.skipThreshold
+                }
+            }
+        } header: {
+            Text("Decision thresholds")
+        }
+        .disabled(!capture.decision.enabled)
+    }
+
+    private func thresholdRow(_ title: String, _ key: WritableKeyPath<Config.ScreenCapture.Decision, Double>, _ help: String) -> some View {
+        let value = Binding(get: { capture.decision[keyPath: key] }, set: { v in update { $0.decision[keyPath: key] = min(1, max(0, v)) } })
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(title)
+                Slider(value: value, in: 0...1, step: 0.05)
+                Text(value.wrappedValue.formatted(.number.precision(.fractionLength(2)))).monospacedDigit().frame(width: 40, alignment: .trailing)
+            }
+            Text(help).font(.caption).foregroundStyle(.secondary)
         }
     }
 

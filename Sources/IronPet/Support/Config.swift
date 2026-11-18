@@ -71,7 +71,7 @@ struct Config: Codable, Equatable {
             var baseUrl = "http://127.0.0.1:8741"
             var model = "h2o-lightning-4b"
             /// A probability at or above this marks an item as holding a secret. It then never leaves the Mac.
-            var secretThreshold = 0.2
+            var secretThreshold = 0.6
             /// A probability at or above this keeps an item in play as a calendar candidate.
             var calendarThreshold = 0.2
             /// Items whose follow-up and new-task probabilities are both below this are not sent. 0 sends everything that passes.

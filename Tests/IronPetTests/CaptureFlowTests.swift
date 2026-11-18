@@ -91,7 +91,7 @@ final class CaptureFlowTests: XCTestCase {
         XCTAssertEqual(store.item(id: secret)?.state, "local")
         XCTAssertEqual(store.item(id: secret)?.body, "", "the text of a flagged item is dropped")
         let row = try XCTUnwrap(store.inspect().first { $0.id == secret })
-        XCTAssertEqual(store.outcome(of: row), "nothing redacted, still flagged after redaction, kept local")
+        XCTAssertEqual(store.outcome(of: row), "flagged by the model as possibly secret, kept local")
         XCTAssertEqual(store.original(of: secret, now: now)?.text, "Ana: the vault phrase is rosebud", "kept for 24 hours so it can be looked at")
         _ = await analyzer.run(now: now)
         XCTAssertEqual(runner.prompts.count, 1)
@@ -210,6 +210,25 @@ final class CaptureFlowTests: XCTestCase {
         _ = await analyzer.runIfDue(now: Date())
         _ = await analyzer.run()
         XCTAssertEqual(runner.prompts.count, 1, "the item is in the next batch")
+    }
+
+    /// A raised secret threshold lets an item scored 0.38 through, and the default keeps it local.
+    func testTheSecretThresholdFromSettingsDecidesWhetherAnItemStaysLocal() async throws {
+        final class Scored: CaptureDecisionClient {
+            func probabilities(text: String, existingTasks: [String: String], questions: [(name: String, instructions: String)]) async throws -> [String: Double] {
+                Dictionary(uniqueKeysWithValues: questions.map { ($0.name, $0.name == "q4" ? 0.38 : 0.05) })
+            }
+        }
+        var threshold = 0.2
+        let filter = CaptureDecisionFilter(settings: { Config.ScreenCapture.Decision(secretThreshold: threshold) }, makeClient: { _, _ in Scored() })
+        let first = try await filter.evaluate(text: "hello", openTasks: [])
+        XCTAssertTrue(first.flagged)
+        threshold = 0.5
+        let second = try await filter.evaluate(text: "hello", openTasks: [])
+        XCTAssertFalse(second.flagged)
+        threshold = 0.38
+        let edge = try await filter.evaluate(text: "hello", openTasks: [])
+        XCTAssertTrue(edge.flagged, "the comparison is at or above")
     }
 
     func testAnUnsetOrRemoteDecisionModelIsRefused() async throws {

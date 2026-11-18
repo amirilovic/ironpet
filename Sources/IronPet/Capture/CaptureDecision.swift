@@ -223,6 +223,8 @@ final class CaptureDecisionFilter {
     }
 
     static let flaggedReason = "still flagged after redaction, kept local"
+    /// How the inspector words a flagged item when the rules redacted nothing.
+    static let flaggedByModelReason = "flagged by the model as possibly secret, kept local"
 
     /// The inspector line for an item's scores, or nil when it has scores to show. An item that passed with the model off has none.
     static func notCheckedLabel(state: String, secret: Double?) -> String? {
