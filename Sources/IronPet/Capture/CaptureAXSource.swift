@@ -5,7 +5,7 @@ import ApplicationServices
 /// global event monitors (key, scroll and click, as timing only: no key is read). A read is one budgeted walk of the focused window.
 ///
 /// Nothing is requested until `CaptureService` starts it, so with the master switch off no permission prompt appears.
-/// The window server id of an accessibility window element. It is a long-standing private symbol of HIServices that Screenpipe and most
+/// The window server id of an accessibility window element. It is a long-standing private symbol of HIServices that most
 /// window managers use; without it OCR is skipped, never pointed at another window.
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError

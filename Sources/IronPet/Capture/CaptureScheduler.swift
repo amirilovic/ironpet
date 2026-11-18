@@ -1,6 +1,6 @@
 import Foundation
 
-/// Decides when a capture is due. It follows Screenpipe's event-driven design: a signal sets a short settle time, and the capture runs
+/// Decides when a capture is due. It is event-driven: a signal sets a short settle time, and the capture runs
 /// when that time passes with nothing newer. Typing and scrolling push the time back, so a burst of keys makes one capture, taken after
 /// the pause. Nothing here reads a clock: the caller passes `now`, so a test drives it with its own.
 struct CaptureScheduler {
