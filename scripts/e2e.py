@@ -974,6 +974,90 @@ def scenario_voice():
             set_dark_mode(dark)
 
 
+class StubSpeech:
+    """An OpenAI-style /audio/speech server that answers with a few seconds of silence, or nothing, and keeps the inputs."""
+
+    def __init__(self, port=8002, seconds=3.0):
+        import http.server
+        import struct
+        import threading
+        outer = self
+        self.inputs = []
+        self.empty = False
+        rate = 24_000
+        pcm = b"\x00\x00" * int(rate * seconds)
+        self.wav = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+                    + b"data" + struct.pack("<I", len(pcm)) + pcm)
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+                outer.inputs.append(body.get("input", ""))
+                data = b"" if outer.empty else outer.wav
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "audio/wav")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except OSError:
+                    pass  # the client cancelled
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+
+
+def scenario_speech():
+    """Spoken replies: the speaker button's path reads a reply's prose to a stand-in speech server, and stops."""
+    stub = None
+    with PreservedUserState():
+        try:
+            relaunch(test_mode=True)
+            reply = "# Done\n\nI fixed the login test.\n\n```swift\nlet secretCode = 1\n```\n\nRun it again to check."
+            thread = f"{SHOTS}/speech-thread.json"
+            os.makedirs(SHOTS, exist_ok=True)
+            json.dump({"items": [{"id": "00000000-0000-0000-0000-000000000001", "kind": {"user": {"_0": "fix the test"}}},
+                                 {"id": "00000000-0000-0000-0000-000000000002", "kind": {"assistant": {"_0": reply}}}]},
+                      open(thread, "w"))
+            config = read_config()
+            config["speech"] = {"enabled": False}
+            json.dump(config, open(CONFIG, "w"), indent=2)
+            time.sleep(2.6)
+            call("POST", "/test/show-chat", {"newChat": True})
+            call("POST", "/test/seed-transcript", {"file": thread})
+            record("Speech: off, the test endpoint refuses to read", call("POST", "/test/speech/speak").get("error") == "spoken replies are off")
+
+            stub = StubSpeech()
+            set_voice_config(baseUrl="http://127.0.0.1:8002/v1")
+            config = read_config()
+            config["speech"] = {"enabled": True, "model": "stub/tts", "voice": "am_puck"}
+            json.dump(config, open(CONFIG, "w"), indent=2)
+            time.sleep(2.6)
+            call("POST", "/test/speech/speak")
+            playing = wait_for(lambda: chat()["speech"] == "playing", 10)
+            record("Speech: the reply plays", bool(playing), chat()["speech"])
+            # The second chunk is asked for while the first plays.
+            spoken = wait_for(lambda: (lambda s: s if "fixed the login test" in s else None)(" ".join(stub.inputs)), 5) or " ".join(stub.inputs)
+            record("Speech: prose is read and code is skipped", "fixed the login test" in spoken and "secretCode" not in spoken, spoken)
+            call("POST", "/test/speech/stop")
+            record("Speech: stop ends playback", wait_for(lambda: chat()["speech"] == "idle", 3) is True)
+
+            stub.empty = True
+            call("POST", "/test/speech/speak")
+            c = wait_for(lambda: (lambda c: c if any(i["kind"] == "error" for i in c["items"]) else None)(chat()), 10)
+            errors = [i["text"] for i in (c or {"items": []})["items"] if i["kind"] == "error"]
+            record("Speech: a server that returns no audio explains why", any("misaki" in e for e in errors), "; ".join(errors))
+        finally:
+            if stub:
+                stub.close()
+
+
 def scenario_voice_key():
     """An API key typed in Settings → Voice goes to the Keychain and to no file under ~/.ironpet."""
     secret = "e2e-key-" + str(int(time.time()))
@@ -1729,7 +1813,7 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
              "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
              "notification": scenario_notification_approval, "mcp": scenario_mcp,
              "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
-             "voice": scenario_voice, "voice-key": scenario_voice_key, "meeting": scenario_meeting,
+             "voice": scenario_voice, "voice-key": scenario_voice_key, "speech": scenario_speech, "meeting": scenario_meeting,
              "meeting-system": scenario_meeting_system_audio, "tasks": scenario_tasks, "screen": scenario_screen,
              "welcome-back": scenario_welcome_back, "brief": scenario_brief}
 
@@ -1737,6 +1821,7 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # "sentry" a Sentry MCP. Run them by name, e.g. `python3 scripts/e2e.py mcp sentry`.
 # "voice" starts a local mlx-audio server with `uvx` (needs the Parakeet model in the Hugging Face cache) and flips
 # the system between light and dark mode for screenshots, saved to $IRONPET_E2E_SHOTS.
+# "speech" plays a few seconds of silence from a stand-in speech server on port 8002; it starts no agent and puts config.json back.
 # "meeting" does the same for meeting transcripts, and also runs one Claude Code summary (haiku). "meeting-system" needs
 # Screen & System Audio Recording granted to IronPet and plays a sentence with afplay.
 # "screen" feeds synthetic captures in and calls the screen_* MCP tools, so it reads no screen and starts no agent; it puts ironpet.db and
@@ -1744,7 +1829,7 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # "tasks" runs two short turns on $IRONPET_E2E_AGENT (default cursor) and puts ironpet.db back afterwards.
 # "welcome-back" posts synthetic Claude hook events and a stand-in idle time, so it runs no agent; it puts config.json and ironpet.db back.
 # "brief" starts no agent; it puts ironpet.db and automations.json back afterwards.
-OPT_IN = {"mcp", "sentry", "voice", "voice-key", "runtime", "asks", "meeting", "meeting-system"}
+OPT_IN = {"mcp", "sentry", "voice", "voice-key", "speech", "runtime", "asks", "meeting", "meeting-system"}
 
 if __name__ == "__main__":
     if {"-h", "--help"} & set(sys.argv[1:]):

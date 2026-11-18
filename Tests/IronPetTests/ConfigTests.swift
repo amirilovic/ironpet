@@ -207,6 +207,43 @@ final class ConfigTests: XCTestCase {
         let saved = try String(contentsOf: file, encoding: .utf8)
         XCTAssertFalse(saved.lowercased().contains("apikey"))
     }
+
+    func testOldConfigWithoutSpeechKeysKeepsSpeechOff() throws {
+        try write(#"{"voice":{"enabled":true}}"#)
+        let config = Config.load(from: file).config
+        XCTAssertEqual(config.speech, Config.Speech())
+        XCTAssertFalse(config.speech.enabled)
+        XCTAssertEqual(config.speech.model, "mlx-community/Kokoro-82M-bf16")
+        XCTAssertEqual(config.speech.voice, "am_puck")
+        XCTAssertEqual(config.speech.speed, 1)
+    }
+
+    func testSpeechSpeedIsClamped() throws {
+        try write(#"{"speech":{"speed":1.6}}"#)
+        XCTAssertEqual(Config.load(from: file).config.speech.speed, 1.6)
+        try write(#"{"speech":{"speed":9}}"#)
+        XCTAssertEqual(Config.load(from: file).config.speech.speed, Config.Speech.speedRange.upperBound)
+        try write(#"{"speech":{"speed":0}}"#)
+        XCTAssertEqual(Config.load(from: file).config.speech.speed, Config.Speech.speedRange.lowerBound)
+    }
+
+    func testBlankSpeechModelAndVoiceMeanDefaults() throws {
+        try write(#"{"speech":{"enabled":true,"model":"  ","voice":" bf_emma "}}"#)
+        var speech = Config.load(from: file).config.speech
+        XCTAssertTrue(speech.enabled)
+        XCTAssertEqual(speech.model, Config.Speech.defaultModel)
+        XCTAssertEqual(speech.voice, "bf_emma")
+        try write(#"{"speech":{"voice":""}}"#)
+        speech = Config.load(from: file).config.speech
+        XCTAssertEqual(speech.voice, Config.Speech.defaultVoice)
+    }
+
+    func testSpeechKeysRoundTrip() throws {
+        var config = Config()
+        config.speech = Config.Speech(enabled: true, model: "gpt-4o-mini-tts", voice: "nova")
+        try config.save(to: file)
+        XCTAssertEqual(Config.load(from: file).config, config)
+    }
 }
 
 final class ShortcutTests: XCTestCase {

@@ -143,6 +143,15 @@ final class TestControl {
             chat.voice.start(.file(URL(fileURLWithPath: path)))
         case ("POST", "/test/voice/stop"):
             chat.voice.stop()
+        case ("POST", "/test/speech/speak"):
+            // Reads the last reply aloud, like its speaker button.
+            guard ConfigStore.shared.config.speech.enabled else { return Self.encode(["ok": false, "error": "spoken replies are off"]) }
+            guard let reply = chat.items.last(where: { if case .assistant = $0.kind { true } else { false } }) else {
+                return Self.encode(["ok": false, "error": "no reply to read"])
+            }
+            chat.toggleSpeech(reply)
+        case ("POST", "/test/speech/stop"):
+            chat.speech.stop()
         case ("POST", "/test/show-settings"):
             // "light" or "dark" forces the app's appearance, for screenshots; anything else leaves the system's.
             if let name = body["appearance"] as? String { NSApp.appearance = NSAppearance(named: name == "dark" ? .darkAqua : .aqua) }
@@ -573,6 +582,7 @@ final class TestControl {
             "frame": { let f = actions.chatFrame(); return [f.minX, f.minY, f.width, f.height] }(),
             "voice": chat.voice.phase.rawValue,
             "voiceRetry": chat.voiceRetryItem != nil,
+            "speech": chat.speech.phase.rawValue,
         ])
     }
 

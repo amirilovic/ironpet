@@ -16,7 +16,7 @@ The design is `SPEC.md`. Swift 5.10 tools (Swift 5 language mode), macOS 14 mini
 | `Chat/` | The chat view, sessions, saved threads, memory notes, markdown, screenshots and image/file intake, Wispr Flow bridge, workspace detection, MCP sign-in sharing |
 | `Chat/ACP/` | Agent Client Protocol: JSON-RPC client over stdio (`ACPClient`), one process per chat (`ACPBackend`), runtimes for the bundled adapters and the Bun download (`ACPRuntime`), tool calls and `ApprovalRules` (`ACPToolCall`), the agent catalog (`AgentCatalogData.swift` is generated) |
 | `Signals/` | GitHub (via `gh`) and Sentry polling and the alert store |
-| `Voice/` | Voice notes: hold-to-talk key, microphone capture and conversion, WAV encoding, the transcription client, the level buffer and waveform bar, the Keychain key |
+| `Voice/` | Voice notes: hold-to-talk key, microphone capture and conversion, WAV encoding, the transcription client, the level buffer and waveform bar, the Keychain key. Spoken replies: the speech client, reply-to-speech text and the player |
 | `Meeting/` | Meeting transcripts: call detection, track sources (mic and ScreenCaptureKit), recorder and chunker, transcript assembly, summary, panel |
 | `Reminders/` | Break reminders scheduler |
 | `Activity/` | The local activity log in `ironpet.db` (`ActivityEvent`, `ActivityLog`), the digest built from it (`ActivityDigest`), away detection and the welcome back summary (`AwayTracker`, `WelcomeBack`) |
@@ -90,7 +90,7 @@ Installed-app and e2e checks change the user's machine (see Ground rules in `SKI
 | `Signals/` | `github`; `sentry` (opt-in, needs Sentry MCP) |
 | MCP gating, `MCPAuthSharing` | `mcp` (opt-in, needs Langfuse MCP) |
 | `SetupWindow`, `SettingsWindow`, `IronPetPanel`, `Config` | `setup`, `settings` (take over the keyboard) |
-| `Voice/` | `voice`, `voice-key` (opt-in, need a local mlx-audio server) |
+| `Voice/` | `voice`, `voice-key` (opt-in, need a local mlx-audio server); `speech` for spoken replies (opt-in, uses a stand-in speech server) |
 | `Meeting/` | `meeting`, `meeting-system` (opt-in) |
 | `Tasks/`, task tools, `IronPet tasks` | `tasks` |
 | `Activity/`, digest bubbles | `welcome-back` |

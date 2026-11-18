@@ -17,6 +17,8 @@ final class SettingsModel: ObservableObject {
     var automations: AutomationService?
     /// The meeting controller, for labelling the voices of the last meeting.
     var meeting: MeetingController?
+    /// The chat's reply reader, so Preview and a reply never talk over each other. Nil in preview renders.
+    var speech: SpeechPlayer?
     /// Screen capture, built with the database. Nil only before the app has started.
     var capture: CaptureService?
     /// Opens the main window on its Screen section.
@@ -399,33 +401,48 @@ private struct ShortcutRow: View {
 
 // MARK: - Voice
 
-private struct VoiceSettings: View {
+struct VoiceSettings: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject private var store = ConfigStore.shared
     @State private var baseUrl = ConfigStore.shared.config.voice.baseUrl
     @State private var modelName = ConfigStore.shared.config.voice.model
+    @State private var speechModel = ConfigStore.shared.config.speech.model
     @State private var key = ""
     @State private var keySaved = VoiceKey.isSet
     @State private var keyError = false
     @State private var testing = false
     @State private var testResult: (ok: Bool, text: String)?
 
+    private var name: String { store.config.pet.name }
+
     var body: some View {
         Form {
             Section {
                 Toggle("Voice notes", isOn: Binding(get: { store.config.voice.enabled },
                                                     set: { on in store.update { $0.voice.enabled = on } }))
+                Group {
+                    ShortcutRow(title: "Voice shortcut", path: \.voice, model: model)
+                    Toggle("Hold to talk", isOn: Binding(get: { store.config.voice.holdToTalk },
+                                                         set: { on in store.update { $0.voice.holdToTalk = on } }))
+                }
+                .disabled(!store.config.voice.enabled)
+            } header: {
+                Text("Talk to \(name)")
             } footer: {
-                Text("Off by default. When on, a microphone button appears in the chat, and what you record is sent to the server below. ironpet ships no speech model; point it at any server with an OpenAI-style /audio/transcriptions endpoint. Nothing is recorded or sent while this is off.")
+                Text("Hold the shortcut or the chat's microphone button, speak, and let go. The text lands in the chat box, or is sent at once when \"Send voice notes automatically\" is on in the chat's menu. With Hold to talk off, press once to start and again to stop. Esc cancels.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Server") {
+            SpokenReplySettings(speech: model.speech)
+            Section {
                 TextField("Base URL", text: $baseUrl)
                     .onSubmit(saveServer)
                     .onChange(of: baseUrl) { saveServer() }
-                TextField("Model", text: $modelName)
+                TextField("Transcription model", text: $modelName)
                     .onSubmit(saveServer)
                     .onChange(of: modelName) { saveServer() }
+                TextField("Speech model", text: $speechModel)
+                    .onSubmit(saveServer)
+                    .onChange(of: speechModel) { saveServer() }
                 LabeledContent("API key") {
                     HStack {
                         SecureField(keySaved ? "Saved in Keychain" : "Optional", text: $key)
@@ -455,14 +472,12 @@ private struct VoiceSettings: View {
                         .foregroundStyle(testResult.ok ? Color.green : Color.red)
                         .textSelection(.enabled)
                 }
-            }
-            Section {
-                ShortcutRow(title: "Voice shortcut", path: \.voice, model: model)
-                Toggle("Hold to talk", isOn: Binding(get: { store.config.voice.holdToTalk },
-                                                     set: { on in store.update { $0.voice.holdToTalk = on } }))
+            } header: {
+                Text("Server")
             } footer: {
-                Text("The transcript lands in the chat input, or is sent right away when \"Send voice notes automatically\" is on in the chat's settings menu. With Hold to talk on, hold the shortcut to record and release to transcribe. With it off, press once to start and again to stop. While recording, Enter also stops and transcribes, and Esc cancels. The key is kept in your Keychain, not in config.json.")
+                Text("One OpenAI-style server does both: /audio/transcriptions for voice notes and /audio/speech for replies. ironpet ships no models. Nothing is sent while both switches are off; with a remote server, recordings and reply text leave your Mac. The key is kept in your Keychain. For mlx-audio with Kokoro, run: uvx --from \"mlx-audio[server]\" --with \"misaki[en]\" mlx_audio.server")
                     .font(.caption).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
         }
         .formStyle(.grouped)
@@ -472,6 +487,7 @@ private struct VoiceSettings: View {
         store.update {
             $0.voice.baseUrl = baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
             $0.voice.model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+            $0.speech.model = speechModel.trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
 
@@ -503,6 +519,108 @@ private struct VoiceSettings: View {
         let samples = (0..<WAV.sampleRate).map { Int16(sin(Double($0) * 2 * .pi * 440 / Double(WAV.sampleRate)) * 3000) }
         return WAV.encode(samples)
     }()
+}
+
+/// The spoken replies section of the Voice page: the switch, the voice and Preview. The speech model is under Server.
+private struct SpokenReplySettings: View {
+    let speech: SpeechPlayer?
+    @ObservedObject private var store = ConfigStore.shared
+    @State private var voices: [String] = []
+    @State private var previewing = false
+    @State private var result: (ok: Bool, text: String)?
+    /// Used when Settings is rendered without the app, so Preview still has something to play through.
+    @StateObject private var fallback = SpeechPlayer()
+
+    private var voice: Binding<String> {
+        Binding(get: { store.config.speech.voice }, set: { name in store.update { $0.speech.voice = name } })
+    }
+
+    /// The server's voices plus the saved one, so a voice that is not listed still shows.
+    private var voiceChoices: [String] {
+        voices.contains(store.config.speech.voice) ? voices : [store.config.speech.voice] + voices
+    }
+
+    var body: some View {
+        Section {
+            Toggle("Spoken replies", isOn: Binding(get: { store.config.speech.enabled }, set: setEnabled))
+                .disabled(previewing)
+            if voices.isEmpty {
+                TextField("Voice", text: voice)
+            } else {
+                Picker("Voice", selection: voice) {
+                    ForEach(voiceChoices, id: \.self) { Text(Synthesizer.label(for: $0)).tag($0) }
+                }
+            }
+            LabeledContent("Speed") {
+                HStack {
+                    Slider(value: Binding(get: { store.config.speech.speed }, set: { v in store.update { $0.speech.speed = v } }),
+                           in: Config.Speech.speedRange, step: 0.1)
+                    Text(String(format: "%.1f×", store.config.speech.speed))
+                        .monospacedDigit().frame(width: 36, alignment: .trailing)
+                }
+            }
+            LabeledContent("Preview") {
+                HStack {
+                    if previewing {
+                        ProgressView().controlSize(.small)
+                        Button("Stop") { (speech ?? fallback).stop() }
+                    } else {
+                        Button("Preview", action: { preview() })
+                    }
+                }
+            }
+            if let result {
+                Text(result.text)
+                    .font(.caption)
+                    .foregroundStyle(result.ok ? Color.green : Color.red)
+                    .textSelection(.enabled)
+            }
+        } header: {
+            Text("\(store.config.pet.name) talks back")
+        } footer: {
+            Text("Reads each reply to your chat messages aloud, up to about a minute, skipping code, tables and emoji. Every reply also gets a speaker button. Esc, the button or your next message stops it, and replies stay silent during calls and meeting recordings.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .task(id: "\(store.config.speech.enabled) \(store.config.voice.baseUrl) \(store.config.speech.model)") {
+            // Only with the feature on: opening the page must not contact the server. Waits for typing to pause, so
+            // every keystroke in the model field doesn't ask the server either.
+            guard store.config.speech.enabled else { return }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            let list = await SpeechPlayer.synthesizer().voices()
+            if !Task.isCancelled { voices = list }
+        }
+    }
+
+    /// Speaks one line with the saved settings. Turning the switch on goes through here, so a server that cannot
+    /// speak shows up now and not after the next reply.
+    private func preview(thenEnable enable: Bool = false) {
+        previewing = true
+        result = nil
+        let player = speech ?? fallback
+        let line = "Hi, I'm \(store.config.pet.name). This is how I'll read your replies."
+        Task {
+            do {
+                try await player.preview(line, using: SpeechPlayer.synthesizer())
+                if enable { store.update { $0.speech.enabled = true } }
+                result = (true, enable ? "Spoken replies are on." : "The server spoke the preview.")
+            } catch is CancellationError {
+                result = nil
+            } catch {
+                result = (false, (enable ? "Not turned on. " : "") + error.localizedDescription)
+            }
+            previewing = false
+        }
+    }
+
+    private func setEnabled(_ on: Bool) {
+        guard on else {
+            result = nil
+            store.update { $0.speech.enabled = false }
+            return
+        }
+        preview(thenEnable: true)
+    }
 }
 
 // MARK: - Meetings

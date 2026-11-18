@@ -255,6 +255,12 @@ final class ChatSession: ObservableObject {
     private var decided: [String: Bool] = [:]
     let voice = VoiceController()
     private var voiceChanges: AnyCancellable?
+    let speech = SpeechPlayer()
+    private var speechChanges: [AnyCancellable] = []
+    /// The running turn was sent from the chat, not from Telegram or an automation; its reply is read aloud when it ends.
+    private var turnSpoken = false
+    /// True during a call or a meeting recording, when a reply is not read aloud on its own. Set by `AppDelegate`.
+    var isQuiet: () -> Bool = { false }
     /// The transcription error that offers Retry, so only that card shows the button.
     @Published private(set) var voiceRetryItem: UUID?
 
@@ -279,6 +285,12 @@ final class ChatSession: ObservableObject {
         voiceChanges = voice.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         voice.onTranscript = { [weak self] in self?.receiveTranscript($0) }
         voice.onFailure = { [weak self] message, canRetry in self?.voiceFailed(message, canRetry: canRetry) }
+        speechChanges = [
+            speech.objectWillChange.sink { [weak self] in self?.objectWillChange.send() },
+            // Ghost stops talking as soon as the user starts a voice note.
+            voice.$phase.sink { [weak self] phase in if phase == .recording { self?.speech.stop() } },
+        ]
+        speech.onFailure = { [weak self] message in self?.items.append(Item(kind: .error(message))) }
     }
 
     /// A voice note's text goes into the input to edit, or is sent straight away when "Send voice notes automatically" is on.
@@ -287,6 +299,12 @@ final class ChatSession: ObservableObject {
         let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
         input = existing.isEmpty ? text : existing + " " + text
         if sendAfterDictation { send() }
+    }
+
+    /// Reads a reply aloud, or stops it when it is the one being read.
+    func toggleSpeech(_ item: Item) {
+        guard case .assistant(let text) = item.kind else { return }
+        if speech.speakingID == item.id { speech.stop() } else { speech.speak(text, id: item.id) }
     }
 
     private func voiceFailed(_ message: String, canRetry: Bool) {
@@ -607,6 +625,7 @@ final class ChatSession: ObservableObject {
     func send() {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !attachments.isEmpty else { return }
+        speech.stop()
         if isRunning {
             queue.append(QueuedMessage(text: prompt, attachments: attachments, reply: replyingTo))
             input = ""
@@ -643,6 +662,7 @@ final class ChatSession: ObservableObject {
         items.append(Item(kind: .user(prompt), origin: origin, reply: reply))
         let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
         telegramChat = telegram
+        turnSpoken = telegram == nil && automation == nil
         if let telegram { onTelegram?(telegram, .started) }
         automationRun = automation
         if let automation { onAutomation?(automation, .started) }
@@ -795,11 +815,16 @@ final class ChatSession: ObservableObject {
 
     /// The last assistant message after the newest user message.
     private func lastAnswer() -> String? {
+        guard let item = lastAnswerItem(), case .assistant(let text) = item.kind else { return nil }
+        return text
+    }
+
+    private func lastAnswerItem() -> Item? {
         guard let start = items.lastIndex(where: { if case .user = $0.kind { return true } else { return false } }) else { return nil }
-        for item in items[start...].reversed() {
-            if case .assistant(let text) = item.kind, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return text }
+        return items[start...].last { item in
+            if case .assistant(let text) = item.kind { return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            return false
         }
-        return nil
     }
 
     private func makeBackend() -> ACPBackend {
@@ -826,6 +851,8 @@ final class ChatSession: ObservableObject {
 
     func stop() {
         restoreQueue()
+        speech.stop()
+        turnSpoken = false
         turnID = nil
         acp?.cancel()
         for approval in approvals {
@@ -1045,6 +1072,12 @@ final class ChatSession: ObservableObject {
                 let name = ConfigStore.shared.config.pet.name
                 onAttention?(error == nil ? "\(name) finished your task" : "\(name)'s task failed")
             }
+            // The switch comes first: the quiet check starts polling the microphone list, which must not happen while off.
+            if error == nil, turnSpoken, !hidden, speech.isEnabled(), !isQuiet(), let answer = lastAnswerItem(),
+               case .assistant(let text) = answer.kind {
+                speech.speak(text, id: answer.id)
+            }
+            turnSpoken = false
             if error == nil { sendNextQueued() } else { restoreQueue(reason: "The turn before it failed, so this message did not run.") }
         }
     }

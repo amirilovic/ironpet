@@ -37,6 +37,23 @@ struct Config: Codable, Equatable {
         var holdToTalk = true
     }
 
+    /// Spoken replies: Ghost reads chat replies aloud with a voice from an OpenAI-compatible speech server. Uses the
+    /// server in `voice` (base URL, Keychain key).
+    struct Speech: Codable, Equatable {
+        /// Off by default: turning it on sends reply text to the voice server.
+        var enabled = false
+        var model = Speech.defaultModel
+        /// One of the model's voices, such as Kokoro's `am_puck` or OpenAI's `nova`.
+        var voice = Speech.defaultVoice
+        /// Playback speed sent with each request; 1 is the model's normal pace.
+        var speed = Speech.defaultSpeed
+
+        static let defaultModel = "mlx-community/Kokoro-82M-bf16"
+        static let defaultVoice = "am_puck"
+        static let defaultSpeed = 1.0
+        static let speedRange = 0.5...2.0
+    }
+
     /// Meeting transcripts: the mic and one app's audio go to the voice server in chunks, and an agent summarizes the
     /// result. Uses the server in `voice` (base URL, model, Keychain key).
     struct Meetings: Codable, Equatable {
@@ -203,6 +220,7 @@ struct Config: Codable, Equatable {
     var tasks = Tasks()
     var welcomeBack = WelcomeBack()
     var voice = Voice()
+    var speech = Speech()
     var meetings = Meetings()
     var telegram = Telegram()
     var screenCapture = ScreenCapture()
@@ -260,6 +278,12 @@ struct Config: Codable, Equatable {
         c.tasks.keepDoneDays = min(365, max(1, c.tasks.keepDoneDays))
         c.voice.baseUrl = c.voice.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         c.voice.model = c.voice.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        c.speech.model = c.speech.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if c.speech.model.isEmpty { c.speech.model = Speech.defaultModel }
+        c.speech.voice = c.speech.voice.trimmingCharacters(in: .whitespacesAndNewlines)
+        if c.speech.voice.isEmpty { c.speech.voice = Speech.defaultVoice }
+        c.speech.speed = c.speech.speed.isFinite
+            ? min(Speech.speedRange.upperBound, max(Speech.speedRange.lowerBound, c.speech.speed)) : Speech.defaultSpeed
         if c.meetings.summaryModel?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.meetings.summaryModel = nil }
         c.screenCapture.retentionDays = min(365, max(1, c.screenCapture.retentionDays))
         return c
