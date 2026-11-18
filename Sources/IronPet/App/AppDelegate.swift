@@ -780,7 +780,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let front = NSWorkspace.shared.frontmostApplication
         let target = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? previousApp : front
         if pet.isWindowVisible { pet.window.orderOut(nil) }
+        pet.isCapturing = true
         Task { @MainActor in
+            defer { pet.isCapturing = false }
             let shot = region ? await ScreenCapture.captureRegion() : await ScreenCapture.captureWindow(of: target)
             if let shot { chat.attach(shot) }
             if shot != nil || chat.isVisible { showChat() }

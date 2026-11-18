@@ -654,3 +654,130 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertLessThan(chat.title.minX - chat.header.minX, 16 + 22 + 8 + 1)
     }
 }
+
+@MainActor
+final class WindowAutoHideTests: XCTestCase {
+    private var enabled = false
+    private var capturing = false
+
+    private func open() -> (ChatSession, IronPetPanel) {
+        let session = ChatSession(restore: false)
+        let panel = IronPetPanel.chat(session)
+        panel.autoHideEnabled = { self.enabled }
+        panel.isCapturing = { self.capturing }
+        panel.setFrame(CGRect(x: 100, y: 100, width: 800, height: 600), display: false)
+        panel.orderFront(nil)
+        return (session, panel)
+    }
+
+    private func resign() { NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp) }
+    private func activate() { NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp) }
+
+    func testOffKeepsTheChatWindowOpenWhenAnotherAppTakesOver() {
+        let (_, panel) = open()
+        defer { panel.close() }
+        resign()
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertFalse(panel.autoHidden)
+    }
+
+    func testOnHidesAndBringsBackTheSameFrameAndDraft() {
+        enabled = true
+        let (session, panel) = open()
+        defer { panel.close() }
+        session.input = "half a thought"
+        let frame = panel.frame
+        resign()
+        XCTAssertFalse(panel.isVisible)
+        XCTAssertTrue(panel.autoHidden)
+        activate()
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertFalse(panel.autoHidden)
+        XCTAssertEqual(panel.frame, frame)
+        XCTAssertEqual(session.input, "half a thought")
+    }
+
+    func testAWindowClosedByEscStaysClosed() {
+        enabled = true
+        let (_, panel) = open()
+        panel.cancelOperation(nil)
+        XCTAssertFalse(panel.isVisible)
+        activate()
+        XCTAssertFalse(panel.isVisible)
+    }
+
+    func testOwnSheetsDragsAndCapturesKeepItOpen() {
+        enabled = true
+        let (session, panel) = open()
+        defer { panel.close() }
+        session.fileDragActive = true
+        resign()
+        XCTAssertTrue(panel.isVisible)
+        session.fileDragActive = false
+        capturing = true
+        resign()
+        XCTAssertTrue(panel.isVisible)
+        capturing = false
+        let sheet = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        panel.beginSheet(sheet)
+        defer { panel.endSheet(sheet) }
+        resign()
+        XCTAssertTrue(panel.isVisible)
+    }
+
+    func testDoesNotComeBackWhileCapturing() {
+        enabled = true
+        let (_, panel) = open()
+        defer { panel.close() }
+        resign()
+        capturing = true
+        activate()
+        XCTAssertFalse(panel.isVisible)
+        capturing = false
+        activate()
+        XCTAssertTrue(panel.isVisible)
+    }
+
+    /// Hiding only orders the window out. The session is not touched, so a turn keeps streaming into it and the
+    /// reply is there on return.
+    func testReplyArrivingWhileHiddenIsThereOnReturn() {
+        enabled = true
+        let (session, panel) = open()
+        defer { panel.close() }
+        resign()
+        XCTAssertFalse(panel.isVisible)
+        session.items.append(.init(kind: .assistant("done")))
+        activate()
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertEqual(session.items.count, 1)
+    }
+}
+
+extension WindowAutoHideTests {
+    func testShortcutShowsAHiddenWindowAndABusyVoiceControllerBlocksTheHide() async throws {
+        enabled = true
+        let (session, panel) = open()
+        defer { panel.close() }
+        resign()
+        XCTAssertFalse(panel.isVisible)
+        // What the voice shortcut does: show the window (the app activates), then start.
+        panel.show(near: CGRect(x: 0, y: 0, width: 50, height: 50))
+        XCTAssertTrue(panel.isVisible)
+
+        session.voice.isEnabled = { true }
+        session.voice.start(.file(URL(fileURLWithPath: "/nonexistent.m4a")))
+        XCTAssertTrue(session.voice.isBusy)
+        resign()
+        XCTAssertTrue(panel.isVisible, "recording or transcribing keeps the window")
+        XCTAssertFalse(panel.autoHidden)
+    }
+
+    func testIdleVoiceDoesNotBlockTheHide() {
+        enabled = true
+        let (session, panel) = open()
+        defer { panel.close() }
+        XCTAssertFalse(session.voice.isBusy)
+        resign()
+        XCTAssertFalse(panel.isVisible)
+    }
+}

@@ -237,3 +237,22 @@ final class ShortcutTests: XCTestCase {
         }
     }
 }
+
+extension ConfigTests {
+    func testWindowAutoHideIsOffByDefaultAndSavesWithoutTouchingOtherKeys() throws {
+        try """
+        { "pet": { "name": "Boo" } }
+        """.write(to: file, atomically: true, encoding: .utf8)
+        var (config, error) = Config.load(from: file)
+        XCTAssertNil(error)
+        XCTAssertFalse(config.window.autoHide)
+        XCTAssertEqual(config.pet.name, "Boo")
+        try config.save(to: file)
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        XCTAssertEqual(saved["window"] as? [String: Bool], ["autoHide": false])
+        XCTAssertEqual((saved["pet"] as? [String: Any])?["name"] as? String, "Boo")
+        config.window.autoHide = true
+        try config.save(to: file)
+        XCTAssertTrue(Config.load(from: file).config.window.autoHide)
+    }
+}

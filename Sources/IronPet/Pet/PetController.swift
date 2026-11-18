@@ -56,6 +56,8 @@ final class PetController: NSObject {
     /// The window closed, by Esc, a close button or ⌘W, or because ironpet lost focus off Chat.
     var onWindowClosed: (() -> Void)?
     private var chatShown = false
+    /// ironpet's window or region capture is running; the window does not auto-hide or come back meanwhile.
+    var isCapturing = false
     /// "Tell Ghost…" in the Tasks section: send this text to the chat.
     var onTellGhost: ((String) -> Void)?
     /// A task's thread link: open that chat thread.
@@ -301,6 +303,8 @@ final class PetController: NSObject {
             brief?.setVisible(visible && windowModel.section == .today)
         }
         window.onClose = { [weak self] in self?.onWindowClosed?() }
+        window.autoHideEnabled = { ConfigStore.shared.config.window.autoHide }
+        window.isCapturing = { [weak self] in self?.isCapturing ?? false }
         windowModel.$section
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in

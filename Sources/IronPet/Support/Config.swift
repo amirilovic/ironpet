@@ -182,8 +182,16 @@ struct Config: Codable, Equatable {
         static let pasteLinesRange = 10...2_000
     }
 
+    /// The ironpet window (chat, agents, tasks and the other sections).
+    struct Window: Codable, Equatable {
+        /// Hide the window when another app becomes active, and bring it back when ironpet is activated again.
+        /// Off by default: the window then stays as it is today.
+        var autoHide = false
+    }
+
     var pet = Pet()
     var chat = Chat()
+    var window = Window()
     /// `"auto"` (the app that started the agent) or the bundle id of a fixed app.
     var openIn = "auto"
     var editors: [Editor] = []

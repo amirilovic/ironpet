@@ -6,6 +6,9 @@ import Foundation
 final class ChatSession: ObservableObject {
     enum State { case idle, running, done, failed }
 
+    /// A file drag is over the chat. The window does not auto-hide meanwhile.
+    var fileDragActive = false
+
     struct Item: Identifiable, Codable {
         enum Kind: Codable {
             case user(String)

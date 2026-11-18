@@ -108,7 +108,7 @@ struct ChatView: View {
         .onChange(of: findQuery) { scheduleFind() }
         .onChange(of: session.findOpen) { if !session.findOpen { resetFind() } }
         .onChange(of: scrollKey) { if session.findOpen { scheduleStreamRecompute() } }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+        .onDrop(of: [.fileURL], isTargeted: Binding(get: { session.fileDragActive }, set: { session.fileDragActive = $0 })) { providers in
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
                     guard let url else { return }

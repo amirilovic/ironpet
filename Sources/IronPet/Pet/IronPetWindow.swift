@@ -190,6 +190,12 @@ final class IronPetPanel: NSPanel {
     private static let sizeKey = "ironpetWindowSize"
     var onVisibilityChange: ((Bool) -> Void)?
     var onClose: (() -> Void)?
+    /// Whether `window.autoHide` is on. Read each time ironpet loses focus, so a change applies without a restart.
+    var autoHideEnabled: () -> Bool = { false }
+    /// ironpet's own window or region capture is running.
+    var isCapturing: () -> Bool = { false }
+    /// The window was hidden because another app became active, and comes back when ironpet is activated again.
+    private(set) var autoHidden = false
     private let model: IronPetWindowModel
     private let session: ChatSession?
     private var observers: [NSObjectProtocol] = []
@@ -240,12 +246,45 @@ final class IronPetPanel: NSPanel {
                 }
             },
             center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self, self.isVisible, !self.onChat else { return }
-                    self.close()
-                }
+                MainActor.assumeIsolated { self?.appResignedActive() }
+            },
+            center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appBecameActive() }
             },
         ]
+    }
+
+    /// Another app became active. With auto-hide on the window hides on every section; otherwise it closes off Chat only.
+    private func appResignedActive() {
+        guard isVisible else { return }
+        if autoHideEnabled() {
+            if Self.shouldAutoHide(self, dragging: session?.fileDragActive == true, capturing: isCapturing(),
+                                   voiceBusy: session?.voice.isBusy == true) { autoHide() }
+            return
+        }
+        if !onChat { close() }
+    }
+
+    /// Hides the window like Esc does, keeping its section, chat, draft and frame, and remembers to bring it back.
+    private func autoHide() {
+        close()
+        autoHidden = true
+    }
+
+    /// ironpet is the active app again: bring back a window that auto-hide hid, where it was. A window closed with
+    /// Esc or a close button is not brought back.
+    private func appBecameActive() {
+        guard autoHidden, !isCapturing() else { return }
+        show(near: .zero)
+    }
+
+    /// Whether losing focus to another app should hide the window now. A sheet or modal panel of ironpet's own
+    /// (alert, open panel, approval), a file drag onto the chat, a running capture and a busy voice controller
+    /// (recording, or transcribing until the text lands in the composer) keep it open.
+    static func shouldAutoHide(_ panel: NSWindow, dragging: Bool, capturing: Bool, voiceBusy: Bool = false) -> Bool {
+        if dragging || capturing || voiceBusy { return false }
+        if panel.attachedSheet != nil || NSApp.modalWindow != nil { return false }
+        return !(panel.childWindows ?? []).contains { $0.isVisible }
     }
 
     /// Resizes the title bar so the close, minimize and zoom buttons sit in the middle of the section headers. AppKit
@@ -278,8 +317,12 @@ final class IronPetPanel: NSPanel {
     override func resignKey() {
         super.resignKey()
         DispatchQueue.main.async { [weak self] in
-            guard let self, isVisible,
-                  Self.shouldClose(self, onChat: onChat, appActive: NSApp.isActive, newKey: NSApp.keyWindow) else { return }
+            guard let self, isVisible else { return }
+            if !NSApp.isActive, autoHideEnabled() {
+                appResignedActive()
+                return
+            }
+            guard Self.shouldClose(self, onChat: onChat, appActive: NSApp.isActive, newKey: NSApp.keyWindow) else { return }
             close()
         }
     }
@@ -342,6 +385,7 @@ final class IronPetPanel: NSPanel {
     }
 
     override func close() {
+        autoHidden = false
         let wasVisible = isVisible
         super.close()
         guard wasVisible else { return }
@@ -352,7 +396,10 @@ final class IronPetPanel: NSPanel {
     /// Below the pet when there is room, otherwise above it; always clamped to the pet's screen, and no larger than it
     /// (a size saved on a bigger display would push the sidebar off the left edge). Stays where it is when already open.
     func show(near anchor: CGRect) {
-        if !isVisible {
+        // Coming back from an auto-hide keeps the frame; opening it any other way places it next to the pet.
+        let keepFrame = autoHidden
+        autoHidden = false
+        if !isVisible, !keepFrame {
             let screen = NSScreen.screens.first { $0.frame.intersects(anchor) }?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
             let size = Self.fitted(frame.size, in: screen)
             var origin = CGPoint(x: anchor.midX - size.width / 2, y: anchor.minY - size.height - 4)

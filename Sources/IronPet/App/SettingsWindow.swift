@@ -255,6 +255,8 @@ private struct GeneralSettings: View {
                 Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
                 Toggle("Also show macOS notifications", isOn: Binding(get: { model.alsoSystemNotifications },
                                                                       set: { model.alsoSystemNotifications = $0 }))
+                Toggle("Hide the window when another app is in front", isOn: Binding(
+                    get: { store.config.window.autoHide }, set: { on in store.update { $0.window.autoHide = on } }))
             }
             Section {
                 Toggle("Welcome back summary", isOn: Binding(
