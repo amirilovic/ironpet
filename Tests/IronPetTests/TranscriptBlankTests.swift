@@ -31,6 +31,7 @@ final class TranscriptBlankTests: XCTestCase {
     }
 
     /// Text rows that SwiftUI realized and that lie inside the scroll view's visible area.
+    /// Reply text is a selectable text view (a text area), the rest is static text.
     private func visibleRows(_ panel: NSPanel) -> Int {
         guard let scroll = scrollView(panel), let window = scroll.window else { return -1 }
         let area = window.convertToScreen(scroll.convert(scroll.bounds, to: nil))
@@ -40,7 +41,7 @@ final class TranscriptBlankTests: XCTestCase {
             var children = node.accessibilityChildren() ?? []
             if children.isEmpty, let view = element as? NSView { children = view.subviews }
             for child in children {
-                if let item = child as? NSAccessibilityProtocol, item.accessibilityRole() == .staticText {
+                if let item = child as? NSAccessibilityProtocol, [.staticText, .textArea].contains(item.accessibilityRole()) {
                     let frame = item.accessibilityFrame()
                     if frame.height > 1, frame.intersects(area) { count += 1 }
                 }
@@ -188,8 +189,8 @@ final class TranscriptBlankTests: XCTestCase {
     }
 
     /// Programmatic jumps to the top, the middle and back leave rows on screen, and a healthy transcript must not be
-    /// repaired. Only the jump past the end is blank, and that one is repaired.
-    func testJumpsInsideTheContentAreLeftAloneAndOneBeyondItIsRepaired() throws {
+    /// repaired. The jump past the end must end with rows on screen.
+    func testJumpsInsideTheContentAreLeftAloneAndOneBeyondItEndsWithRowsOnScreen() throws {
         try skipOnCI()
         let session = ChatSession(restore: false)
         session.items = HugeTranscriptTests.hugeThread(screenshotDir: nil)
@@ -212,7 +213,10 @@ final class TranscriptBlankTests: XCTestCase {
         scroll.reflectScrolledClipView(scroll.contentView)
         spin(2.5)
         XCTAssertGreaterThan(visibleRows(panel), 0, "the jump past the end stayed blank")
-        XCTAssertGreaterThanOrEqual(ChatView.blankRepairsForTesting, 1)
+        // The reply text is an AppKit view now, and the lazy stack no longer leaves the viewport empty after this jump, so
+        // the repair may not be needed. What matters is that rows are on screen and the repair does not loop.
+        // testRepairBringsRowsBackAfterOvershoot still covers a jump that does leave the viewport empty.
+        XCTAssertLessThanOrEqual(ChatView.blankRepairsForTesting, 2, "the repair kept firing")
         panel.close()
     }
 }

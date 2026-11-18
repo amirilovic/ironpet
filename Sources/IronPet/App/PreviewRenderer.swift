@@ -26,6 +26,19 @@ enum PreviewRenderer {
             session.loadPreview(preview)
             render(ChatView(session: session).frame(width: 520, height: 640).panel(), to: dir, file)
         }
+        // The reply markdown sample at the narrow chat width and a wider one, in both appearances, and with find open.
+        for width in [420.0, 520.0] {
+            for (suffix, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+                for (label, find) in [("", ChatFind.RowHighlight?.none), ("-find", ChatFind.RowHighlight(query: "item", current: ChatFind.Match(item: UUID(), segment: 3, occurrence: 0)))] {
+                    let view = MarkdownView(text: ChatSession.sampleMarkdown, find: find)
+                        .font(.system(size: 13.5))
+                        .padding(16)
+                        .frame(width: width, alignment: .leading)
+                        .background(Color(nsColor: .windowBackgroundColor))
+                    render(view, to: dir, "markdown-\(Int(width))\(label)-\(suffix)", scheme: scheme)
+                }
+            }
+        }
         // A ~60 KB crash log pasted into the chat: over the paste limits, so the input shows an attachment chip.
         let pasted = ChatSession(restore: false)
         pasted.loadPreview(.done)
@@ -160,6 +173,17 @@ enum PreviewRenderer {
                     }
                 }
             }
+        }
+        // A reply with every text block, in a real window, to check the markdown in both appearances.
+        let markdownChat = ChatSession(restore: false)
+        markdownChat.loadPreview(.markdown)
+        for (suffix, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
+            let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
+            model.sidebarCollapsed = true
+            model.section = .chat
+            let view = IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: markdownChat,
+                                         meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
+            renderWindow(model: model, session: markdownChat, content: view, to: dir, "real-chat-markdown-\(suffix)", scheme: scheme)
         }
         // Settings → Screen: the controls only, with a hint that points at the Screen section.
         settingsModel.capture = CaptureService(store: CaptureStore(database: Database.open(path: nil, migrations: CaptureStore.migrations).database),

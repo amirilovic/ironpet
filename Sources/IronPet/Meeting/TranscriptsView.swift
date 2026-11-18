@@ -118,7 +118,7 @@ struct TranscriptsView: View {
                 ScrollView {
                     Group {
                         if let text, !text.isEmpty {
-                            MarkdownView(text: text)
+                            MarkdownView(text: text, size: 13)
                         } else {
                             Text(page == .summary ? "No summary for this meeting." : "No transcript for this meeting.")
                                 .foregroundStyle(.secondary)

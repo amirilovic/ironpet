@@ -416,7 +416,8 @@ struct ChatView: View {
         lastContentHeight = metrics.contentHeight
         lastViewportHeight = metrics.viewportHeight
         checkBlank(proxy)
-        follow.geometryChanged(distanceFromBottom: metrics.distanceFromBottom, userDriven: userDriven)
+        // While a width change re-wraps the rows, the offset moves because the heights do, not because the reader scrolled.
+        follow.geometryChanged(distanceFromBottom: metrics.distanceFromBottom, userDriven: userDriven && !resizing)
         // Rows below the viewport only have estimated heights, so the end moves as they are measured.
         lastGap = metrics.distanceFromBottom
         if follow.pinned, topRowID != nil { topRowID = nil }
@@ -453,10 +454,32 @@ struct ChatView: View {
                 proxy.scrollTo(top, anchor: .top)
             } else {
                 scrollToEnd(proxy)
+                escalateBlankRepair(proxy)
             }
         }
         blankCheck = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// The bottom marker sits where the estimated height puts it. A selectable text row is an AppKit view whose height is
+    /// only known once it is shown, so the estimate can end past the last real row and the jump lands in empty space.
+    /// If the viewport is still empty after the jump, this shows rows a little above the end first, which corrects the
+    /// estimate, and then jumps to the end again.
+    private func escalateBlankRepair(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            let groups = groupedItems
+            guard !visibleRows.hasVisible, visibleRows.attached, !resizing, follow.pinned, groups.count > 1 else { return }
+            ChatView.blankRepairsForTesting += 1
+            scrollActivity.noteProgrammaticScroll()
+            proxy.scrollTo(groups[groups.count * 3 / 4].id, anchor: .center)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                guard !resizing else { return }
+                // The jump above is the app's own scroll, so the reader is still at the end.
+                follow.jumpedToLatest()
+                scrollToEnd(proxy)
+                settleAtEnd(proxy, attempt: 0)
+            }
+        }
     }
 
     /// Scrolling realizes rows, which changes the estimated height, which would scroll again. So this jumps once after
