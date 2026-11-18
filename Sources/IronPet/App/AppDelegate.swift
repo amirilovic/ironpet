@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let installer = HookInstaller()
     private var automations: AutomationService!
     private var capture: CaptureService?
+    private var desktop: DesktopService?
+    private var desktopApprovals: DesktopApprovals?
     private var dueReminders: TaskDueReminders?
     /// Nil until the database is open, a moment after launch.
     private var activity: ActivityLog?
@@ -241,6 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.onScreenSettings = { [weak self] in self?.showSettings(tab: "screen") }
         settingsModel.showScreenSection = { [weak self] in self?.pet.showWindow(.screen) }
         setUpScreenCapture(database)
+        setUpDesktopControl()
         let service = AutomationService(store: store, engine: engine, database: database)
         service.notice = { [weak self] notice in
             if let event = ActivityEvent.automationNotice(notice) { self?.activity?.record(event) }
@@ -347,6 +350,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         service.refreshModel()
         service.apply()
     }
+
+    /// Builds the desktop tools on the capture privacy rules. They do nothing until the user turns Desktop control on.
+    private func setUpDesktopControl() {
+        guard let capture else { return }
+        let approvals = DesktopApprovals(present: { [weak self] request, decide in
+            self?.announcer.automation(AutomationNotice(
+                id: Self.desktopApprovalID(request), symbol: "hand.raised.fill", tint: .warn, title: request.title,
+                subtitle: "An agent wants to act on your Mac.", body: request.detail,
+                buttons: [.init(title: "Approve", primary: true) { decide(true) }, .init(title: "Reject", destructive: true) { decide(false) }],
+                systemNotification: true))
+        }, dismiss: { [weak self] request in self?.announcer.bubbles.dismiss(Self.desktopApprovalID(request)) })
+        desktopApprovals = approvals
+        var dependencies = DesktopService.Dependencies(privacy: capture.privacy)
+        // An automated run must not read or operate the real screen.
+        if TestControl.isEnabled { dependencies.ax = IdleDesktopAX() }
+        dependencies.enabled = { ConfigStore.shared.config.desktopControl.enabled }
+        dependencies.approve = { request in await approvals.ask(request) }
+        dependencies.record = { [weak self] record in
+            DispatchQueue.main.async { self?.activity?.record(.desktopAction(record)) }
+        }
+        let service = DesktopService(dependencies)
+        desktop = service
+        settingsModel.desktopLog = { [weak self] in
+            self?.activity?.events(in: DateInterval(start: Date().addingTimeInterval(-ActivityLog.retention), end: Date().addingTimeInterval(60)), kinds: [.desktopAction]).reversed() ?? []
+        }
+    }
+
+    private static func desktopApprovalID(_ request: DesktopApproval) -> String { "desktop-approval:\(request.id.uuidString)" }
 
     @objc private func showScreenSection() { pet.showWindow(.screen) }
 
@@ -731,7 +762,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         }
         server.onAgentAPI = { [weak self] request, respond in
-            MCPEndpoint.route(request, automations: { self?.automations }, tasks: { TaskStore.shared }, screen: { self?.capture?.store }, respond: respond)
+            MCPEndpoint.route(request, automations: { self?.automations }, tasks: { TaskStore.shared }, screen: { self?.capture?.store }, desktop: { self?.desktop }, respond: respond)
         }
         try server.start()
         self.server = server

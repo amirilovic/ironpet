@@ -403,6 +403,35 @@ Pause capture from the pet menu or Settings. The **Screen** section of the ironp
 
 **Tools.** `screen_search(query, app?, since?, until?, limit?)` returns hits with capture id, time, app, window title and a short snippet. `screen_window(since, until?, app?, window?)` returns the change list: per window, up to 30 lines for blocks that were new, edited or sent, or are drafts, each with the time (and UTC offset), the list it is in, its label, its date, the capture id and a ref, and a count of the rest. On the first capture of a window everything visible is new, so the list holds the 30 newest by time, preferring entries that have a date, and counts the others. `screen_window(id)` returns an outline of that capture's window, `screen_window(id, root)` one subtree by ref, and `screen_window(id, role, text?)` the elements with a role. A window without blocks is one entry, the page, and `screen_window(id)` of a screenshot read returns its text. All return only stored, redacted text. `since` and `until` take `today`, `yesterday`, a date, an ISO 8601 time or an age such as `90m`.
 
+## Desktop control
+
+Desktop control lets the agents you run in ironpet read and operate other Mac apps through Accessibility, with nothing to install and no separate permission: it uses the Accessibility access ironpet already has. It is off by default. Turn it on under **Settings → Screen → Desktop control**. macOS asks for Accessibility if ironpet does not have it yet.
+
+Agents get seven MCP tools, described by the bundled `ironpet-desktop` skill:
+
+| Tool | What it does |
+| --- | --- |
+| `desktop_snapshot(app, window?, root?, role?, text?, depth?)` | Reads a window live and returns an outline, one element per line, with a ref on every line. `root` (a ref) reads a subtree, `role` lists the elements with that role. |
+| `desktop_find(app, window?, role?, name?, value?)` | Lists the elements that match, each with a ref. |
+| `desktop_press(ref)` | Performs the element's AXPress action, or its default action (confirm, pick, open). |
+| `desktop_set_value(ref, text)` | Sets the value of a text field or other settable element. |
+| `desktop_type(ref, text)` | Focuses the element and inserts text at the caret, or appends it when only the whole value can be set. |
+| `desktop_focus(ref)` | Focuses an element, or raises a window. |
+| `desktop_screenshot(app, window?)` | A picture of one window, not the whole screen. Needs Screen Recording access. |
+
+Refs belong to the last read of a window and work only while their element is unchanged. A tool that gets a stale or unknown ref says so and asks for a new snapshot. Two identical elements get refs ending in `~2`, `~3`. Actions use Accessibility only: ironpet sends no mouse or keyboard events and does not move your pointer.
+
+Safety rules that no setting overrides:
+
+- Password fields are read for their role only and never operated. Password managers, apps on the screen capture exclusion list, private browser windows and the denied addresses of screen capture are never read or operated. Nothing works while capture is paused or the screen is locked.
+- An action on an element, or in a window, whose text says send, pay, delete, submit or buy (and forms of those words, plus purchase, check out and transfer) waits for you to press **Approve** in a bubble. **Reject**, or no answer in two minutes, fails the action.
+- Every action is logged with its time, app, window, element role and name, action and outcome. Settings → Screen → Desktop control lists the latest ones. The log is the `desktop.action` kind of the activity log and is kept for 30 days.
+- The chat's own approval card still applies: in the normal mode a `desktop_*` call asks first, and only Auto mode skips the card. The bubble above applies in both modes.
+
+| Setting | Key | Notes |
+| --- | --- | --- |
+| Desktop control | `desktopControl.enabled` | Default off |
+
 ## Meeting transcripts
 
 Meeting transcripts are off by default. They reuse the server from **Settings → Voice** (`voice.baseUrl`, `voice.model`, the Keychain key), so ironpet still ships no speech model. With the feature off there is no menu item, no shortcut, no panel, and macOS is never asked for microphone or screen access.

@@ -8,7 +8,7 @@ import ApplicationServices
 /// The window server id of an accessibility window element. It is a long-standing private symbol of HIServices that most
 /// window managers use; without it OCR is skipped, never pointed at another window.
 @_silgen_name("_AXUIElementGetWindow")
-private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
+func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
 
 final class AXCaptureSource: CaptureSource {
     static let ownBundleId = Bundle.main.bundleIdentifier ?? "com.ironpet.app"
@@ -124,11 +124,14 @@ final class AXCaptureSource: CaptureSource {
 
     // MARK: Reading
 
-    private final class Budget {
+    final class Budget {
         let maxNodes: Int
         let deadline: TimeInterval
         var nodes = 0
-        init(_ budget: CaptureReadBudget) {
+        /// When set, `convert` appends each element it returns, in pre-order, so a caller can act on the element behind a node.
+        var elements: [AXUIElement]?
+        init(_ budget: CaptureReadBudget, keepElements: Bool = false) {
+            if keepElements { elements = [] }
             maxNodes = budget.maxNodes
             deadline = ProcessInfo.processInfo.systemUptime + budget.maxTime
         }
@@ -140,12 +143,18 @@ final class AXCaptureSource: CaptureSource {
         }
     }
 
-    func readFocusedWindow(of app: CaptureApp, budget: CaptureReadBudget) -> WindowRead? {
-        guard isTrusted else { return nil }
+    /// The application element, with the messaging timeout set and, for a Chromium or Electron app, the switch that makes it build its page tree.
+    func appElement(for app: CaptureApp) -> AXUIElement {
         let element = AXUIElementCreateApplication(app.pid)
         AXUIElementSetMessagingTimeout(element, 0.5)
         // Chromium and Electron build their page tree only for a client that asks.
         if isWebApp(app) { AXUIElementSetAttributeValue(element, "AXManualAccessibility" as CFString, kCFBooleanTrue) }
+        return element
+    }
+
+    func readFocusedWindow(of app: CaptureApp, budget: CaptureReadBudget) -> WindowRead? {
+        guard isTrusted else { return nil }
+        let element = appElement(for: app)
         guard let window = Self.element(element, "AXFocusedWindow") ?? Self.element(element, "AXMainWindow") ?? Self.elements(element, "AXWindows").first else { return nil }
         let tracker = Budget(budget)
         guard let root = Self.convert(window, depth: 0, budget: tracker) else { return nil }
@@ -162,25 +171,25 @@ final class AXCaptureSource: CaptureSource {
 
     // MARK: AX helpers
 
-    private static func element(_ el: AXUIElement, _ name: String) -> AXUIElement? {
+    static func element(_ el: AXUIElement, _ name: String) -> AXUIElement? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, name as CFString, &value) == .success, let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         return (value as! AXUIElement)
     }
 
-    private static func elements(_ el: AXUIElement, _ name: String) -> [AXUIElement] {
+    static func elements(_ el: AXUIElement, _ name: String) -> [AXUIElement] {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, name as CFString, &value) == .success, let list = value as? [AnyObject] else { return [] }
         return list.compactMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
     }
 
-    private static func string(_ el: AXUIElement, _ name: String) -> String? {
+    static func string(_ el: AXUIElement, _ name: String) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, name as CFString, &value) == .success, let value else { return nil }
         return text(value)
     }
 
-    private static func text(_ value: CFTypeRef) -> String? {
+    static func text(_ value: CFTypeRef) -> String? {
         if let string = value as? String { return string }
         if CFGetTypeID(value) == CFURLGetTypeID() { return (value as! CFURL as URL).absoluteString }
         if let number = value as? NSNumber { return number.stringValue }
@@ -199,8 +208,9 @@ final class AXCaptureSource: CaptureSource {
 
     /// Reads one element and its subtree. A secure field is read for role and subrole only, so its value, selection and children never
     /// enter this process's memory. A control that the text walk drops is read for its name and nothing under it.
-    private static func convert(_ el: AXUIElement, depth: Int, budget: Budget) -> AXNode? {
+    static func convert(_ el: AXUIElement, depth: Int, budget: Budget) -> AXNode? {
         guard depth <= 64, budget.allow() else { return nil }
+        budget.elements?.append(el)
         var head: CFArray?
         AXUIElementCopyMultipleAttributeValues(el, ["AXRole", "AXSubrole"] as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &head)
         let headValues = (head as? [AnyObject]) ?? []

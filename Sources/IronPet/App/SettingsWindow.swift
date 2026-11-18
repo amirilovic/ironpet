@@ -21,6 +21,8 @@ final class SettingsModel: ObservableObject {
     var speech: SpeechPlayer?
     /// Screen capture, built with the database. Nil only before the app has started.
     var capture: CaptureService?
+    /// The desktop actions agents took, newest first.
+    var desktopLog: () -> [ActivityEvent] = { [] }
     /// Opens the main window on its Screen section.
     var showScreenSection: () -> Void = {}
     /// Opens the execution log window, for one automation or all of them.

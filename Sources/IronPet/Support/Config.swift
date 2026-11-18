@@ -87,6 +87,12 @@ struct Config: Codable, Equatable {
         var excludedApps: [String] = []
     }
 
+    /// Desktop control: agents you run in ironpet read and operate other apps through Accessibility (the `desktop_*` MCP tools). Off by
+    /// default. Actions on elements that say send, pay, delete, submit or buy always wait for your approval.
+    struct DesktopControl: Codable, Equatable {
+        var enabled = false
+    }
+
     struct Reminders: Codable, Equatable {
         struct Item: Codable, Equatable {
             var enabled = true
@@ -224,6 +230,7 @@ struct Config: Codable, Equatable {
     var meetings = Meetings()
     var telegram = Telegram()
     var screenCapture = ScreenCapture()
+    var desktopControl = DesktopControl()
 
     static let file = Paths.root.appendingPathComponent("config.json")
 

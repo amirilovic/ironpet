@@ -35,6 +35,7 @@ private struct ScreenSettingsBody: View {
                 excludeSection
                 dataSection
             }
+            DesktopControlSections(settings: settings)
         }
         .onAppear { service.refreshModel(); seen = service.store.seenApps() }
     }
@@ -195,5 +196,53 @@ private struct ScreenSettingsBody: View {
         } footer: {
             Text("Older captures are deleted automatically.").font(.caption).foregroundStyle(.secondary)
         }
+    }
+}
+
+/// Settings → Screen → Desktop control: the switch for the `desktop_*` tools and the list of what agents did with them.
+struct DesktopControlSections: View {
+    let settings: SettingsModel
+    @ObservedObject private var store = ConfigStore.shared
+    @State private var log: [ActivityEvent] = []
+
+    var body: some View {
+        Group {
+            Section {
+                Toggle("Desktop control", isOn: Binding(get: { store.config.desktopControl.enabled }, set: { on in
+                    store.update { $0.desktopControl.enabled = on }
+                    if on { _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) }
+                }))
+            } footer: {
+                Text("Off by default. When on, agents you run in ironpet can read and operate other apps through Accessibility with the desktop_* tools, using the Accessibility access ironpet has. They press buttons, set text and focus elements. They send no mouse or keyboard events. Password fields, password managers, the apps you excluded from screen capture and private browser windows are never read or operated, and nothing works while capture is paused. An action on an element or window that says send, pay, delete, submit or buy waits for your Approve. A window picture needs Screen Recording access.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if store.config.desktopControl.enabled {
+                Section("Recent actions") {
+                    if log.isEmpty { Text("Nothing yet.").font(.caption).foregroundStyle(.secondary) }
+                    ForEach(Array(log.prefix(20).enumerated()), id: \.offset) { _, event in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(event.title).lineLimit(1)
+                                Spacer()
+                                Text(event.at.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Text(DesktopLogText.line(event)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear { log = settings.desktopLog() }
+        .onChange(of: store.config.desktopControl.enabled) { _ in log = settings.desktopLog() }
+    }
+}
+
+/// The text of one row of the desktop action list.
+enum DesktopLogText {
+    static func line(_ event: ActivityEvent) -> String {
+        let key = ActivityEvent.DesktopKey.self
+        var parts = [event.extra[key.outcome] ?? "", event.extra[key.window].map { $0.isEmpty ? "" : "window: \($0)" } ?? ""]
+        if let note = event.extra[key.note], !note.isEmpty { parts.append(note) }
+        return parts.filter { !$0.isEmpty }.joined(separator: ", ")
     }
 }

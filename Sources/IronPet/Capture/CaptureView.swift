@@ -85,8 +85,8 @@ enum CaptureView {
     }
 
     /// An outline, one element per line, indented by depth (wrappers do not count). Each line has the role, its text, the number of
-    /// children and the ref to read that subtree with. At the depth limit a line shows how many children it hides.
-    static func outline(_ root: AXNode, depth: Int, maxLines: Int = maxLines, maxChildren: Int = 12) -> (lines: [String], omitted: Int) {
+    /// children and the ref to read that subtree with. With `allRefs` every line has a ref, so a caller can address a leaf. At the depth limit a line shows how many children it hides.
+    static func outline(_ root: AXNode, depth: Int, maxLines: Int = maxLines, maxChildren: Int = 12, allRefs: Bool = false) -> (lines: [String], omitted: Int) {
         var lines: [String] = []
         var omitted = 0
         func walk(_ node: AXNode, level: Int) {
@@ -97,7 +97,7 @@ enum CaptureView {
             if let text = displayText(node) { line += " \"" + clip(text) + "\"" }
             let kids = visibleChildren(node)
             if !kids.isEmpty { line += " [\(kids.count)]" }
-            if !kids.isEmpty || CaptureBlocks.isBlock(node) { line += " #" + node.ref }
+            if allRefs || !kids.isEmpty || CaptureBlocks.isBlock(node) { line += " #" + node.ref }
             lines.append(line)
             if level + 1 >= depth { return }
             // A list of 60 messages shows its first few and counts the rest, so the outline stays short. Read the list with its ref.

@@ -32,6 +32,12 @@ final class ConfigTests: XCTestCase {
         XCTAssertFalse(config.integrations.claudeHooks)
     }
 
+    func testDesktopControlIsOffByDefaultAndReadsItsSwitch() throws {
+        XCTAssertFalse(Config().desktopControl.enabled)
+        try write(#"{"desktopControl":{"enabled":true}}"#)
+        XCTAssertTrue(Config.load(from: file).config.desktopControl.enabled)
+    }
+
     func testScreenCaptureIsOffByDefaultWithTheScreenshotFallbackOffAndSevenDaysOfHistory() throws {
         let defaults = Config().screenCapture
         XCTAssertFalse(defaults.enabled)
