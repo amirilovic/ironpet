@@ -43,7 +43,9 @@ final class TranscriptBlankTests: XCTestCase {
             for child in children {
                 if let item = child as? NSAccessibilityProtocol, [.staticText, .textArea].contains(item.accessibilityRole()) {
                     let frame = item.accessibilityFrame()
-                    if frame.height > 1, frame.intersects(area) { count += 1 }
+                    // A text view reports its whole frame even where a scroll view clips it, so ask AppKit what is visible.
+                    let clipped = (child as? NSView).map { $0.visibleRect.height <= 1 } ?? false
+                    if frame.height > 1, frame.intersects(area), !clipped { count += 1 }
                 }
                 walk(child, depth + 1)
             }
@@ -149,7 +151,8 @@ final class TranscriptBlankTests: XCTestCase {
         let scroll = try XCTUnwrap(scrollView(panel))
         let doc = try XCTUnwrap(scroll.documentView)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: doc.bounds.height + 3000))
-        spin(0.05)
+        // An AppKit text view leaves the accessibility tree a pass later than a SwiftUI Text. The blank repair waits 0.55 s.
+        spin(0.3)
         XCTAssertEqual(visibleRows(panel), 0, "the detector reported rows for a viewport past the content")
         panel.close()
     }
