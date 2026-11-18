@@ -4,25 +4,13 @@ import SwiftUI
 /// Settings → Screen: the master switch for screen capture and everything that goes with it.
 struct ScreenSettings: View {
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
-    @State private var installedAgents: [ACPAgent] = []
-    @State private var testing = false
-    @State private var seen: [(bundleId: String, name: String, items: Int)] = []
-
-    private var capture: Config.ScreenCapture { store.config.screenCapture }
 
     var body: some View {
         if let service = model.capture {
-            content(service)
+            ScreenSettingsBody(service: service, settings: model, model: service.model).formStyle(.grouped)
         } else {
             Form { Text("Screen capture is not available.").foregroundStyle(.secondary) }.formStyle(.grouped)
         }
-    }
-
-    private func content(_ service: CaptureService) -> some View {
-        ScreenSettingsBody(service: service, settings: model, model: service.model, installedAgents: $installedAgents, testing: $testing, seen: $seen)
-            .formStyle(.grouped)
-            .task { installedAgents = await ACPProbe.installed() }
     }
 }
 
@@ -31,35 +19,19 @@ private struct ScreenSettingsBody: View {
     let settings: SettingsModel
     @ObservedObject var model: CaptureStatusModel
     @ObservedObject private var store = ConfigStore.shared
-    @Binding var installedAgents: [ACPAgent]
-    @Binding var testing: Bool
-    @Binding var seen: [(bundleId: String, name: String, items: Int)]
+    @State private var seen: [(bundleId: String, name: String, captures: Int)] = []
+    @State private var excludeText = ""
 
     private var capture: Config.ScreenCapture { store.config.screenCapture }
 
     private func update(_ change: @escaping (inout Config.ScreenCapture) -> Void) { store.update { change(&$0.screenCapture) } }
-
-    private var agents: [ACPAgent] {
-        var list = installedAgents
-        if !list.contains(where: { $0.id == capture.agent }), let saved = AgentCatalog.agent(id: capture.agent) { list.append(saved) }
-        return list
-    }
-
-    private var models: [ChatModel] {
-        var list = AgentCatalog.agent(id: capture.agent).map(ChatSession.cachedModels(for:)) ?? []
-        if let saved = capture.model, !list.contains(where: { $0.id == saved }) { list.append(ChatModel(id: saved, name: saved)) }
-        return list
-    }
 
     var body: some View {
         Form {
             masterSection
             if capture.enabled {
                 statusSection
-                decisionSection
-                thresholdsSection
-                agentSection
-                appsSection
+                ocrSection
                 excludeSection
                 dataSection
             }
@@ -73,7 +45,7 @@ private struct ScreenSettingsBody: View {
         Section {
             Toggle("Screen capture", isOn: Binding(get: { capture.enabled }, set: { on in update { $0.enabled = on } }))
         } footer: {
-            Text("Off by default. When on, ironpet reads the text of the window you are using through Accessibility, with rules that know how to read chats and documents, and keeps it in ~/.ironpet/ironpet.db on this Mac. Secrets that rules recognise (keys, tokens, passwords, credentials in URLs) are replaced by [redacted:…] before the text is stored. A model on this Mac then filters it. After a delay, captures from apps you allow below go to your chosen agent, which looks up your tasks and suggests what needs your action. Nothing is added without a click. Password managers, secure fields, private browser windows and local files are never captured. When off, nothing is read, no model runs and macOS shows no permission prompt.")
+            Text("Off by default. When on, ironpet reads the text of the window you are using through Accessibility, with no rules for particular apps, and keeps what changed in ~/.ironpet/ironpet.db on this Mac. Keys, tokens and passwords are replaced by [redacted:…] before the text is stored, and password fields are never read. Agents you run in ironpet can search it with the screen_search and screen_window tools. Nothing leaves this Mac otherwise. Password managers and private browser windows are never captured. When off, nothing is read and macOS shows no permission prompt.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -91,17 +63,6 @@ private struct ScreenSettingsBody: View {
                     }
                 }
             }
-            LabeledContent("Screen Recording") {
-                if model.screenRecording {
-                    Label("Allowed", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                } else {
-                    Button("Allow…") { ScreenCapture.requestPermission() }
-                }
-            }
-            if !model.screenRecording {
-                Text("Optional. Only Viber needs it, to read the chat name from the window header on the device. Without it all Viber chats share one thread.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             if model.paused, let until = model.pausedUntil {
                 LabeledContent("Capture") { Text("Paused until \(until.formatted(date: .omitted, time: .shortened))") }
             } else {
@@ -114,7 +75,7 @@ private struct ScreenSettingsBody: View {
                 Button("Resume") { service.privacy.resume(); service.refreshModel() }.disabled(!model.paused)
             }
             HStack {
-                Text("Activity and send history are in the main window under Screen.").font(.caption).foregroundStyle(.secondary)
+                Text("Recent captures and search are in the main window under Screen.").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Open Screen") { settings.showScreenSection() }
             }
@@ -129,148 +90,29 @@ private struct ScreenSettingsBody: View {
         service.refreshModel()
     }
 
-    // MARK: Decision model
+    // MARK: Screenshot fallback
 
-    private var decisionSection: some View {
+    private var ocrSection: some View {
         Section {
-            Toggle("Filter with a local model", isOn: Binding(get: { capture.decision.enabled }, set: { v in update { $0.decision.enabled = v } }))
-            if !capture.decision.enabled {
-                Label("Only rule-based redaction runs before captures are sent to the agent.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-            Group {
-            Picker("API", selection: Binding(get: { capture.decision.api }, set: { v in update { $0.decision.api = v } })) {
-                Text("H2O-Lightning (/v1/systemone)").tag("systemone")
-                Text("OpenAI-compatible chat").tag("openai")
-            }
-            TextField("Base URL", text: Binding(get: { capture.decision.baseUrl }, set: { v in update { $0.decision.baseUrl = v } }), prompt: Text("http://127.0.0.1:8741"))
-            TextField("Model", text: Binding(get: { capture.decision.model }, set: { v in update { $0.decision.model = v } }))
-            HStack {
-                Button("Test") {
-                    testing = true
-                    Task { await service.testDecisionModel(); testing = false }
-                }.disabled(testing)
-                if testing { ProgressView().controlSize(.small) }
-                decisionStatus
-            }
-            }.disabled(!capture.decision.enabled)
-        } header: {
-            Text("Local decision model")
-        } footer: {
-            Text("Rules redact the secrets they know first, so a key in a useful message is sent as [redacted:aws-key] and the rest of the message still goes. A model on this Mac, such as H2O-Lightning-4B, then scores the redacted text. An item it flags at or above the secret threshold stays on this Mac and its text is dropped. The unredacted text of an item that had a secret is kept for 24 hours so you can look at it under Screen, Captures, and is never sent. The address must be localhost. If no model is set or it does not answer, nothing is sent to the agent. With the filter off, none of this applies.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    private var thresholdsSection: some View {
-        Section {
-            thresholdRow("Secret", \.secretThreshold, "Kept on this Mac when the model's secret score is at or above this. Lower is stricter.")
-            thresholdRow("Calendar", \.calendarThreshold, "A calendar score at or above this keeps an item in play as a calendar candidate.")
-            thresholdRow("Skip", \.skipThreshold, "Items whose follow-up and new-task scores are both below this are not sent. 0 sends everything that passes.")
-            Button("Reset to defaults") {
-                let defaults = Config.ScreenCapture.Decision()
-                update {
-                    $0.decision.secretThreshold = defaults.secretThreshold
-                    $0.decision.calendarThreshold = defaults.calendarThreshold
-                    $0.decision.skipThreshold = defaults.skipThreshold
-                }
-            }
-        } header: {
-            Text("Decision thresholds")
-        }
-        .disabled(!capture.decision.enabled)
-    }
-
-    private func thresholdRow(_ title: String, _ key: WritableKeyPath<Config.ScreenCapture.Decision, Double>, _ help: String) -> some View {
-        let value = Binding(get: { capture.decision[keyPath: key] }, set: { v in update { $0.decision[keyPath: key] = min(1, max(0, v)) } })
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(title)
-                Slider(value: value, in: 0...1, step: 0.05)
-                Text(value.wrappedValue.formatted(.number.precision(.fractionLength(2)))).monospacedDigit().frame(width: 40, alignment: .trailing)
-            }
-            Text(help).font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    @ViewBuilder private var decisionStatus: some View {
-        switch model.decision {
-        case .off:
-            Text("Off").font(.caption).foregroundStyle(.secondary)
-        case .unknown:
-            Text("Not tested").font(.caption).foregroundStyle(.secondary)
-        case .ready(let name):
-            Label("Ready: \(name)", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
-        case .unavailable(let reason):
-            Label(reason, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
-        }
-    }
-
-    // MARK: Agent
-
-    private var agentSection: some View {
-        Section {
-            Picker("Agent", selection: Binding(get: { capture.agent }, set: { id in
-                update { if $0.agent != id { $0.model = nil }; $0.agent = id }
-            })) {
-                ForEach(agents) { Text($0.name).tag($0.id) }
-            }
-            Picker("Model", selection: Binding(get: { capture.model ?? "" }, set: { id in update { $0.model = id.isEmpty ? nil : id } })) {
-                Text("Default").tag("")
-                ForEach(models, id: \.id) { Text($0.name).tag($0.id) }
-            }
-            Stepper(value: Binding(get: { capture.delayMinutes }, set: { v in update { $0.delayMinutes = v } }), in: 0.5...240, step: 0.5) {
-                Text("Delay: \(capture.delayMinutes.formatted()) min of quiet before sending")
-            }
-            if let next = model.nextSend {
-                LabeledContent("Next send") { Text(next.formatted(date: .omitted, time: .shortened)) }
-            }
-        } header: {
-            Text("Larger model")
-        } footer: {
-            Text("The agent can only look up your tasks (read-only), and every other permission request is refused. It runs in its own folder, so your chat session and folder do not change. Captures that wait for the delay are grouped by conversation or document.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: Apps
-
-    private var appsSection: some View {
-        Section {
-            let rows = appRows
-            if rows.isEmpty {
-                Text("No apps captured yet. Apps appear here once ironpet has read them.").font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(rows, id: \.bundleId) { row in
-                Toggle(isOn: Binding(get: { capture.sendApps.contains(row.bundleId) }, set: { on in
-                    update {
-                        $0.sendApps.removeAll { $0 == row.bundleId }
-                        if on { $0.sendApps.append(row.bundleId) }
-                    }
-                })) {
-                    VStack(alignment: .leading) {
-                        Text(row.name)
-                        Text("\(row.bundleId), \(row.items) \(row.items == 1 ? "item" : "items")").font(.caption).foregroundStyle(.secondary)
+            Toggle("Read windows that have no text from a screenshot", isOn: Binding(get: { capture.ocr }, set: { on in update { $0.ocr = on } }))
+            if capture.ocr {
+                LabeledContent("Screen Recording") {
+                    if model.screenRecording {
+                        Label("Allowed", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else {
+                        Button("Allow…") { ScreenCapture.requestPermission() }
                     }
                 }
             }
         } header: {
-            Text("Allowed to send")
+            Text("Screenshot fallback")
         } footer: {
-            Text("Only captures from apps ticked here can go to the agent. None are ticked by default. Capture and the local filter work for every app either way.")
+            Text("Some windows (a canvas, a remote desktop, a game) expose no text to Accessibility. With this on, ironpet takes a screenshot of that window, reads its text with Apple Vision on this Mac, and drops the image. The image is never saved to disk. Turning this on asks macOS for Screen Recording permission. With it off, such windows are skipped.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-    }
-
-    private var appRows: [(bundleId: String, name: String, items: Int)] {
-        var rows = seen
-        for id in capture.sendApps where !rows.contains(where: { $0.bundleId == id }) { rows.append((id, id, 0)) }
-        return rows
     }
 
     // MARK: Never capture
-
-    @State private var excludeText = ""
 
     private var excludeSection: some View {
         Section {
@@ -298,7 +140,7 @@ private struct ScreenSettingsBody: View {
         } header: {
             Text("Never capture")
         } footer: {
-            Text("These apps are not read at all, so nothing from them is stored or sent. Password managers, authenticator apps and private browser windows are always excluded and do not need to be listed.")
+            Text("These apps are not read at all. Password managers, authenticator apps and private browser windows are always excluded and do not need to be listed.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -332,7 +174,7 @@ private struct ScreenSettingsBody: View {
         excludeText = ""
     }
 
-    // MARK: Data and rules
+    // MARK: Data
 
     private var dataSection: some View {
         Section {
@@ -340,26 +182,18 @@ private struct ScreenSettingsBody: View {
                 Text("Keep captures for \(capture.retentionDays) days")
             }
             HStack {
+                Text("\(model.captureCount) \(model.captureCount == 1 ? "capture" : "captures") stored").foregroundStyle(.secondary)
+                Spacer()
                 Button("Delete all captures") {
-                    service.store.clearCaptures()
+                    service.store.clear()
                     service.refreshModel()
                     seen = []
                 }
-                Spacer()
-                Button("Open rules folder") {
-                    try? FileManager.default.createDirectory(at: CaptureService.rulesFolder, withIntermediateDirectories: true)
-                    NSWorkspace.shared.open(CaptureService.rulesFolder)
-                }
-                Button("Reload rules") { service.reloadRules() }
             }
-            let broken = model.rules.filter { $0.status == .error }
-            Text("\(model.rules.filter { $0.status == .active }.count) rules active" + (broken.isEmpty ? "" : ", \(broken.count) with errors: " + broken.map(\.name).joined(separator: ", ")))
-                .font(.caption).foregroundStyle(broken.isEmpty ? Color.secondary : Color.orange)
         } header: {
-            Text("Data and rules")
+            Text("Data")
         } footer: {
-            Text("A file in ~/.ironpet/capture/rules replaces the bundled rule of the same name. Rules can only capture less than the built-in privacy floor allows.")
-                .font(.caption).foregroundStyle(.secondary)
+            Text("Older captures are deleted automatically.").font(.caption).foregroundStyle(.secondary)
         }
     }
 }

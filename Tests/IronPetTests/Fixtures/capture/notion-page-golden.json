@@ -1,8 +1,0 @@
-{
-  "phase": 4,
-  "content": {
-    "kind": "document",
-    "title": "Project outline",
-    "text": "Implementation\nBuild the parser around the page frame.\nKeep fallback capture available."
-  }
-}

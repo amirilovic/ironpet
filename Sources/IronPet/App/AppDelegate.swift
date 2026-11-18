@@ -320,36 +320,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // An automated run must not raise the macOS Accessibility prompt or read the real screen.
         if TestControl.isEnabled {
             dependencies.requestAccessibility = { false }
+            dependencies.requestScreenRecording = { false }
             dependencies.makeSource = { IdleCaptureSource() }
         }
-        let service = CaptureService(store: captureStore, config: { ConfigStore.shared.config.screenCapture },
-                                     rules: CaptureRules(folder: CaptureService.rulesFolder), dependencies: dependencies)
-        // Proposals wait in the task list as suggestions, for the Tasks tab or a reviewing agent. One info bubble tells the user how many (see offerSuggestions).
-        service.onProposals = { [weak self] proposals in
-            self?.offerSuggestions(TaskStore.shared?.suggest(capture: proposals) ?? [])
-            for proposal in proposals { self?.testControl?.recordProposal(proposal) }
-        }
-        TaskStore.shared?.ignoreCapture = { [weak captureStore] fingerprint, kind in captureStore?.ignore(fingerprint: fingerprint, kind: kind) }
-        service.model.$sending
-            .removeDuplicates()
-            .sink { [weak self] sending in self?.captureSendingChanged(sending) }
-            .store(in: &cancellables)
+        let service = CaptureService(store: captureStore, config: { ConfigStore.shared.config.screenCapture }, dependencies: dependencies)
         capture = service
         settingsModel.capture = service
         service.refreshModel()
         service.apply()
     }
 
-    /// A bubble stays up while captures are being sent to the agent, so the user always sees when anything leaves the Mac.
-    private func captureSendingChanged(_ sending: Bool) {
-        let id = "capture-sending"
-        guard sending else { return announcer.bubbles.dismiss(id) }
-        let agent = AgentCatalog.agent(id: config.config.screenCapture.agent)?.name ?? config.config.screenCapture.agent
-        announcer.bubbles.show(Bubble(id: id, symbol: "arrow.up.circle.fill", tint: .orange, title: "Sending captures to \(agent)",
-                                      body: "Text from the apps you allowed is being read by the agent now."))
-    }
-
-    @objc private func showCaptureInspector() { pet.showScreen(tab: .captures) }
+    @objc private func showScreenSection() { pet.showWindow(.screen) }
 
     @objc private func captureMenuAction(_ sender: NSMenuItem) {
         guard let capture else { return }
@@ -382,13 +363,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             add("Pause until tomorrow", "pauseTomorrow")
         }
         submenu.addItem(.separator())
-        let captures = NSMenuItem(title: "Show captures…", action: #selector(showCaptureInspector), keyEquivalent: "")
+        let captures = NSMenuItem(title: "Show captures…", action: #selector(showScreenSection), keyEquivalent: "")
         captures.target = self
         submenu.addItem(captures)
         let settings = NSMenuItem(title: "Screen settings…", action: #selector(showScreenSettings), keyEquivalent: "")
         settings.target = self
         submenu.addItem(settings)
-        let state = capture.model.sending ? "sending to the agent" : capture.privacy.isPaused() ? "paused" : "on"
+        let state = capture.privacy.isPaused() ? "paused" : "on"
         let item = NSMenuItem(title: "Screen capture (\(state))", action: nil, keyEquivalent: "")
         item.submenu = submenu
         return item
@@ -435,15 +416,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The tools Ghost's chat agents get: ironpet's automations, over a stdio bridge to the loopback server.
+    /// The tools Ghost's chat agents get: ironpet's automations, tasks and screen captures, over a stdio bridge to the loopback server.
     private func registerMCPServer() {
         guard let executable = Bundle.main.executablePath else { return }
         var env: [JSON] = []
         if Paths.isIsolated { env.append(["name": "IRONPET_ROOT", "value": Paths.root.path]) }
         let entry: JSON = ["name": "ironpet", "command": executable, "args": ["mcp"], "env": env]
         ACPBackend.defaultMCPServers = { [entry] }
-        let readOnly: JSON = ["name": "ironpet", "command": executable, "args": ["mcp", "--tasks-readonly"], "env": env]
-        ACPBackend.readOnlyTasksMCPServer = { readOnly }
     }
 
     /// Applies settings that need more than being read at the point of use.
@@ -702,11 +681,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             control.welcomeBack = welcomeBack
             control.setIdleSeconds = { [weak self] seconds in self?.testIdleSeconds = seconds }
             control.showInspector = { [weak self] in
-                self?.pet.showScreen(tab: .captures)
+                self?.pet.showWindow(.screen)
                 return self?.pet.windowNumber ?? 0
-            }
-            control.showProposal = { proposal in
-                TaskStore.shared?.suggest(capture: [proposal])
             }
             control.buildBrief = { [weak self] kind in
                 let weekdays = self?.automations.store.automations.first { $0.action.digest == kind.rawValue }?.trigger.weekdays
@@ -732,7 +708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         }
         server.onAgentAPI = { [weak self] request, respond in
-            MCPEndpoint.route(request, automations: { self?.automations }, tasks: { TaskStore.shared }, respond: respond)
+            MCPEndpoint.route(request, automations: { self?.automations }, tasks: { TaskStore.shared }, screen: { self?.capture?.store }, respond: respond)
         }
         try server.start()
         self.server = server

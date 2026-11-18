@@ -89,25 +89,4 @@ enum CaptureURL {
         if let fragment = url.percentEncodedFragment { out += "#\(fragment)" }
         return out
     }
-
-    /// Replaces every URL with a scheme inside free text by its redacted form.
-    static func redactURLs(in text: String) -> String {
-        guard text.contains("://") else { return text }
-        var out = ""
-        var rest = Substring(text)
-        while let range = rest.range(of: "://") {
-            var start = range.lowerBound
-            while start > rest.startIndex {
-                let before = rest.index(before: start)
-                guard rest[before].isASCII, rest[before].isLetter else { break }
-                start = before
-            }
-            let end = rest[range.lowerBound...].firstIndex(where: { $0.isWhitespace || "\"'<>".contains($0) }) ?? rest.endIndex
-            out += rest[..<start]
-            out += redact(String(rest[start..<end]))
-            rest = rest[end...]
-        }
-        out += rest
-        return out
-    }
 }

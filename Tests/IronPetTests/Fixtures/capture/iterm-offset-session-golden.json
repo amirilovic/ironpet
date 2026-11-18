@@ -1,8 +1,0 @@
-{
-  "phase": 1,
-  "content": {
-    "kind": "document",
-    "title": "~/code/sample",
-    "text": "$ echo example\nfirst output line\nsecond output line\n$ git status\nworking tree clean"
-  }
-}

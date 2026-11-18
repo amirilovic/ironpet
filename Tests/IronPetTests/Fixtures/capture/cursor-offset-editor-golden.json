@@ -1,8 +1,0 @@
-{
-  "phase": 4,
-  "content": {
-    "kind": "document",
-    "title": "sample.swift",
-    "text": "func render() {\n    print(\"sample\")\n}"
-  }
-}

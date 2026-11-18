@@ -1,47 +1,27 @@
 import XCTest
 @testable import IronPet
 
-@MainActor
 final class ScreenSectionTests: XCTestCase {
-    func testSummaryMatchesTheStatusCounts() {
-        let model = CaptureStatusModel()
-        model.itemCount = 1595
-        model.pendingCount = 2
-        model.localOnlyCount = 1028
-        XCTAssertEqual(ScreenSectionText.summary(items: model.itemCount, pending: model.pendingCount, localOnly: model.localOnlyCount),
-                       "1595 items, 2 waiting, 1028 kept on this Mac")
+    func testTheSummarySaysHowManyCapturesAreStored() {
+        XCTAssertEqual(ScreenSectionText.summary(captures: 0, lastCapture: nil), "Nothing captured yet.")
+        XCTAssertEqual(ScreenSectionText.summary(captures: 1, lastCapture: nil), "1 capture stored")
+        XCTAssertTrue(ScreenSectionText.summary(captures: 42, lastCapture: Date().addingTimeInterval(-120)).hasPrefix("42 captures stored, the last one"))
     }
 
-    func testSendLogRowsListNewestFirstFromASeededStore() {
-        let store = CaptureStore.inMemory()
-        let base = Date(timeIntervalSince1970: 1_800_000_000)
-        store.logSend(harness: "claude", model: "sonnet", items: [1, 2], bytes: 900, outcome: "ok", now: base)
-        store.logSend(harness: "cursor", model: "auto", items: [3], bytes: 120, outcome: "failed", now: base.addingTimeInterval(60))
-        let rows = ScreenSectionText.rows(store.sendLog())
-        XCTAssertEqual(rows.count, 2)
-        XCTAssertTrue(rows[0].title.hasSuffix("cursor / auto"))
-        XCTAssertEqual(rows[0].detail, "1 items, 120 bytes, failed")
-        XCTAssertTrue(rows[1].title.hasSuffix("claude / sonnet"))
-        XCTAssertEqual(rows[1].detail, "2 items, 900 bytes, ok")
+    func testThePreviewKeepsTheFirstLines() {
+        XCTAssertEqual(ScreenSectionText.preview("a\nb"), "a\nb")
+        XCTAssertEqual(ScreenSectionText.preview("a\nb\nc\nd"), "a\nb …")
+        XCTAssertEqual(ScreenSectionText.preview("a\nb\nc", lines: 1), "a …")
+        XCTAssertEqual(ScreenSectionText.preview(""), "")
     }
 
-    func testScreenSectionComesAfterTranscriptsAndIsAlwaysListed() {
-        let shown = IronPetSection.shown(chat: false, transcripts: true, automations: false)
-        XCTAssertEqual(shown.firstIndex(of: .screen), shown.firstIndex(of: .transcripts)! + 1)
-    }
-}
-
-@MainActor
-final class ScreenTabTests: XCTestCase {
-    func testTwoTabsCapturesFirst() {
-        XCTAssertEqual(ScreenTab.allCases, [.captures, .sent])
-        XCTAssertEqual(ScreenTab.allCases.map(\.title), ["Captures", "Sent to the agent"])
-    }
-
-    func testWindowModelOpensOnCapturesAndKeepsTheChosenTab() {
-        let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ScreenTabTests-\(UUID().uuidString)")!)
-        XCTAssertEqual(model.screenTab, .captures)
-        model.screenTab = .sent
-        XCTAssertEqual(model.screenTab, .sent)
+    func testTheWindowLabelFallsBackToTheAddress() {
+        let base = StoredCapture(id: 1, at: Date(), app: "a", appName: "A", window: "Title", url: "https://example.com", trigger: "idle", text: "")
+        XCTAssertEqual(ScreenSectionText.windowLabel(base), "Title")
+        var untitled = base
+        untitled.window = ""
+        XCTAssertEqual(ScreenSectionText.windowLabel(untitled), "https://example.com")
+        untitled.url = nil
+        XCTAssertEqual(ScreenSectionText.windowLabel(untitled), "Untitled window")
     }
 }

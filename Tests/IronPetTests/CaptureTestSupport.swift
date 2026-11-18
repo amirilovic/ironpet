@@ -1,51 +1,60 @@
 import Foundation
 @testable import IronPet
 
-extension CaptureStore {
-    /// A private in-memory store.
-    static func inMemory() -> CaptureStore {
-        CaptureStore(database: Database.open(path: nil, migrations: migrations).database)
+/// A source with a window the test sets, so no capture test touches the real screen.
+final class FakeCaptureSource: CaptureSource {
+    var app = CaptureApp(bundleId: "com.tinyspeck.slackmacgap", name: "Slack", pid: 100)
+    var title: String? = "ana (DM) - Acme"
+    var root = AXNode(role: "Window")
+    var ocrLines: [String]? = ["Text read from a screenshot"]
+    var trusted = true
+    private(set) var reads = 0
+    private(set) var ocrCalls = 0
+    private(set) var started = false
+    private(set) var stopped = false
+    private var onSignal: ((CaptureSignal) -> Void)?
+
+    func start(onSignal: @escaping (CaptureSignal) -> Void) {
+        started = true
+        self.onSignal = onSignal
     }
+
+    func stop() { stopped = true }
+    var isTrusted: Bool { trusted }
+    func frontmostApp() -> CaptureApp? { app }
+
+    func readFocusedWindow(of app: CaptureApp, budget: CaptureReadBudget) -> WindowRead? {
+        reads += 1
+        return WindowRead(app: app, title: title, url: nil, root: root)
+    }
+
+    func recognizeFocusedWindow(of app: CaptureApp) -> [String]? {
+        ocrCalls += 1
+        return ocrLines
+    }
+
+    func emit(_ signal: CaptureSignal) { onSignal?(signal) }
 }
 
-/// A task list in memory, standing in for the app's `TaskStore`.
-final class MemoryTaskList: CaptureTaskList {
-    private let lock = NSLock()
-    private var items: [CaptureTask]
-    private var closed: Set<String> = []
-    private var counter = 0
-
-    init(_ titles: [String] = []) {
-        items = titles.enumerated().map { CaptureTask(id: "t\($0.offset + 1)", title: $0.element, notes: "", due: nil) }
-        counter = titles.count
+enum CaptureFixtures {
+    /// A Slack-like web window: a toolbar of labelled buttons, a message list and a composer with a draft and a Send button.
+    static func slack(messages: [String], draft: String = "", url: String? = "https://app.slack.com/client/T1/C1") -> AXNode {
+        let toolbar = AXNode(role: "Group", children: ["Bold: off", "Italic: off", "Strikethrough: off", "Link", "Attach"].map {
+            AXNode(role: "Button", title: $0, description: $0, children: [AXNode(role: "StaticText", value: $0)])
+        })
+        let list = AXNode(role: "List", children: messages.map {
+            AXNode(role: "Group", children: [AXNode(role: "StaticText", value: "Ana"), AXNode(role: "StaticText", value: $0)])
+        })
+        let composer = AXNode(role: "Group", children: [
+            toolbar,
+            AXNode(role: "TextArea", value: draft, description: "Message to Ana"),
+            AXNode(role: "Button", title: "Send now", children: [AXNode(role: "StaticText", value: "Send now")]),
+        ])
+        let web = AXNode(role: "WebArea", url: url, children: [AXNode(role: "Toolbar", children: [AXNode(role: "Button", title: "Back")]), list, composer])
+        return AXNode(role: "Window", children: [web])
     }
 
-    var all: [CaptureTask] { lock.withLock { items } }
-    var isClosed: (String) -> Bool { { id in self.lock.withLock { self.closed.contains(id) } } }
-
-    func open() async -> [CaptureTask] { lock.withLock { items.filter { !closed.contains($0.id) } } }
-
-    func all() async -> [CaptureTask] {
-        lock.withLock { items.map { var task = $0; task.isDone = closed.contains($0.id); return task } }
-    }
-
-    func create(title: String, notes: String, due: String?) async -> CaptureTask? {
-        lock.withLock {
-            counter += 1
-            let task = CaptureTask(id: "t\(counter)", title: title, notes: notes, due: due)
-            items.append(task)
-            return task
-        }
-    }
-
-    func update(id: String, title: String?, notes: String?, due: String?, done: Bool, note: String?) async -> CaptureTask? {
-        lock.withLock {
-            guard let index = items.firstIndex(where: { $0.id == id }) else { return nil }
-            if let title { items[index].title = title }
-            if let notes { items[index].notes = notes }
-            if let due { items[index].due = due }
-            if done { closed.insert(id) }
-            return items[index]
-        }
+    static func store() -> CaptureStore {
+        CaptureStore(database: Database.open(path: nil, migrations: CaptureStore.migrations).database)
     }
 }

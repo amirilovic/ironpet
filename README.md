@@ -342,31 +342,30 @@ It removes only ironpet's entries from the agents' configs (your other hooks sta
 
 ## Screen capture
 
-Screen capture is off by default. When on, ironpet reads the text of the window you are using through Accessibility, keeps it in `~/.ironpet/ironpet.db`, filters it with a model on your Mac, and after a quiet period asks your chosen agent to look up your tasks and suggest what needs your action. Proposals are stored as suggestions in the Tasks section, with one bubble without buttons that says how many. Nothing becomes a task, and no task changes, until you add the suggestion there or an agent accepts it over MCP (`tasks_suggestions_list`, `tasks_suggestion_accept`, `tasks_suggestion_reject`). With the switch off nothing is read, no model runs, and macOS shows no permission prompt.
+Screen capture is off by default. When on, ironpet reads the text of the window you are using through Accessibility, with no rules for particular apps, redacts secrets, and keeps what changed in `~/.ironpet/ironpet.db` for 7 days. The agents you run in ironpet search it with two MCP tools, `screen_search` and `screen_window`, and the bundled `ironpet-tasks` skill uses them in its periodic review to match what happened on your screen to your open tasks. Nothing leaves your Mac except through those tools. With the switch off nothing is read, and macOS shows no permission prompt.
 
-**Redaction.** Every item goes through the rules first: AWS, GitHub, GitLab, Anthropic and other `sk-` keys, Stripe, Slack, Google, npm and SendGrid keys, JWTs, private key blocks, `user:password@` in URLs and secret query parameters, `password=`, `token:` and `.env`-style assignments, card and bank numbers, and long random strings. Each span becomes `[redacted:<kind>]`. The local model scores the redacted text, and an item still flagged stays on your Mac. The unredacted text of an item that had a secret is kept for 24 hours, never sent, and can be seen with **Screen → Captures → Reveal original**. After that only the redacted text remains. The send log and the Captures tab say what happened, for example "redacted 2 spans (aws-key 1, secret-assignment 1), sent".
+**What is read.** One walk of the focused window's accessibility tree. It keeps static text, headings, text areas and text fields, and drops buttons, menus, toolbars, tabs, checkboxes and similar controls, so a Slack toolbar's "Bold: off" never reaches the text. Password fields are never read. A window with no readable text is skipped, unless you turn on the screenshot fallback: ironpet then screenshots that window, reads the text with Apple Vision on your Mac, and drops the image without saving it. Turning the fallback on asks macOS for Screen Recording.
 
-Turn it on under **Settings → Screen**. macOS asks for Accessibility then. Screen Recording is optional and only used to read the chat name in Viber's header on the device.
+**When.** A capture runs after an app switch or window focus change (0.3 s later), a pause in typing (0.5 s after the last key), the end of scrolling (0.4 s), a click (0.2 s), and every 10 s when nothing else happened. Captures are at least 0.2 s apart and nothing is captured per keystroke. Key events are used as timing only. No key is read.
+
+**What is stored.** Each window (app plus window title, or page address in a browser) keeps the lines of its last capture. A new capture stores only the lines that were not there, with two lines of context on each side, and nothing is stored when no line is new. Text is searchable with SQLite FTS5.
+
+**Redaction.** Before storage, every capture goes through the rules: AWS, GitHub, GitLab, Anthropic and other `sk-` keys, Stripe, Slack, Google, npm and SendGrid keys, JWTs, private key blocks, `user:password@` in URLs and secret query parameters, `password=`, `token:` and `.env`-style assignments, card and bank numbers, and long random strings. Each span becomes `[redacted:<kind>]`. The code has a hook (`CapturePrivacyFilter`) for an on-device privacy filter on write and on read. No filter ships yet.
+
+Turn it on under **Settings → Screen**. macOS asks for Accessibility then.
 
 | Setting | Key | Notes |
 | --- | --- | --- |
 | Screen capture | `screenCapture.enabled` | Default off |
-| Decision model on or off | `screenCapture.decision.enabled` | Default true. Off skips the local model: after rule-based redaction, items go straight to the agent batch with no scores. Anything the rules miss can then be sent, so leave it on unless you accept that |
-| Decision model | `screenCapture.decision.baseUrl`, `.model`, `.api` | `systemone` (H2O-Lightning-4B) or `openai`. The address must be localhost, or nothing is sent |
-| Secret threshold | `screenCapture.decision.secretThreshold` | Default 0.6. The model scores the text after redaction. An item at or above it stays on the Mac and its text is dropped |
-| Calendar threshold | `screenCapture.decision.calendarThreshold` | Default 0.2. Only matters with a skip threshold: an item at or above it is never skipped as a possible calendar event |
-| Skip threshold | `screenCapture.decision.skipThreshold` | Default 0, which skips nothing. The follow-up and new-task answers of 4B models were unreliable in the evaluation |
-| Agent and model | `screenCapture.agent`, `.model` | An ACP agent id. Its only tools are `tasks_list` and `tasks_get` (read-only), it looks existing tasks up itself, every other permission request is refused, and it runs in `~/.ironpet/capture/agent`, not in your chat folder |
-| Delay | `screenCapture.delayMinutes` | Default 3. Quiet time after the last ready item before a batch is sent. Items kept on the Mac do not restart it, and a batch goes out at most 15 minutes after its oldest item whatever happens in between |
-| Apps allowed to send | `screenCapture.sendApps` | Bundle ids. Empty by default: captures stay on this Mac |
+| Screenshot fallback | `screenCapture.ocr` | Default off. Reads windows with no text from a screenshot, on this Mac. Asks for Screen Recording when turned on |
 | Apps never captured | `screenCapture.excludedApps` | Bundle ids or app names, also under **Never capture** in Settings |
-| Retention | `screenCapture.retentionDays` | Default 30 |
+| Retention | `screenCapture.retentionDays` | Default 7. Older captures are deleted |
 
-Never captured, whatever a rule says: secure text fields, password managers and authenticator apps, the lock screen, private browser windows, and `file:`, `data:`, `javascript:`, `blob:`, `about:` and browser-internal URLs. Secrets in the text are redacted before anything is stored, scored or sent (see below), and secrets in an item's URL (`code`, `token`, `key`, `sig` and others) are stripped. Every send to the agent is listed in Settings with the time, the agent and model, the capture ids and the size. If no local model is set or it does not answer, nothing is sent.
+Never captured, whatever the settings say: password managers and authenticator apps, the lock screen, private browser windows, and `file:`, `data:`, `javascript:`, `blob:`, `about:` and browser-internal URLs. Secrets in the text are redacted before anything is stored, and secrets in a page address (`code`, `token`, `key`, `sig` and others) are stripped.
 
-The rules that turn a window into a conversation or a document are lookback's JavaScript rules (`capture-rules/`). A file in `~/.ironpet/capture/rules` replaces the bundled rule of the same name. After editing a bundled rule, run `python3 scripts/gen_capture_rules.py`.
+Pause capture from the pet menu or Settings. The **Screen** section of the ironpet window lists the latest captures (time, app, window, first lines) and searches everything stored. Settings has a Delete all captures button.
 
-Pause capture from the pet menu or Settings. The **Captures** tab of the Screen section in the ironpet window (also **Show captures…** in the pet menu) lists everything stored with the filter's scores, so you can see what was kept. Suggestions you accept (or that an agent accepts) become tasks in the Tasks section of the ironpet window (source `capture`, with the capture item ids in the notes). The agent looks up your tasks (open and done) with read-only tools and can suggest updating one, for example a new due date or done.
+**Tools.** `screen_search(query, app?, since?, until?, limit?)` returns hits with capture id, time, app, window title and a short snippet. `screen_window(id)` returns one capture's text, and `screen_window(app?, window?, since, until)` lists the captures in a range with their text. Both return only stored, redacted text. `since` and `until` take `today`, `yesterday`, a date, an ISO 8601 time or an age such as `90m`.
 
 ## Meeting transcripts
 

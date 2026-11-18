@@ -78,7 +78,7 @@ struct TaskListView: View {
         if !tasks.suggestions.isEmpty {
             SectionHeader("Suggestions", action: "Add all", help: "Add every suggested new task. Updates to existing tasks are accepted one by one") { tasks.acceptAll() }
             ForEach(tasks.suggestions) { suggestion in
-                SuggestionRow(suggestion: suggestion, targetTitle: suggestion.target.flatMap { tasks.task($0)?.title },
+                SuggestionRow(suggestion: suggestion,
                               onAdd: { _ = try? tasks.accept(suggestion.id) },
                               onSkip: { tasks.skip(suggestion.id) },
                               onOpen: open(_:))
@@ -271,8 +271,6 @@ private struct TaskRow: View {
 
 private struct SuggestionRow: View {
     let suggestion: TaskSuggestion
-    /// For a capture update: the title of the task it changes.
-    var targetTitle: String?
     let onAdd: () -> Void
     let onSkip: () -> Void
     let onOpen: (TaskLink) -> Void
@@ -292,13 +290,10 @@ private struct SuggestionRow: View {
                 .padding(.top, 1)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text(suggestion.kind == .update ? "Update \(targetTitle ?? suggestion.title)" : suggestion.title)
+                Text(suggestion.title)
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                ForEach(suggestion.diff, id: \.self) { line in
-                    Text(line).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                }
                 HStack(spacing: 5) {
                     Image(systemName: suggestion.source.symbol).font(.system(size: 10)).accessibilityHidden(true)
                     Text("\(suggestion.originLabel), \(suggestion.created.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))")
@@ -315,9 +310,8 @@ private struct SuggestionRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 HStack(spacing: 6) {
-                    Button(suggestion.kind == .update ? "Update" : "Add", action: onAdd)
-                        .help(suggestion.kind == .update ? "Apply this change to the task"
-                              : suggestion.waitingOn == nil ? "Add to the backlog" : "Add to Waiting on others")
+                    Button("Add", action: onAdd)
+                        .help(suggestion.waitingOn == nil ? "Add to the backlog" : "Add to Waiting on others")
                     Button("Skip", action: onSkip)
                         .help("Dismiss this suggestion")
                 }
@@ -335,7 +329,7 @@ private struct SuggestionRow: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .help(suggestion.quote.isEmpty ? suggestion.notes : "\u{201C}\(suggestion.quote)\u{201D}")
+        .help(suggestion.notes)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         .accessibilityElement(children: .contain)
     }

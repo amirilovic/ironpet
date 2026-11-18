@@ -39,7 +39,7 @@ enum TaskMCP {
             "description": "Required. Where the task came from, kept with the task for diagnostics.",
             "properties": ["kind": ["type": "string", "enum": TaskSource.originKinds.map(\.rawValue),
                                     "description": "chat: this conversation. agent: your own work. meeting, capture, automation, email, pr: the thing that raised it. user: the user asked."],
-                           "ref": ["type": "string", "minLength": 1, "description": "A session or chat id, a PR or thread URL, a meeting path, a capture send-log id or an automation id"],
+                           "ref": ["type": "string", "minLength": 1, "description": "A session or chat id, a PR or thread URL, a meeting path, capture ids such as capture:4649,4650 or an automation id"],
                            "reason": ["type": "string", "minLength": 1, "description": "One sentence on why this task exists"]]]
         let links: [String: Any] = ["type": "array", "items": link, "maxItems": TaskValidator.maxLinks]
         let due: [String: Any] = ["type": "string", "description": "ISO 8601 date or date and time. In changes, null clears it."]
@@ -61,11 +61,11 @@ enum TaskMCP {
                              "note": note]) { a, _ in a },
                  required: ["id", "changes"]),
             tool("tasks_close", "Mark a task done. note is required: the evidence that it is done.", id.merging(["note": note]) { a, _ in a }, required: ["id", "note"]),
-            tool("tasks_suggestions_list", "List the pending suggestions: new tasks and changes to tasks that screen capture, meetings and watchers proposed. Nothing changes until you accept one. A capture suggestion carries the quote from the screen, its evidence_ids, and for an update the target task and the proposed changes.\n\n" + guide, [:]),
+            tool("tasks_suggestions_list", "List the pending suggestions: new tasks that meetings and watchers proposed. Nothing changes until you accept one.\n\n" + guide, [:]),
             tool("tasks_suggestion_accept", "Accept a suggestion: creates the task, or applies the update or close to its target task. Pass title, due, notes or status to change what is applied. note is kept in the task's history.",
                  id.merging(["title": ["type": "string"], "due": due, "notes": ["type": "string"], "status": status, "note": note]) { a, _ in a },
                  required: ["id", "note"]),
-            tool("tasks_suggestion_reject", "Reject a suggestion that is wrong or a duplicate. A rejected screen capture proposal is not proposed again. Say why in note.",
+            tool("tasks_suggestion_reject", "Reject a suggestion that is wrong or a duplicate. Say why in note.",
                  id.merging(["note": note]) { a, _ in a }, required: ["id", "note"]),
             tool("tasks_delete", "Delete a task that should never have existed. Prefer tasks_close for finished work.", id, required: ["id"]),
         ]
@@ -94,7 +94,7 @@ enum TaskCLI {
           status <id> <status> [--note N]
           done <id> --note EVIDENCE
           delete <id>
-          suggestions                     pending suggestions from screen capture, meetings and watchers
+          suggestions                     pending suggestions from meetings and watchers
           accept <suggestion id> --note WHY [--title T] [--due D] [--notes N] [--status S]
           reject <suggestion id> --note WHY
         Origin kinds: chat, agent, meeting, capture, automation, email, pr, user. A note is required for done, accept and reject, and when the status changes.

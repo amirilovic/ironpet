@@ -64,47 +64,32 @@ enum PreviewRenderer {
         // The window opens on Alerts when no agent needs you or is working.
         render(list(SessionStore(), tasks: tasks), to: dir, "alerts")
         render(list(sessions, tasks: tasks, on: .actions), to: dir, "actions")
-        // The Screen section: counts and two sends, then with capture off.
+        // The Screen section: recent captures and the search field, with capture on and off, then a search.
+        let capturesStore = CaptureStore(database: Database.open(path: nil, migrations: CaptureStore.migrations).database)
+        let slack = CaptureApp(bundleId: "com.tinyspeck.slackmacgap", name: "Slack"), browser = CaptureApp(bundleId: "com.apple.Safari", name: "Safari")
+        for (app, title, url, lines, ago) in [
+            (slack, "ana (DM) - Acme", nil as String?, ["Ana", "Can you review PR 4649 before lunch?", "The deploy waits for it."], 600.0),
+            (browser, "Add screen capture by Ana", "https://github.com/acme/app/pull/4649",
+             ["Add screen capture", "Ana wants to merge 3 commits into main", "Checks: 12 passed"], 300.0),
+            (slack, "ana (DM) - Acme", nil, ["Ana", "Can you review PR 4649 before lunch?", "The deploy waits for it.", "Looks good, merging now."], 60.0),
+        ] {
+            _ = try? capturesStore.ingest(app: app, title: title, url: url, trigger: .typingPause, lines: lines, now: Date().addingTimeInterval(-ago))
+        }
         let screenStatus = CaptureStatusModel()
-        screenStatus.itemCount = 1_595
-        screenStatus.pendingCount = 2
-        screenStatus.localOnlyCount = 1_028
-        screenStatus.sendLog = [
-            CaptureSendRecord(id: 2, at: Date(), harness: "claude", model: "sonnet", items: [4, 5, 6], bytes: 2_310, outcome: "2 suggestions"),
-            CaptureSendRecord(id: 1, at: Date().addingTimeInterval(-3_600), harness: "cursor", model: "auto", items: [1, 2], bytes: 880, outcome: "no suggestions"),
-        ]
+        screenStatus.captureCount = capturesStore.captureCount
+        screenStatus.lastCapture = Date().addingTimeInterval(-60)
         let screenConfig = ConfigStore.shared.config
         var captureOn = screenConfig
         captureOn.screenCapture.enabled = true
         ConfigStore.shared.usePreview(captureOn)
-        render(ScreenSection(model: screenStatus, tab: .constant(.sent)).frame(width: 600, height: 460).panel(), to: dir, "screen")
+        for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
+            render(ScreenSection(model: screenStatus, store: capturesStore).frame(width: 900, height: 560).panel(), to: dir, "screen-captures" + suffix, scheme: scheme)
+        }
         var captureOff = screenConfig
         captureOff.screenCapture.enabled = false
         ConfigStore.shared.usePreview(captureOff)
-        render(ScreenSection(model: screenStatus, tab: .constant(.sent)).frame(width: 600, height: 460).panel(), to: dir, "screen-off")
+        render(ScreenSection(model: CaptureStatusModel()).frame(width: 600, height: 460).panel(), to: dir, "screen-off")
         ConfigStore.shared.usePreview(screenConfig)
-        // The Captures tab, with two stored items.
-        let capturesStore = CaptureStore(database: Database.open(path: nil, migrations: CaptureStore.migrations).database)
-        for (thread, text) in [("slack:acme/ana", "Please send the invoice by Friday"), ("mail:rent", "Rent is due on the 1st")] {
-            let item = CaptureItem(app: CaptureApp(bundleId: "com.tinyspeck.slackmacgap", name: "Slack"), threadKey: thread, threadTitle: thread,
-                                   content: .conversation(title: thread, isGroup: false, messages: [CaptureMessage(author: "Ana", text: text)]), parser: "preview")
-            _ = try? capturesStore.ingest(item)
-        }
-        render(ScreenSection(model: screenStatus, tab: .constant(.captures), store: capturesStore).frame(width: 900, height: 560).panel(), to: dir, "screen-captures")
-        // One send opened: its items, and a suggestion that is waiting, accepted and rejected.
-        let batch = ScreenBatch(
-            record: screenStatus.sendLog[0],
-            items: [ScreenBatch.Item(id: 4, app: "Slack", title: "slack:acme/ana", at: Date().addingTimeInterval(-300), state: "sent",
-                                     body: "Ana: please send the invoice by Friday", redactions: CaptureRedactor.Report()),
-                    ScreenBatch.Item(id: 5, app: "Mail", title: "Invoice 42", at: Date().addingTimeInterval(-200), state: "sent",
-                                     body: "", redactions: CaptureRedactor.Report())],
-            suggestions: [ScreenBatch.Suggestion(id: "a", kind: "new_task", title: "Send the invoice", quote: "please send the invoice by Friday",
-                                                 outcome: .pending(id: "a")),
-                          ScreenBatch.Suggestion(id: "b", kind: "update", title: "Pay the rent", quote: "rent paid",
-                                                 outcome: .accepted(task: "pay-the-rent", title: "Pay the rent")),
-                          ScreenBatch.Suggestion(id: "c", kind: "new_task", title: "Call Sam", quote: "call Sam", outcome: .rejected(note: "already done"))],
-            redactions: CaptureRedactor.Report())
-        render(ScrollView { ScreenBatchView(batch: batch).padding(16) }.frame(width: 600, height: 560).panel(), to: dir, "screen-batch")
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks")
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks-light", scheme: .light)
         let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
@@ -137,6 +122,7 @@ enum PreviewRenderer {
         // The same pages in a real window, so the screenshots show the title bar, selection and glass as they are.
         // Automations needs the app's settings model; this one is built from sample automations in a temp folder.
         let settingsModel = sampleSettings(chat: chat, config: patterned)
+        settingsModel.capture = CaptureService(store: capturesStore, config: { ConfigStore.shared.config.screenCapture })
         ConfigStore.shared.usePreview(patterned)
         for section in IronPetSection.allCases {
             for (suffix, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
@@ -162,13 +148,14 @@ enum PreviewRenderer {
             }
         }
         // Settings → Screen: the controls only, with a hint that points at the Screen section.
-        settingsModel.capture = CaptureService(store: CaptureStore(database: Database.open(path: nil, migrations: CaptureStore.migrations).database),
-                                               config: { ConfigStore.shared.config.screenCapture },
-                                               rules: CaptureRules(folder: FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-rules")))
         var screenOn = patterned
         screenOn.screenCapture.enabled = true
+        screenOn.screenCapture.ocr = true
+        screenOn.screenCapture.excludedApps = ["com.apple.Notes"]
         ConfigStore.shared.usePreview(screenOn)
-        render(ScreenSettings(model: settingsModel).frame(width: 560, height: 700).panel(), to: dir, "settings-screen")
+        for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
+            render(ScreenSettings(model: settingsModel).frame(width: 560, height: 900).panel(), to: dir, "settings-screen" + suffix, scheme: scheme)
+        }
         ConfigStore.shared.usePreview(config)
 
         let done = Bubble(id: "done", symbol: AgentStatus.done.symbol, tint: AgentStatus.done.tint, title: "demo-app: Done",

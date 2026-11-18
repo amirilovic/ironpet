@@ -12,9 +12,7 @@ if CommandLine.arguments.dropFirst().first == "skills" {
     exit(SkillCLI.run(Array(CommandLine.arguments.dropFirst(2))))
 }
 if ["mcp", "mcp-stdio"].contains(CommandLine.arguments.dropFirst().first ?? "") {
-    // `--tasks-readonly` talks to the read-only scope, for the screen capture analysis turn.
-    let readOnly = CommandLine.arguments.contains("--tasks-readonly")
-    exit(AutomationCLI.stdioBridge(path: readOnly ? MCPEndpoint.readOnlyTasksPath : "/mcp"))
+    exit(AutomationCLI.stdioBridge(path: "/mcp"))
 }
 
 if CommandLine.arguments.contains("--uninstall") {
