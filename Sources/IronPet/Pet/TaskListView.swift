@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 /// The Tasks section of the ironpet window. The agent owns the list; here the user can only mark a task done, delete it,
-/// and add or skip suggestions from meetings and watchers. Anything else goes to the chat through "Tell Ghost…".
+/// and add or skip suggestions from meetings and watchers. Clicking a row shows everything stored about it.
+/// Anything else goes to the chat through "Tell Ghost…".
 struct TaskListView: View {
     @ObservedObject var tasks: TaskStore
     let onTellGhost: (String) -> Void
@@ -119,7 +120,8 @@ struct TaskListView: View {
         TaskRow(task: task,
                 onDone: { _ = try? tasks.close(task.id, by: "user") },
                 onDelete: { try? tasks.delete(task.id, by: "user") },
-                onOpen: open(_:))
+                onOpen: open(_:),
+                history: { tasks.history(task.id) })
             .background {
                 if highlighted == task.id { RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.18)) }
             }
@@ -192,8 +194,12 @@ private struct TaskRow: View {
     let onDone: () -> Void
     let onDelete: () -> Void
     let onOpen: (TaskLink) -> Void
+    let history: () -> [TaskEvent]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+    @State private var expanded = false
+    @State private var events: [TaskEvent] = []
+    @FocusState private var focused: Bool
 
     private static let maxLinkButtons = 3
 
@@ -207,6 +213,11 @@ private struct TaskRow: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 details
+                if expanded {
+                    TaskDetailView(detail: TaskDetail(task: task, history: events), onOpen: onOpen)
+                        .padding(.top, 4)
+                        .onTapGesture {}
+                }
             }
             Spacer(minLength: 4)
             if !task.links.isEmpty {
@@ -222,11 +233,24 @@ private struct TaskRow: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .help(task.notes)
+        .onTapGesture { toggle() }
+        .focusable(expanded)
+        .focused($focused)
+        .focusEffectDisabled()
+        .onExitCommand { if expanded { toggle() } }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         .contextMenu { menu }
         .accessibilityElement(children: .contain)
+        .accessibilityAction(named: expanded ? "Hide details" : "Show details", toggle)
         .accessibilityAction(named: "Delete", onDelete)
+        .onChange(of: task.updated) { if expanded { events = history() } }
+    }
+
+    private func toggle() {
+        // Read the history once per open, not on every redraw (hovering redraws the row).
+        if !expanded { events = history() }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { expanded.toggle() }
+        focused = expanded
     }
 
     private var details: some View {
@@ -276,6 +300,13 @@ private struct SuggestionRow: View {
     let onOpen: (TaskLink) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+    @State private var expanded = false
+    @FocusState private var focused: Bool
+
+    private func toggle() {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { expanded.toggle() }
+        focused = expanded
+    }
 
     private var link: TaskLink? {
         suggestion.url.map { TaskLink(kind: .url, ref: $0.absoluteString, label: nil) }
@@ -318,6 +349,11 @@ private struct SuggestionRow: View {
                 .controlSize(.small)
                 .buttonStyle(.bordered)
                 .padding(.top, 3)
+                if expanded {
+                    TaskDetailView(detail: TaskDetail(suggestion: suggestion), onOpen: onOpen)
+                        .padding(.top, 4)
+                        .onTapGesture {}
+                }
             }
             Spacer(minLength: 4)
             if let link {
@@ -329,9 +365,14 @@ private struct SuggestionRow: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .help(suggestion.notes)
+        .onTapGesture { toggle() }
+        .focusable(expanded)
+        .focused($focused)
+        .focusEffectDisabled()
+        .onExitCommand { if expanded { toggle() } }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         .accessibilityElement(children: .contain)
+        .accessibilityAction(named: expanded ? "Hide details" : "Show details", toggle)
     }
 }
 
