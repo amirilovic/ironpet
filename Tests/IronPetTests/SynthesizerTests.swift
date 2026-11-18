@@ -58,6 +58,17 @@ final class SynthesizerTests: XCTestCase {
         XCTAssertTrue(error?.localizedDescription.contains("misaki") == true)
     }
 
+    func testBrokenResponseNamesTheMissingPackage() async {
+        StubProtocol.respond = { _ in (0, Data(), URLError(.cannotParseResponse)) }
+        do {
+            _ = try await synthesizer().speak("a")
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? SpeechError, .noAudio)
+            XCTAssertTrue(error.localizedDescription.contains("misaki"), error.localizedDescription)
+        }
+    }
+
     func testServerErrorNamesTheStatus() async {
         let error = await failure(500, Data(#"{"detail":"model crashed"}"#.utf8))
         XCTAssertEqual(error, .http(status: 500, detail: "model crashed"))

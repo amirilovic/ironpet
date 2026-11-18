@@ -22,7 +22,7 @@ enum SpeechError: LocalizedError, Equatable {
             if status == 404 { message += " (does it support /audio/speech?)" }
             return detail.isEmpty ? message + "." : message + ": " + detail
         case .noAudio:
-            return "The voice server returned no audio. For Kokoro, mlx-audio needs the misaki package: start it with "
+            return "The voice server returned no audio or a broken response. For Kokoro, mlx-audio needs the misaki package: start it with "
                 + "uvx --from \"mlx-audio[server]\" --with \"misaki[en]\" mlx_audio.server"
         }
     }
@@ -49,7 +49,7 @@ struct Synthesizer {
             "model": model, "input": text, "voice": voice, "speed": speed, "response_format": "wav",
         ])
         let data = try await send(request)
-        // mlx-audio answers 200 with an empty body when the model fails to load (Kokoro without misaki).
+        // mlx-audio that cannot load Kokoro (no misaki) may answer 200 with an empty body; see also `send`.
         guard data.count > 44 else { throw SpeechError.noAudio }
         return data
     }
@@ -104,6 +104,9 @@ struct Synthesizer {
             throw SpeechError.timedOut
         } catch let error as URLError where error.code == .cancelled {
             throw CancellationError()
+        } catch let error as URLError where error.code == .cannotParseResponse {
+            // A 200 cut off mid-stream, such as mlx-audio failing to load Kokoro after sending the headers.
+            throw SpeechError.noAudio
         } catch let error as URLError {
             throw SpeechError.unreachable(Transcriber.describe(error, host: request.url?.host(), port: request.url?.port))
         }
