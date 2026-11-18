@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var bubblePanel: BubblePanel!
     private var server: EventServer?
     private var pet: PetController!
+    private let dockIcon = DockIconController()
     private let meetings = MeetingLibrary()
     private let meeting = MeetingController()
     private var meetingPanel: MeetingPanel!
@@ -106,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return meeting.folder
         }
         pet.show()
+        dockIcon.update(sprite: config.config.pet.sprite)
 
         wispr.onDictation = { [weak self] text in self?.chat.receiveDictation(text) }
         pet.onChatShown = { [weak self] shown in self?.chatShown(shown) }
@@ -436,7 +438,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !new.voice.enabled { chat.voice.cancel() }
         if !new.meetings.enabled { meeting.dismiss() }
         startCallMonitor()
-        if new.pet.sprite != old.pet.sprite { pet.reloadAtlas() }
+        if new.pet.sprite != old.pet.sprite {
+            pet.reloadAtlas()
+            dockIcon.update(sprite: new.pet.sprite)
+        }
         if new.screenCapture != old.screenCapture { capture?.apply(new.screenCapture) }
     }
 
