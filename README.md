@@ -295,11 +295,11 @@ To record, click the microphone button in the chat input (click again to stop) o
 
 ### Spoken replies
 
-Ghost can answer out loud. Spoken replies are off by default. Turn them on under **Settings → Voice → Ghost talks back**: pick a voice and press **Preview**, and the switch turns on once the preview plays. They use the server, base URL and key above, with their own model (**Speech model** in the Server section) and voice (`POST {baseUrl}/audio/speech`). Voice notes don't have to be on.
+Ghost can answer out loud. Every reply has a speaker button below it (shown on hover) and a Read Aloud menu item, whatever the switch says; they use the speech model and voice below. Reading each reply automatically is off by default. Turn it on under **Settings → Voice → Ghost talks back**: pick a voice and press **Preview**, and the switch turns on once the preview plays. They use the server, base URL and key above, with their own model (**Speech model** in the Server section) and voice (`POST {baseUrl}/audio/speech`). Voice notes don't have to be on.
 
 | Setting | `config.json` key | Notes |
 | --- | --- | --- |
-| Spoken replies | `speech.enabled` | Default off |
+| Read replies aloud automatically | `speech.enabled` | Default off. The speaker button works either way |
 | Speech model | `speech.model` | Default `mlx-community/Kokoro-82M-bf16` |
 | Voice | `speech.voice` | Default `am_puck`. Settings lists the model's voices when the server offers `/audio/voices` (mlx-audio does), and a text field otherwise |
 

@@ -145,7 +145,6 @@ final class TestControl {
             chat.voice.stop()
         case ("POST", "/test/speech/speak"):
             // Reads the last reply aloud, like its speaker button.
-            guard ConfigStore.shared.config.speech.enabled else { return Self.encode(["ok": false, "error": "spoken replies are off"]) }
             guard let reply = chat.items.last(where: { if case .assistant = $0.kind { true } else { false } }) else {
                 return Self.encode(["ok": false, "error": "no reply to read"])
             }

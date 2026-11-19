@@ -571,7 +571,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || new.meetings.enabled != old.meetings.enabled { registerHotKeys() }
         if new.telegram.enabled != old.telegram.enabled { telegram.setEnabled(new.telegram.enabled) }
         if !new.voice.enabled { chat.voice.cancel() }
-        if !new.speech.enabled { chat.speech.stop() }
+        if old.speech.enabled, !new.speech.enabled { chat.speech.stop() }
         if !new.meetings.enabled { meeting.dismiss() }
         startCallMonitor()
         syncSpeechQuiet()

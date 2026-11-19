@@ -779,7 +779,7 @@ struct ChatView: View {
                 AssistantBubble(text: text, date: item.date, highlighted: highlightedID == item.id,
                                 onReply: { session.reply(to: item) }, onAsk: { askAbout(item) }, onCopy: { copyText(item, text) },
                                 onHoverChange: { hoverChanged(item.id, $0) }, find: highlights[item.id],
-                                speech: config.config.speech.enabled ? SpeakButton.State(speaking: session.speech.speakingID == item.id,
+                                speech: config.config.speech.canSpeak ? SpeakButton.State(speaking: session.speech.speakingID == item.id,
                                                                                          toggle: { session.toggleSpeech(item) }) : nil)
             case .tool:
                 EmptyView()
@@ -1294,7 +1294,7 @@ private struct RowMenu: View {
     }
 }
 
-/// Reads a reply aloud with spoken replies on. Stays visible while its reply is being read, so it can be stopped.
+/// Reads a reply aloud, whether or not spoken replies are on. Stays visible while its reply is being read, so it can be stopped.
 private struct SpeakButton: View {
     struct State {
         var speaking: Bool
@@ -1330,7 +1330,7 @@ private struct AssistantBubble: View {
     var onCopy: () -> Void = {}
     var onHoverChange: (Bool) -> Void = { _ in }
     var find: ChatFind.RowHighlight?
-    /// Nil with spoken replies off.
+    /// Nil when no speech model is set.
     var speech: SpeakButton.State?
     @State private var hovering = false
 

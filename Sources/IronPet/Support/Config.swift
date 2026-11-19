@@ -40,13 +40,18 @@ struct Config: Codable, Equatable {
     /// Spoken replies: Ghost reads chat replies aloud with a voice from an OpenAI-compatible speech server. Uses the
     /// server in `voice` (base URL, Keychain key).
     struct Speech: Codable, Equatable {
-        /// Off by default: turning it on sends reply text to the voice server.
+        /// Off by default: turning it on reads each reply to a chat message aloud, which sends its text to the voice
+        /// server. With it off, text is sent only when the user presses a reply's speaker button.
         var enabled = false
         var model = Speech.defaultModel
         /// One of the model's voices, such as Kokoro's `am_puck` or OpenAI's `nova`.
         var voice = Speech.defaultVoice
         /// Playback speed sent with each request; 1 is the model's normal pace.
         var speed = Speech.defaultSpeed
+
+        /// Whether a speech model is set, which is all the speaker button needs. `enabled` only governs reading
+        /// replies aloud automatically.
+        var canSpeak: Bool { !model.trimmingCharacters(in: .whitespaces).isEmpty }
 
         static let defaultModel = "mlx-community/Kokoro-82M-bf16"
         static let defaultVoice = "am_puck"

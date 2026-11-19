@@ -546,7 +546,7 @@ private struct SpokenReplySettings: View {
 
     var body: some View {
         Section {
-            Toggle("Spoken replies", isOn: Binding(get: { store.config.speech.enabled }, set: setEnabled))
+            Toggle("Read replies aloud automatically", isOn: Binding(get: { store.config.speech.enabled }, set: setEnabled))
                 .disabled(previewing)
             if voices.isEmpty {
                 TextField("Voice", text: voice)
@@ -582,7 +582,7 @@ private struct SpokenReplySettings: View {
         } header: {
             Text("\(store.config.pet.name) talks back")
         } footer: {
-            Text("Reads each reply to your chat messages aloud, up to about a minute, skipping code, tables and emoji. Every reply also gets a speaker button. Esc, the button or your next message stops it, and replies stay silent during calls and meeting recordings.")
+            Text("With the switch on, each reply to your chat messages is read aloud, up to about a minute, skipping code, tables and emoji, and stays silent during calls and meeting recordings. With it off, nothing is read until you press a reply's speaker button, which uses the same voice, speed and speech model. Esc, the button or your next message stops it.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .task(id: "\(store.config.speech.enabled) \(store.config.voice.baseUrl) \(store.config.speech.model)") {
@@ -607,7 +607,7 @@ private struct SpokenReplySettings: View {
             do {
                 try await player.preview(line, using: SpeechPlayer.synthesizer())
                 if enable { store.update { $0.speech.enabled = true } }
-                result = (true, enable ? "Spoken replies are on." : "The server spoke the preview.")
+                result = (true, enable ? "Replies will be read aloud." : "The server spoke the preview.")
             } catch is CancellationError {
                 result = nil
             } catch {

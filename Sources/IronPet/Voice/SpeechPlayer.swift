@@ -41,10 +41,10 @@ final class SpeechPlayer: ObservableObject {
 
     var isSpeaking: Bool { speakingID != nil }
 
-    /// Reads a reply's prose. Does nothing with spoken replies off or when the reply has no prose.
+    /// Reads a reply's prose. Does nothing when the reply has no prose. Callers that read on their own check
+    /// `isEnabled`; a press on the speaker button reads even with spoken replies off.
     func speak(_ markdown: String, id: UUID) {
         stop()
-        guard isEnabled() else { return }
         let chunks = SpeechText.chunks(of: markdown)
         guard !chunks.isEmpty else { return }
         speakingID = id
