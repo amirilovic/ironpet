@@ -42,70 +42,56 @@ enum MicIgnoreList {
     }
 }
 
-/// Apps seen holding the microphone since ironpet started, so Settings can offer them. Fed by every `CallMonitor` read.
-@MainActor
-final class RecentMicApps {
-    static let shared = RecentMicApps()
-    private var seen: [String: Date] = [:]
-    private let limit = 50
-
-    func note(_ clients: [MicClient], at date: Date = Date()) {
-        for client in clients where !client.bundleID.isEmpty { seen[CallApps.parentBundleID(client.bundleID)] = date }
-        if seen.count > limit {
-            for key in seen.sorted(by: { $0.value < $1.value }).prefix(seen.count - limit).map(\.key) { seen[key] = nil }
-        }
-    }
-
-    /// Most recent first.
-    var bundleIDs: [String] { seen.sorted { $0.value > $1.value }.map(\.key) }
-}
-
 /// Backs the "Never treat as a call" list in Settings.
 @MainActor
 final class MicIgnoreModel: ObservableObject {
-    struct Row: Equatable, Identifiable {
-        var bundleID: String
-        var name: String?
-        var id: String { bundleID }
-        var title: String { name.map { "\($0) (\(bundleID))" } ?? bundleID }
+    /// An installed app found for a bundle id.
+    struct AppInfo: Equatable {
+        var name: String
+        var url: URL
     }
 
-    @Published private(set) var recent: [String]
+    struct Row: Equatable, Identifiable {
+        var bundleID: String
+        var app: AppInfo?
+        var id: String { bundleID }
+        /// The app name, or the bundle id when the app is not installed.
+        var title: String { app?.name ?? bundleID }
+    }
+
+    enum AddFailure: Equatable {
+        case noIdentifier
+        case rejected(MicIgnoreList.Rejection)
+
+        var message: String {
+            switch self {
+            case .noIdentifier: return "This app has no identifier, so ironpet cannot ignore it."
+            case .rejected(let reason): return reason.message
+            }
+        }
+    }
+
     private let entries: () -> [String]
     private let save: ([String]) -> Void
-    private let reader: @Sendable () -> [MicClient]
-    private let nameFor: (String) -> String?
+    private let resolve: (String) -> AppInfo?
     private let ownBundleID: String?
 
     init(entries: @escaping () -> [String], save: @escaping ([String]) -> Void,
-         recent: [String] = [], reader: @escaping @Sendable () -> [MicClient] = CoreAudioReader().read,
-         nameFor: @escaping (String) -> String? = MicIgnoreModel.runningAppName,
+         resolve: @escaping (String) -> AppInfo? = MicIgnoreModel.installedApp,
          ownBundleID: String? = Bundle.main.bundleIdentifier) {
         self.entries = entries
         self.save = save
-        self.recent = recent
-        self.reader = reader
-        self.nameFor = nameFor
+        self.resolve = resolve
         self.ownBundleID = ownBundleID
     }
 
-    nonisolated static func runningAppName(_ bundleID: String) -> String? {
-        NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier?.caseInsensitiveCompare(bundleID) == .orderedSame }?.localizedName
+    nonisolated static func installedApp(_ bundleID: String) -> AppInfo? {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return nil }
+        let name = FileManager.default.displayName(atPath: url.path)
+        return AppInfo(name: name.hasSuffix(".app") ? String(name.dropLast(4)) : name, url: url)
     }
 
-    var rows: [Row] { entries().map { Row(bundleID: $0, name: nameFor($0)) } }
-
-    /// Apps that held the microphone recently and would count as a call now, so they are worth ignoring.
-    var suggestions: [Row] {
-        let current = entries()
-        var seen = Set<String>()
-        return recent.compactMap { id -> Row? in
-            let client = MicClient(pid: -1, bundleID: id)
-            guard let app = CallApps.app(for: client, ownPID: 0, ownBundleID: ownBundleID, ignored: current),
-                  seen.insert(app.lowercased()).inserted else { return nil }
-            return Row(bundleID: app, name: nameFor(app))
-        }
-    }
+    var rows: [Row] { entries().map { Row(bundleID: $0, app: resolve($0)) } }
 
     /// Adds an entry. Returns the reason it was refused, or nil.
     @discardableResult
@@ -118,19 +104,15 @@ final class MicIgnoreModel: ObservableObject {
         }
     }
 
-    func remove(_ bundleID: String) {
-        save(entries().filter { $0 != bundleID })
+    /// Adds the app bundle the user picked, by its CFBundleIdentifier.
+    @discardableResult
+    func add(appAt url: URL) -> AddFailure? {
+        guard let id = Bundle(url: url)?.bundleIdentifier, !id.isEmpty else { return .noIdentifier }
+        return add(id).map(AddFailure.rejected)
     }
 
-    /// Merges the apps holding the microphone right now and those seen earlier. The read runs off the main thread.
-    func loadRecent() async {
-        let reader = self.reader
-        let live = await Task.detached { reader() }.value
-        var ids: [String] = []
-        for id in live.map({ CallApps.parentBundleID($0.bundleID) }) + RecentMicApps.shared.bundleIDs where !id.isEmpty && !ids.contains(id) {
-            ids.append(id)
-        }
-        recent = ids
+    func remove(_ bundleID: String) {
+        save(entries().filter { $0 != bundleID })
     }
 }
 

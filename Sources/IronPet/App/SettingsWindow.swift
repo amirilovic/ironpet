@@ -1078,7 +1078,6 @@ private struct ChatBackgroundSection: View {
 struct MicIgnoreSection: View {
     @ObservedObject private var store = ConfigStore.shared
     @StateObject private var model: MicIgnoreModel
-    @State private var typed = ""
     @State private var error: String?
 
     init() {
@@ -1095,35 +1094,37 @@ struct MicIgnoreSection: View {
             }
             ForEach(model.rows) { row in
                 HStack {
-                    Text(row.title).textSelection(.enabled)
+                    Image(nsImage: Self.icon(for: row)).resizable().frame(width: 20, height: 20)
+                    Text(row.title).help(row.bundleID)
                     Spacer()
                     Button { model.remove(row.bundleID) } label: { Image(systemName: "minus.circle") }
                         .buttonStyle(.borderless).help("Count this app as a call again")
                 }
             }
-            HStack {
-                Menu {
-                    ForEach(model.suggestions) { row in
-                        Button(row.title) { error = model.add(row.bundleID)?.message }
-                    }
-                } label: { Label("Add app", systemImage: "plus.circle") }
-                    .disabled(model.suggestions.isEmpty)
-                    .help("Apps that used the microphone recently")
-                TextField("Bundle id, like com.example.dictate", text: $typed).onSubmit(addTyped)
-                Button("Add", action: addTyped).disabled(typed.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
+            Button("Add app…", action: pickApp)
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
         } header: {
             Text("Never treat as a call")
         } footer: {
-            Text("Apps here never count as holding the microphone for a call: ironpet makes no call offer for them and still speaks replies while they listen. Add dictation apps this way. Siri, Apple dictation and voice control, and Wispr Flow are always ignored. An entry is a bundle id prefix, so it also covers the app's helper processes. The + lists apps that used the microphone recently, and the field takes any bundle id.")
+            Text("Apps here never count as holding the microphone for a call: ironpet makes no call offer for them and still speaks replies while they listen. Add dictation apps this way. Siri, Apple dictation and voice control, and Wispr Flow are always ignored. Choosing an app also covers its helper processes.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .task { await model.loadRecent() }
     }
 
-    private func addTyped() {
-        error = model.add(typed)?.message
-        if error == nil { typed = "" }
+    private static func icon(for row: MicIgnoreModel.Row) -> NSImage {
+        if let url = row.app?.url { return NSWorkspace.shared.icon(forFile: url.path) }
+        return NSWorkspace.shared.icon(for: .applicationBundle)
+    }
+
+    private func pickApp() {
+        let panel = NSOpenPanel()
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.message = "Choose an app that ironpet should never treat as a call."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        error = model.add(appAt: url)?.message
     }
 }

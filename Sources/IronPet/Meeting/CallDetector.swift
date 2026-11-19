@@ -187,7 +187,6 @@ final class CallMonitor {
             loggedSlow = false
         }
         snapshot = result
-        RecentMicApps.shared.note(result)
         detector.tick()
         onPolled?()
     }

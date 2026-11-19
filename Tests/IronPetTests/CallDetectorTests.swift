@@ -327,42 +327,58 @@ final class MicIgnoreListTests: XCTestCase {
 @MainActor
 final class MicIgnoreModelTests: XCTestCase {
     private var saved: [String] = []
+    private let dictate = MicIgnoreModel.AppInfo(name: "Dictate", url: URL(fileURLWithPath: "/Applications/Dictate.app"))
 
-    private func model(recent: [String] = [], entries: [String] = []) -> MicIgnoreModel {
+    private func model(entries: [String] = []) -> MicIgnoreModel {
         saved = entries
-        return MicIgnoreModel(entries: { [unowned self] in saved }, save: { [unowned self] in saved = $0 }, recent: recent,
-                              reader: { [] }, nameFor: { $0 == "com.example.dictate" ? "Dictate" : nil }, ownBundleID: "dev.ironpet")
+        let info = dictate
+        return MicIgnoreModel(entries: { [unowned self] in saved }, save: { [unowned self] in saved = $0 },
+                              resolve: { $0 == "com.example.dictate" ? info : nil }, ownBundleID: "dev.ironpet")
     }
 
-    func testAddAndRemove() {
-        let m = model()
-        XCTAssertNil(m.add("com.example.dictate"))
-        XCTAssertEqual(saved, ["com.example.dictate"])
-        XCTAssertEqual(m.rows, [.init(bundleID: "com.example.dictate", name: "Dictate")])
-        XCTAssertEqual(m.rows.first?.title, "Dictate (com.example.dictate)")
-        XCTAssertEqual(m.add("com.example.dictate"), .duplicate)
-        XCTAssertEqual(m.add("com."), .tooShort)
-        XCTAssertEqual(m.add("dev.ironpet"), .ironpet)
-        XCTAssertEqual(m.add(" "), .empty)
-        XCTAssertEqual(saved, ["com.example.dictate"])
+    private func makeApp(identifier: String?) throws -> URL {
+        let app = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).app")
+        let contents = app.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        var plist: [String: Any] = ["CFBundleName": "Test"]
+        if let identifier { plist["CFBundleIdentifier"] = identifier }
+        try (plist as NSDictionary).write(to: contents.appendingPathComponent("Info.plist"))
+        addTeardownBlock { try? FileManager.default.removeItem(at: app) }
+        return app
+    }
+
+    func testRowsResolveInstalledAndUnknownApps() {
+        let m = model(entries: ["com.example.dictate", "com.example.a"])
+        XCTAssertEqual(m.rows, [.init(bundleID: "com.example.dictate", app: dictate), .init(bundleID: "com.example.a", app: nil)])
+        XCTAssertEqual(m.rows.map(\.title), ["Dictate", "com.example.a"])
+    }
+
+    func testRemove() {
+        let m = model(entries: ["com.example.dictate", "com.example.a"])
         m.remove("com.example.dictate")
+        XCTAssertEqual(saved, ["com.example.a"])
+    }
+
+    func testAddRefusals() {
+        let m = model(entries: ["com.example.dictate"])
+        XCTAssertEqual(m.add("com.example.dictate"), .duplicate)
+        XCTAssertEqual(m.add("dev.ironpet"), .ironpet)
+        XCTAssertEqual(saved, ["com.example.dictate"])
+    }
+
+    func testAddPickedAppOnce() throws {
+        let m = model()
+        let app = try makeApp(identifier: "com.example.picked")
+        XCTAssertNil(m.add(appAt: app))
+        XCTAssertEqual(saved, ["com.example.picked"])
+        XCTAssertEqual(m.add(appAt: app), .rejected(.duplicate))
+        XCTAssertEqual(saved, ["com.example.picked"])
+    }
+
+    func testAddPickedAppWithoutIdentifier() throws {
+        let m = model()
+        XCTAssertEqual(m.add(appAt: try makeApp(identifier: nil)), .noIdentifier)
         XCTAssertEqual(saved, [])
-    }
-
-    func testSuggestionsSkipIgnoredAndSystemApps() {
-        let m = model(recent: ["com.example.dictate", "com.example.dictate.helper", "us.zoom.xos", "com.apple.Siri",
-                               "com.apple.coreaudiod", "dev.ironpet", "com.example.other"],
-                      entries: ["com.example.other"])
-        XCTAssertEqual(m.suggestions.map(\.bundleID), ["com.example.dictate", "us.zoom.xos"])
-    }
-
-    func testLoadRecentUsesTheReader() async {
-        saved = []
-        let m = MicIgnoreModel(entries: { [] }, save: { _ in },
-                               reader: { [MicClient(pid: 9, bundleID: "com.example.dictate.helper")] }, nameFor: { _ in nil },
-                               ownBundleID: "dev.ironpet")
-        await m.loadRecent()
-        XCTAssertEqual(m.suggestions.map(\.bundleID).first, "com.example.dictate")
     }
 }
 
