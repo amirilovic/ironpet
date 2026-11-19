@@ -56,14 +56,13 @@ final class IronPetWindowTests: XCTestCase {
     }
 
     func testBubblesWaitOnTheSectionsThatShowWhatTheyWouldAnnounce() {
-        XCTAssertEqual(IronPetSection.allCases.filter(\.hidesBubbles), [.chat, .agents, .alerts, .tasks, .actions, .today])
+        XCTAssertEqual(IronPetSection.allCases.filter(\.hidesBubbles), [.chat, .agents, .alerts, .notifications, .tasks, .actions, .today])
     }
 
     func testCommandDigitsPickTheSidebarRowsInOrder() {
         let all = IronPetSection.shown(chat: true, transcripts: true, automations: true)
-        XCTAssertEqual((1...8).map { IronPetSection.forShortcut("\($0)", in: all) },
-                       [.chat, .agents, .alerts, .tasks, .transcripts, .screen, .actions, .automations])
-        XCTAssertNil(IronPetSection.forShortcut("9", in: all))
+        XCTAssertEqual((1...9).map { IronPetSection.forShortcut("\($0)", in: all) },
+                       [.chat, .agents, .alerts, .notifications, .tasks, .transcripts, .screen, .actions, .automations])
         XCTAssertNil(IronPetSection.forShortcut("0", in: all))
         XCTAssertNil(IronPetSection.forShortcut("f", in: all))
         XCTAssertNil(IronPetSection.forShortcut(nil, in: all))
@@ -73,13 +72,14 @@ final class IronPetWindowTests: XCTestCase {
         let all = IronPetSection.shown(chat: true, voice: true, transcripts: true, automations: true)
         XCTAssertEqual(IronPetSection.forShortcut("2", in: all), .voice)
         XCTAssertEqual(IronPetSection.forShortcut("3", in: all), .agents)
-        XCTAssertEqual(IronPetSection.forShortcut("9", in: all), .automations)
+        // Voice and Notifications both add a row, so ⌘9 is Actions and Automations has no number.
+        XCTAssertEqual(IronPetSection.forShortcut("9", in: all), .actions)
     }
 
     func testHiddenRowsDoNotTakeANumber() {
         let noChat = IronPetSection.shown(chat: false, transcripts: true, automations: true)
         XCTAssertEqual(IronPetSection.forShortcut("1", in: noChat), .agents)
-        XCTAssertNil(IronPetSection.forShortcut("8", in: noChat))
+        XCTAssertNil(IronPetSection.forShortcut("9", in: noChat))
     }
 
     private func keyEvent(_ characters: String, flags: NSEvent.ModifierFlags = .command) -> NSEvent {
@@ -378,8 +378,8 @@ final class IronPetWindowTests: XCTestCase {
         let panel = IronPetPanel(model: model, session: nil, content: EmptyView())
         for collapsed in [false, true] {
             XCTAssertEqual(model.sidebarCollapsed, collapsed)
-            XCTAssertTrue(panel.runSidebarShortcut(flags: .command, characters: "3"))
-            XCTAssertEqual(model.section, .tasks, "⌘3 does not pick the third row when collapsed == \(collapsed)")
+            XCTAssertTrue(panel.runSidebarShortcut(flags: .command, characters: "4"))
+            XCTAssertEqual(model.section, .tasks, "⌘4 does not pick the fourth row when collapsed == \(collapsed)")
             XCTAssertTrue(panel.runSidebarShortcut(flags: [.command, .control], characters: "s"))
         }
         XCTAssertFalse(model.sidebarCollapsed)
@@ -398,7 +398,7 @@ final class IronPetWindowTests: XCTestCase {
     func testRailTooltipsNameTheSectionAndItsShortcut() {
         let all = IronPetSection.shown(chat: true, transcripts: true, automations: true)
         XCTAssertEqual(all.map { $0.hint(in: all) },
-                       ["Chat (⌘1)", "Agents (⌘2)", "Alerts (⌘3)", "Tasks (⌘4)", "Transcripts (⌘5)", "Screen (⌘6)", "Actions (⌘7)", "Automations (⌘8)"])
+                       ["Chat (⌘1)", "Agents (⌘2)", "Alerts (⌘3)", "Notifications (⌘4)", "Tasks (⌘5)", "Transcripts (⌘6)", "Screen (⌘7)", "Actions (⌘8)", "Automations (⌘9)"])
         let noChat = IronPetSection.shown(chat: false, transcripts: true, automations: true)
         XCTAssertEqual(IronPetSection.agents.hint(in: noChat), "Agents (⌘1)")
     }
@@ -561,8 +561,8 @@ final class IronPetWindowTests: XCTestCase {
 
     func testTheRailLabelNamesTheSectionAndItsShortcut() {
         let sections = IronPetSection.shown(chat: true, transcripts: true, automations: true)
-        XCTAssertEqual(IronPetSection.tasks.shortcutLabel(in: sections), "⌘4")
-        XCTAssertEqual(IronPetSection.tasks.hint(in: sections), "Tasks (⌘4)")
+        XCTAssertEqual(IronPetSection.tasks.shortcutLabel(in: sections), "⌘5")
+        XCTAssertEqual(IronPetSection.tasks.hint(in: sections), "Tasks (⌘5)")
     }
 
     // MARK: Dragging the sidebar edge

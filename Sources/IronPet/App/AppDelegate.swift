@@ -254,6 +254,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
         pet.tasks = tasks
+        let notificationStore = NotificationStore(database: database)
+        NotificationStore.shared = notificationStore
+        pet.notifications = NotificationsModel(store: notificationStore)
+        announcer.notifications = notificationStore
+        announcer.openNotification = { [weak self] id in self?.pet.openNotification(id) }
         setUpDueReminders(tasks)
         setUpWelcomeBack(log, tasks: tasks)
         pet.settings = settingsModel
@@ -268,6 +273,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setUpMemory(database)
         setUpJobs(database, tasks: tasks)
         let service = AutomationService(store: store, engine: engine, database: database)
+        service.notifications = notificationStore
+        service.latestThread = { ThreadStore.latest(automation: $0)?.id }
         service.notice = { [weak self] notice in
             if let event = ActivityEvent.automationNotice(notice) { self?.activity?.record(event) }
             self?.announcer.automation(notice)
@@ -980,7 +987,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         server.onAgentAPI = { [weak self] request, respond in
             MCPEndpoint.route(request, automations: { self?.automations }, tasks: { TaskStore.shared }, screen: { self?.capture?.store },
-                              desktop: { self?.desktop }, memory: { self?.memoryServices }, assistant: { self?.assistant }, respond: respond)
+                              desktop: { self?.desktop }, memory: { self?.memoryServices }, assistant: { self?.assistant },
+                              notifications: { NotificationStore.shared }, respond: respond)
         }
         try server.start()
         self.server = server

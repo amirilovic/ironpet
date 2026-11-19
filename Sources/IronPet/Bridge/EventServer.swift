@@ -9,7 +9,7 @@ final class EventServer {
     var status: () -> Data = { Data("{}".utf8) }
     /// `/test/*` control endpoints; only set when the app runs with `--test-mode`.
     var onTest: ((HTTPRequest, @escaping (Data) -> Void) -> Void)?
-    /// `POST /mcp` (MCP tools for agents), `POST /automations` and `POST /tasks` (the CLI). Answers with a status line and a body.
+    /// `POST /mcp` (MCP tools for agents), `POST /automations`, `POST /tasks` and `POST /notifications` (the CLI). Answers with a status line and a body.
     var onAgentAPI: ((HTTPRequest, @escaping (String, Data) -> Void) -> Void)?
     private let queue = DispatchQueue(label: "ironpet.event-server")
     private var listener: NWListener?
@@ -65,7 +65,7 @@ final class EventServer {
         if request.method == "GET", request.path == "/status" {
             return respond(connection, status: "200 OK", body: status())
         }
-        if ["/mcp", MCPEndpoint.jobPath, MCPEndpoint.voicePath, "/automations", "/tasks"].contains(request.path) {
+        if ["/mcp", MCPEndpoint.jobPath, MCPEndpoint.voicePath, "/automations", "/tasks", "/notifications"].contains(request.path) {
             guard request.method == "POST", let onAgentAPI else { return respond(connection, status: "405 Method Not Allowed") }
             onAgentAPI(request) { [queue] status, body in
                 queue.async { self.respond(connection, status: status, body: body) }

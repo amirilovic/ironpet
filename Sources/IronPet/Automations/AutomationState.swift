@@ -233,15 +233,18 @@ final class AutomationState {
 
     private struct StoredSignal: Codable {
         var title: String, subtitle: String, url: String?, date: Double, label: String, symbol: String, mood: String, ask: String?
+        var detail: String?, links: [NotificationLink]?
 
         init(_ s: Signal) {
             title = s.title; subtitle = s.subtitle; url = s.url?.absoluteString; date = s.date.timeIntervalSince1970
             label = s.label; symbol = s.symbol; mood = s.mood.rawValue; ask = s.ask
+            detail = s.detail; links = s.links.isEmpty ? nil : s.links
         }
 
         func signal(id: String) -> Signal {
             Signal(id: id, title: title, subtitle: subtitle, url: url.flatMap(URL.init(string:)), date: Date(timeIntervalSince1970: date),
-                   label: label, symbol: symbol, mood: PetMood(rawValue: mood) ?? .needsInput, ask: ask)
+                   label: label, symbol: symbol, mood: PetMood(rawValue: mood) ?? .needsInput, ask: ask,
+                   detail: detail, links: links ?? [])
         }
     }
 

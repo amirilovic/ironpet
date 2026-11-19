@@ -37,6 +37,10 @@ final class PetController: NSObject {
     /// "Ask Ghost" on an alert: open the chat with this prompt ready to send.
     var onAsk: ((String) -> Void)?
     var onCapture: ((_ region: Bool) -> Void)?
+    /// The Notifications section. Set before the window first opens.
+    var notifications: NotificationsModel? {
+        didSet { notifications?.opener = notificationOpener() }
+    }
     /// The Tasks section's list. Falls back to `TaskStore.shared`, then to an empty list.
     var tasks: TaskStore?
     /// The Automations section. Set before the window first opens.
@@ -274,6 +278,28 @@ final class PetController: NSObject {
         refreshMood()
     }
 
+    /// A bubble was clicked: show the Notifications page with this entry open.
+    func openNotification(_ id: String) {
+        windowModel.focusNotification = id
+        showWindow(.notifications)
+    }
+
+    private func notificationOpener() -> NotificationLinkOpener {
+        var opener = NotificationLinkOpener()
+        opener.openThread = { [weak self] id in self?.onOpenThread?(id) }
+        opener.openSession = { [weak self] id in
+            guard let self else { return }
+            if let session = store.sessions[id] { return jump(to: session) }
+            onOpenSession?(id)
+        }
+        opener.openTask = { [weak self] id in
+            self?.windowModel.focusTask = id
+            self?.windowModel.section = .tasks
+        }
+        opener.openAlert = { [weak self] _ in self?.windowModel.section = .alerts }
+        return opener
+    }
+
     private func syncChat() {
         guard isChatVisible != chatShown else { return }
         chatShown = isChatVisible
@@ -319,8 +345,8 @@ final class PetController: NSObject {
                 onVoiceSettings?()
             })
         let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(
-            model: windowModel, store: store, signals: signals, tasks: taskList, chat: chat, meetings: meetings,
-            settings: settings, brief: brief, voice: voiceConversation, actions: actions))
+            model: windowModel, store: store, signals: signals, tasks: taskList, notifications: notifications ?? .empty, chat: chat,
+            meetings: meetings, settings: settings, brief: brief, voice: voiceConversation, actions: actions))
         window.hasVoice = voiceConversation != nil
         window.onVisibilityChange = { [weak self] visible in
             guard let self else { return }

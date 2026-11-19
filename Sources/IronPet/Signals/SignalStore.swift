@@ -16,6 +16,9 @@ struct Signal: Identifiable, Equatable {
     var mood: PetMood
     /// Prompt for "Ask Ghost", so the chat can pick up from the alert.
     var ask: String?
+    /// The full text and links an `alert` action gave, kept with the notification that announces the alert.
+    var detail: String?
+    var links: [NotificationLink] = []
 }
 
 @MainActor

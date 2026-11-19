@@ -3,7 +3,7 @@ import SwiftUI
 
 /// A page of the ironpet window, in sidebar order.
 enum IronPetSection: String, CaseIterable, Identifiable {
-    case chat, voice, agents, alerts, tasks, transcripts, screen, actions, automations, today
+    case chat, voice, agents, alerts, notifications, tasks, transcripts, screen, actions, automations, today
 
     var id: String { rawValue }
 
@@ -13,6 +13,7 @@ enum IronPetSection: String, CaseIterable, Identifiable {
         case .voice: return "Voice"
         case .agents: return "Agents"
         case .alerts: return "Alerts"
+        case .notifications: return "Notifications"
         case .tasks: return "Tasks"
         case .transcripts: return "Transcripts"
         case .screen: return "Screen"
@@ -28,6 +29,7 @@ enum IronPetSection: String, CaseIterable, Identifiable {
         case .voice: return "mic"
         case .agents: return "person.2"
         case .alerts: return "bell"
+        case .notifications: return "tray"
         case .tasks: return "checklist"
         case .transcripts: return "waveform"
         case .screen: return "rectangle.dashed.badge.record"
@@ -39,10 +41,11 @@ enum IronPetSection: String, CaseIterable, Identifiable {
 
     /// The sections the sidebar lists, in order. Chat, Voice, Transcripts and Automations need their backing object. Today
     /// is listed only while a brief or recap automation is on, and comes last so the other rows keep their ⌘N.
-    static func shown(chat: Bool, voice: Bool = false, transcripts: Bool, automations: Bool, today: Bool = false) -> [IronPetSection] {
+    static func shown(chat: Bool, voice: Bool = false, transcripts: Bool, automations: Bool, today: Bool = false,
+                      notifications: Bool = true) -> [IronPetSection] {
         allCases.filter {
             ($0 != .chat || chat) && ($0 != .voice || voice) && ($0 != .transcripts || transcripts) && ($0 != .automations || automations)
-                && ($0 != .today || today)
+                && ($0 != .today || today) && ($0 != .notifications || notifications)
         }
     }
 
@@ -67,7 +70,7 @@ enum IronPetSection: String, CaseIterable, Identifiable {
 
     /// The sections that show what a bubble would announce, so bubbles wait while one is open. The others leave them
     /// visible, so an approval is not missed while reading a transcript or editing an automation.
-    var hidesBubbles: Bool { [.chat, .agents, .alerts, .tasks, .actions, .today].contains(self) }
+    var hidesBubbles: Bool { [.chat, .agents, .alerts, .notifications, .tasks, .actions, .today].contains(self) }
 
     /// Agents that need the user win; otherwise alerts when there are some and no agent is working, then tasks that
     /// wait on the user or on Add / Skip.
@@ -111,6 +114,8 @@ final class IronPetWindowModel: ObservableObject {
     @Published var briefKind: Brief.Kind = .brief
     /// A task or meeting a Today row opened. The Tasks and Transcripts pages show it, then clear it.
     @Published var focusTask: String?
+    /// A notification a bubble opened. The Notifications page expands it, then clears it.
+    @Published var focusNotification: String?
     @Published var focusMeeting: String?
     /// True when the sidebar shows only the section icons. Saved, so it survives closing the window and restarting.
     @Published var sidebarCollapsed: Bool {
@@ -133,6 +138,12 @@ final class IronPetWindowModel: ObservableObject {
     }
 
     func toggleSidebar() { sidebarCollapsed.toggle() }
+
+    /// A bubble was clicked: show the Notifications page with this entry open.
+    func openNotification(_ id: String) {
+        focusNotification = id
+        section = .notifications
+    }
 
     /// The width of the column as it is now: the rail's, or the sidebar's own.
     var columnWidth: CGFloat { sidebarCollapsed ? Self.railWidth : sidebarWidth }
@@ -508,6 +519,8 @@ struct IronPetWindowView: View {
     @ObservedObject var store: SessionStore
     @ObservedObject var signals: SignalStore
     @ObservedObject var tasks: TaskStore
+    /// The Notifications page. Left at `empty` in tests and previews that do not show it; its row is hidden then.
+    @ObservedObject var notifications = NotificationsModel.empty
     /// Nil in previews and tests that do not show it; its row is hidden then.
     var chat: ChatSession?
     var meetings: MeetingLibrary?
@@ -563,7 +576,7 @@ struct IronPetWindowView: View {
 
     private var shown: [IronPetSection] {
         IronPetSection.shown(chat: chat != nil, voice: voice != nil, transcripts: meetings != nil, automations: settings != nil,
-                             today: model.todayShown)
+                             today: model.todayShown, notifications: notifications !== NotificationsModel.empty)
     }
 
     private var collapsed: Bool { model.sidebarCollapsed }
@@ -677,6 +690,7 @@ struct IronPetWindowView: View {
         switch section {
         case .agents: return store.ordered.count
         case .alerts: return signals.signals.count
+        case .notifications: return notifications.unread
         case .tasks: return tasks.activeCount + tasks.suggestions.count
         default: return 0
         }
@@ -697,6 +711,8 @@ struct IronPetWindowView: View {
                     }
                 case .agents: AgentsSection(store: store, onJump: actions.onJump)
                 case .alerts: AlertsSection(signals: signals, onAsk: actions.onAsk)
+                case .notifications:
+                    NotificationsSection(model: notifications, store: notifications.store, focus: $model.focusNotification)
                 case .tasks:
                     TaskListView(tasks: tasks, onTellGhost: actions.onTellGhost, onOpenThread: actions.onOpenThread,
                                  onOpenSession: actions.onOpenSession, focus: $model.focusTask)

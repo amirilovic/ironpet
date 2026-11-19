@@ -8,6 +8,8 @@ struct AutomationNotice {
         var title: String
         var primary = false
         var destructive = false
+        /// Pressing it marks the stored notification read (Done).
+        var marksRead = false
         var run: () -> Void
     }
 
@@ -27,6 +29,14 @@ struct AutomationNotice {
     var url: URL?
     /// A break reminder (`Automation.isBreakReminder`), which is not news after a break.
     var isBreakReminder = false
+    /// What the stored notification records. The bubble shows `title` and `body`; `summary` (default: the first line of `body`)
+    /// and `detail` (default: `body`) are what the Notifications section shows.
+    var notificationType: NotificationType = .reminder
+    var summary: String?
+    var detail: String?
+    var links: [NotificationLink] = []
+    /// Set by `AutomationService.post` once the notification is stored; the bubble opens it when clicked.
+    var notificationID: String?
 }
 
 struct AutomationError: Error, LocalizedError {
@@ -41,6 +51,10 @@ final class AutomationService {
     let store: AutomationStore
     let engine: AutomationEngine
     var notice: (AutomationNotice) -> Void = { _ in }
+    /// Where every bubble this service shows is also stored. Nil in tests that do not look at it.
+    var notifications: NotificationStore?
+    /// The id of the chat thread an automation's last session run saved, for the link on its notification.
+    var latestThread: (_ automationID: String) -> String? = { _ in nil }
     var dismissNotice: (String) -> Void = { _ in }
     /// Adds or updates an alert in the alerts list. The flag asks for a bubble and a sound.
     var alert: (_ signal: Signal, _ notify: Bool) -> Void = { _, _ in }
@@ -90,10 +104,30 @@ final class AutomationService {
             reviewApprovals()
         }
         store.onInvalid = { [weak self] message in
-            self?.notice(AutomationNotice(id: "automations-invalid", symbol: "exclamationmark.triangle.fill", tint: .warn,
+            self?.post(AutomationNotice(id: "automations-invalid", symbol: "exclamationmark.triangle.fill", tint: .warn,
                                           title: "automations.json has a problem",
                                           body: message + ". The last good list stays active.", expires: 60))
         }
+    }
+
+    /// Stores the notice as a notification, then shows its bubble. Pressing Done on the bubble marks the notification read.
+    private func post(_ notice: AutomationNotice) {
+        var notice = notice
+        if let stored = notifications?.add(NotificationDraft(notice: notice)) {
+            let id = stored.id
+            notice.notificationID = id
+            notice.buttons = notice.buttons.map { button in
+                guard button.marksRead else { return button }
+                var button = button
+                let run = button.run
+                button.run = { [weak self] in
+                    self?.notifications?.markRead(id)
+                    run()
+                }
+                return button
+            }
+        }
+        self.notice(notice)
     }
 
     /// Call once `notice` and the other outputs are set: reports a bad file and asks about automations waiting for approval.
@@ -194,8 +228,9 @@ final class AutomationService {
         for a in store.automations where a.enabled && needsApproval(a) && !isRejected(a) {
             if autoApproveEnabled() {
                 approve(a.id)
-                notice(AutomationNotice(id: "automation-auto-approved:\(a.id)", symbol: "checkmark.shield.fill", tint: .info,
-                                        title: "Auto-approved \"\(a.name)\"", subtitle: "Created by \(a.createdBy).", expires: 15))
+                post(AutomationNotice(id: "automation-auto-approved:\(a.id)", symbol: "checkmark.shield.fill", tint: .info,
+                                        title: "Auto-approved \"\(a.name)\"", subtitle: "Created by \(a.createdBy).", expires: 15,
+                                        notificationType: .other))
                 continue
             }
             let hash = AutomationState.hash(a.riskText ?? "")
@@ -217,12 +252,13 @@ final class AutomationService {
         announced[a.id] = AutomationState.hash(a.riskText ?? "")
         let detail = approvalDetail(a)
         let kind = a.action.type == "prompt" ? "prompt" : "command"
-        notice(AutomationNotice(
+        post(AutomationNotice(
             id: Self.approvalID(a.id), symbol: "hand.raised.fill", tint: .warn,
             title: "Allow \"\(a.name)\"?", subtitle: "Created by \(a.createdBy). It wants to run this \(kind).",
             body: detail.count > 1500 ? String(detail.prefix(1500)) + "\n(\(detail.count - 1500) more characters not shown)" : detail,
             buttons: [.init(title: "Approve", primary: true) { [weak self] in self?.approve(a.id) },
-                      .init(title: "Reject", destructive: true) { [weak self] in self?.reject(a.id) }]))
+                      .init(title: "Reject", destructive: true) { [weak self] in self?.reject(a.id) }],
+            automationIDs: [a.id], notificationType: .approval, detail: detail))
     }
 
     /// The bubble of one poll or script item. An item with an `id` keeps one bubble, so a script can dismiss it later.
@@ -300,9 +336,9 @@ final class AutomationService {
                         record(a.id, "ok", "no changes")
                         afterRun(a)
                     } else {
-                        finish(a, ok: true, text: answer, fire: fire)
+                        finish(a, ok: true, text: answer, fire: fire, background: true, thread: latestThread(a.id))
                     }
-                case .failure(let error): finish(a, ok: false, text: error.message, fire: fire)
+                case .failure(let error): finish(a, ok: false, text: error.message, fire: fire, thread: latestThread(a.id))
                 }
             }
         case "prompt" where runsInChat(a):
@@ -324,7 +360,7 @@ final class AutomationService {
             let prompt = AutomationTemplate.render(a.action.prompt ?? "", values: values)
             return runInBackground(a, done: fire.finished) { [self] in
                 switch await runPrompt(a, prompt) {
-                case .success(let answer): finish(a, ok: true, text: answer, fire: fire)
+                case .success(let answer): finish(a, ok: true, text: answer, fire: fire, background: true)
                 case .failure(let error): finish(a, ok: false, text: error.message, fire: fire)
                 }
             }
@@ -409,12 +445,19 @@ final class AutomationService {
         return true
     }
 
-    private func finish(_ a: Automation, ok: Bool, text: String, fire: AutomationEngine.Fire, truncated: Bool = false) {
+    /// `background` is a prompt run: the bubble shows a one-line summary of the reply and the notification keeps all of it.
+    /// `thread` is the chat thread that run saved, linked from the notification.
+    private func finish(_ a: Automation, ok: Bool, text: String, fire: AutomationEngine.Fire, truncated: Bool = false,
+                        background: Bool = false, thread: String? = nil) {
         record(a.id, ok ? "ok" : "failed", text)
         let values = templateValues(a, item: fire.item, count: fire.count)
         let title = a.action.title.map { AutomationTemplate.render($0, values: values) } ?? (ok ? a.name : "\(a.name) failed")
         let body = ok ? (a.action.body.map { AutomationTemplate.render($0, values: values) + "\n" } ?? "") + text : text
-        show(a, title: title, body: String(body.prefix(600)) + (truncated ? "\n(output cut off)" : ""), fire: fire, ok: ok)
+        let full = body + (truncated ? "\n(output cut off)" : "")
+        let summary = background && ok ? NotificationDraft.summary(of: text) : nil
+        show(a, title: title, body: summary ?? String(body.prefix(600)) + (truncated ? "\n(output cut off)" : ""), fire: fire, ok: ok,
+             type: .backgroundResult, summary: summary, detail: full,
+             links: thread.map { [NotificationLink(.thread, $0, label: "Run in chat history")] } ?? [])
         afterRun(a)
     }
 
@@ -428,22 +471,24 @@ final class AutomationService {
         return values
     }
 
-    private func show(_ a: Automation, title: String, body: String, fire: AutomationEngine.Fire, ok: Bool) {
+    private func show(_ a: Automation, title: String, body: String, fire: AutomationEngine.Fire, ok: Bool,
+                      type: NotificationType = .reminder, summary: String? = nil, detail: String? = nil, links: [NotificationLink] = []) {
         let p = a.presentation
         let mood = p.mood.flatMap(PetMood.init(rawValue:)) ?? .listening
         let buttons = p.buttons ?? (a.trigger.type == "interval" ? ["done", "snooze"] : [])
         var list: [AutomationNotice.Button] = []
-        if buttons.contains("done") { list.append(.init(title: "Done", primary: true) { [weak self] in self?.nudge([.done]) }) }
+        if buttons.contains("done") { list.append(.init(title: "Done", primary: true, marksRead: true) { [weak self] in self?.nudge([.done]) }) }
         if buttons.contains("snooze") {
             list.append(.init(title: "Snooze \(Int(engine.timing().snoozeMinutes)) min") { [weak self] in self?.engine.snooze([a.id]) })
         }
         // Several new items from one poll must not replace each other's bubble, so a poll item adds a short tag to the id.
         let bubbleID = fire.item == nil ? "automation:\(a.id)" : Self.itemBubbleID(a.id, item: fire.item, fallback: title + "\n" + body)
-        notice(AutomationNotice(id: bubbleID, symbol: ok ? (p.symbol ?? "bell.fill") : "exclamationmark.triangle.fill",
+        post(AutomationNotice(id: bubbleID, symbol: ok ? (p.symbol ?? "bell.fill") : "exclamationmark.triangle.fill",
                                 tint: ok ? .info : .bad, title: title,
                                 subtitle: fire.agentWorking && a.trigger.type == "interval" ? "Your agent is still working, good moment for it." : nil,
                                 body: body.isEmpty ? nil : body, buttons: list, expires: p.expiresSeconds ?? (a.trigger.type == "interval" ? 180 : 45),
-                                systemNotification: p.notification ?? false, automationIDs: [a.id], isBreakReminder: a.isBreakReminder))
+                                systemNotification: p.notification ?? false, automationIDs: [a.id], isBreakReminder: a.isBreakReminder,
+                                notificationType: type, summary: summary, detail: detail, links: links))
         nudge([mood])
     }
 
@@ -451,11 +496,11 @@ final class AutomationService {
         let first = list[0]
         let ids = list.map(\.id)
         for a in list { record(a.id, "fired", a.action.title ?? a.name) }
-        notice(AutomationNotice(
+        post(AutomationNotice(
             id: "automation:batch", symbol: first.presentation.symbol ?? "bell.fill", title: "Time for a short break",
             subtitle: agentWorking ? "Your agent is still working, good moment for it." : nil,
             body: list.map { "\($0.action.title ?? $0.name): \($0.action.body ?? "")" }.joined(separator: "\n"),
-            buttons: [.init(title: "Done", primary: true) { [weak self] in self?.nudge([.done]) },
+            buttons: [.init(title: "Done", primary: true, marksRead: true) { [weak self] in self?.nudge([.done]) },
                       .init(title: "Snooze \(Int(engine.timing().snoozeMinutes)) min") { [weak self] in self?.engine.snooze(ids) }],
             expires: 180, systemNotification: list.contains { $0.presentation.notification == true }, automationIDs: ids,
             isBreakReminder: list.allSatisfy(\.isBreakReminder)))
@@ -511,6 +556,16 @@ final class AutomationService {
         if !added.isEmpty && !firstRun { suggested(added) }
     }
 
+    /// The optional `description` and `links` of a `bubble` or `alert` action. A link of an unknown kind, with an empty reference or
+    /// with a `url` that is not http(s) is dropped, and so are links past the tenth; `problem` says so. A description longer
+    /// than 64 KiB is cut.
+    static func notificationFields(_ action: [String: Any]) -> (description: String?, links: [NotificationLink], problem: String?) {
+        let description = (action["description"] as? String).map(NotificationDraft.capped).flatMap { $0.isEmpty ? nil : $0 }
+        let parsed = NotificationLink.parse(action["links"])
+        let problem = parsed.dropped > 0 ? "\(parsed.dropped) link(s) left out: kind must be url, file, thread, session, task or alert, a url must be http(s), at most \(NotificationLink.maxLinks) links" : nil
+        return (description, parsed.links, problem)
+    }
+
     private func text(_ action: [String: Any], _ key: String) -> String? {
         guard let value = action[key], !(value is NSNull) else { return nil }
         let text = (value as? String) ?? "\(value)"
@@ -538,12 +593,15 @@ final class AutomationService {
         let url = text(action, "url").flatMap(URL.init(string:))
         var buttons: [AutomationNotice.Button] = []
         if let url { buttons.append(.init(title: "Open", primary: true) { NSWorkspace.shared.open(url) }) }
+        let extras = Self.notificationFields(action)
+        if let problem = extras.problem { record(a.id, "ok", "bubble: " + problem) }
         let tint: AutomationNotice.Tint = level == "bad" ? .bad : level == "warn" ? .warn : level == "good" ? .good : .info
-        notice(AutomationNotice(id: Self.itemBubbleID(a.id, item: ["id": key], fallback: key),
+        post(AutomationNotice(id: Self.itemBubbleID(a.id, item: ["id": key], fallback: key),
                                 symbol: text(action, "symbol") ?? "bell.fill", tint: tint, title: title, subtitle: text(action, "subtitle"),
                                 body: text(action, "body") == title ? nil : text(action, "body"), buttons: buttons,
                                 expires: (action["expiresSeconds"] as? Double) ?? 45,
-                                systemNotification: action["notification"] as? Bool ?? false, automationIDs: [a.id], url: url))
+                                systemNotification: action["notification"] as? Bool ?? false, automationIDs: [a.id], url: url,
+                                notificationType: .scriptBubble, detail: extras.description, links: extras.links))
         nudge([mood(for: level)])
         return nil
     }
@@ -560,14 +618,19 @@ final class AutomationService {
         }
         guard let title = text(action, "title") else { return "an alert needs a title" }
         let level = severity(action, default: "warn")
+        let extras = Self.notificationFields(action)
+        if let problem = extras.problem { record(a.id, "ok", "alert: " + problem) }
+        // The description and links count only when given, so an alert without them keeps the fingerprint it had before they existed.
+        let extraKey = extras.description == nil && extras.links.isEmpty ? [] : [extras.description ?? "", extras.links.map { "\($0.kind.rawValue):\($0.ref)" }.joined(separator: ",")]
         let fingerprint = AutomationState.hash(text(action, "version")
-            ?? [title, text(action, "subtitle"), text(action, "label"), level, text(action, "url")].map { $0 ?? "" }.joined(separator: "\u{1}"))
+            ?? ([title, text(action, "subtitle"), text(action, "label"), level, text(action, "url")].map { $0 ?? "" } + extraKey).joined(separator: "\u{1}"))
         let known = engine.state.alertHash(a.id, id)
         guard known != fingerprint else { return nil }
         let signal = Signal(id: signalID, title: title, subtitle: text(action, "subtitle") ?? text(action, "body") ?? "",
                             url: text(action, "url").flatMap(URL.init(string:)), label: text(action, "label") ?? a.name,
                             symbol: text(action, "symbol") ?? (level == "good" ? "checkmark.seal.fill" : level == "bad" ? "xmark.octagon.fill" : "bell.badge.fill"),
-                            mood: level == "info" ? .done : mood(for: level), ask: text(action, "ask"))
+                            mood: level == "info" ? .done : mood(for: level), ask: text(action, "ask"),
+                            detail: extras.description, links: extras.links)
         engine.state.setAlertHash(a.id, id, fingerprint, signal: signal)
         // An empty stored hash is an alert from before payloads were stored, so it comes back without a bubble.
         alert(signal, !firstRun && known != "")
@@ -583,11 +646,12 @@ final class AutomationService {
             switch await runPrompt(asking, prompt) {
             case .success(let answer):
                 record(a.id, "ok", answer)
-                notice(AutomationNotice(id: "automation:\(a.id):prompt:" + AutomationState.hash(prompt).prefix(8), symbol: text(action, "symbol") ?? "sparkles",
-                                        tint: .info, title: title, body: String(answer.prefix(600)), expires: 60, automationIDs: [a.id]))
+                post(AutomationNotice(id: "automation:\(a.id):prompt:" + AutomationState.hash(prompt).prefix(8), symbol: text(action, "symbol") ?? "sparkles",
+                                        tint: .info, title: title, body: NotificationDraft.summary(of: answer), expires: 60, automationIDs: [a.id],
+                                        notificationType: .backgroundResult, detail: answer))
             case .failure(let error):
                 record(a.id, "failed", error.message)
-                notice(AutomationNotice(id: "automation:\(a.id):prompt", symbol: "exclamationmark.triangle.fill", tint: .bad, title: "\(title) failed",
+                post(AutomationNotice(id: "automation:\(a.id):prompt", symbol: "exclamationmark.triangle.fill", tint: .bad, title: "\(title) failed",
                                         body: error.message, expires: 45, automationIDs: [a.id]))
             }
         }

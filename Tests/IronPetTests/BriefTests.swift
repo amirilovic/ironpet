@@ -616,7 +616,9 @@ final class TodaySectionTests: XCTestCase {
         XCTAssertFalse(hidden.contains(.today))
         let shown = IronPetSection.shown(chat: true, transcripts: true, automations: true, today: true)
         XCTAssertEqual(shown.last, .today)
-        XCTAssertEqual(IronPetSection.forShortcut("9", in: shown), .today)
+        // The Notifications row pushed Today to the tenth row, which has no ⌘N.
+        XCTAssertEqual(IronPetSection.forShortcut("9", in: shown), .automations)
+        XCTAssertNil(IronPetSection.today.shortcutLabel(in: shown))
         XCTAssertEqual(Array(shown.dropLast()), hidden, "the other rows keep their shortcuts")
         XCTAssertTrue(IronPetSection.today.hidesBubbles)
     }

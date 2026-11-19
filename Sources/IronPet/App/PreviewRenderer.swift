@@ -77,6 +77,27 @@ enum PreviewRenderer {
         // The window opens on Alerts when no agent needs you or is working.
         render(list(SessionStore(), tasks: tasks), to: dir, "alerts")
         render(list(sessions, tasks: tasks, on: .actions), to: dir, "actions")
+        // Notifications, from made-up entries: one unread and open with its description and links, one read, one without links.
+        let notificationStore = NotificationStore(database: Database.open(path: nil, migrations: NotificationStore.migrations).database)
+        _ = notificationStore.add(NotificationDraft(source: "release-notes", type: .backgroundResult, title: "Release notes",
+                                                    description: "Drafted the notes for **v2.4**.\n\n- 3 fixes\n- 1 new setting\n\nOne item needs a decision before it ships.",
+                                                    links: [NotificationLink(.url, "https://example.com/releases/2.4", label: "Draft on the wiki"),
+                                                            NotificationLink(.thread, "preview-thread", label: "Run in chat history")]))
+        let readEntry = notificationStore.add(NotificationDraft(source: "water", type: .reminder, title: "Time for water", description: "Drink a glass of water."))
+        _ = notificationStore.add(NotificationDraft(source: NotificationItem.systemSource, type: .approval, title: "Ghost wants to: run swift test",
+                                                    description: "swift test --filter DemoTests"))
+        if let readEntry { notificationStore.markRead(readEntry.id) }
+        let notificationsModel = NotificationsModel(store: notificationStore)
+        notificationsModel.select(notificationStore.list().last { $0.type == .backgroundResult }?.id ?? "")
+        func notificationsWindow(scheme: ColorScheme) -> some View {
+            let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
+            model.section = .notifications
+            return IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, notifications: notificationsModel, chat: chat,
+                                     meetings: meetings, actions: .none)
+                .frame(width: 780, height: 560).panel()
+        }
+        render(notificationsWindow(scheme: .dark), to: dir, "notifications")
+        render(notificationsWindow(scheme: .light), to: dir, "notifications-light", scheme: .light)
         // The Screen section: recent captures and the search field, with capture on and off, then a search.
         let capturesStore = CaptureStore(database: Database.open(path: nil, migrations: CaptureStore.migrations).database)
         let slack = CaptureApp(bundleId: "com.tinyspeck.slackmacgap", name: "Slack"), browser = CaptureApp(bundleId: "com.apple.Safari", name: "Safari")

@@ -14,6 +14,16 @@ final class Announcer {
     var ask: (String) -> Void = { _ in }
     var decide: (UUID, Bool) -> Void = { _, _ in }
     var automationAction: (_ ids: [String], _ snooze: Bool) -> Void = { _, _ in }
+    /// Where the bubbles that agents, alerts and digests show are also stored. Automation bubbles are stored by `AutomationService`.
+    var notifications: NotificationStore?
+    /// Shows the Notifications section with this entry open. A bubble's click ends here.
+    var openNotification: (String) -> Void = { _ in }
+
+    /// Stores a notification and returns what a click on its bubble does.
+    private func store(_ draft: NotificationDraft) -> (() -> Void)? {
+        guard let id = notifications?.add(draft)?.id else { return nil }
+        return { [weak self] in self?.openNotification(id) }
+    }
 
     var alsoSystemNotifications: Bool {
         get { UserDefaults.standard.bool(forKey: Self.systemKey) }
@@ -43,13 +53,15 @@ final class Announcer {
     }
 
     func approval(id: UUID, title: String, detail: String) {
+        let heading = "\(ConfigStore.shared.config.pet.name) wants to: \(title)"
+        let open = store(NotificationDraft(type: .approval, title: heading, summary: NotificationDraft.summary(of: detail), description: detail))
         bubbles.show(Bubble(id: Self.approvalID(id), symbol: "hand.raised.fill", tint: .orange,
-                            title: "\(ConfigStore.shared.config.pet.name) wants to: \(title)", body: String(detail.prefix(240)),
+                            title: heading, body: String(detail.prefix(240)),
                             actions: [
                                 .init(title: "Allow", style: .primary) { [weak self] in self?.decide(id, true) },
                                 .init(title: "Deny", style: .destructive) { [weak self] in self?.decide(id, false) },
                                 .init(title: "Open chat") { [weak self] in self?.openChat() },
-                            ]))
+                            ], onTap: open))
         chime()
         if alsoSystemNotifications { notifier.announceApproval(id: id, title: title, detail: detail) }
     }
@@ -85,9 +97,10 @@ final class Announcer {
             actions.append(.init(title: "Ask \(ConfigStore.shared.config.pet.name)") { [weak self] in self?.ask(prompt) })
         }
         let quiet = signal.mood == .done
+        let open = store(NotificationDraft(signal: signal))
         bubbles.show(Bubble(id: "signal:\(signal.id)", symbol: signal.symbol, tint: quiet ? .green : signal.mood == .failed ? .red : .orange,
                             title: signal.label, subtitle: signal.subtitle, body: signal.title, actions: actions,
-                            onTap: url.map { link in { NSWorkspace.shared.open(link) } },
+                            onTap: open ?? url.map { link in { NSWorkspace.shared.open(link) } },
                             expires: Date().addingTimeInterval(quiet ? 15 : 40)))
         if !quiet { chime() }
         if alsoSystemNotifications { notifier.announceSignal(signal) }
@@ -108,8 +121,9 @@ final class Announcer {
                 button.run()
             }
         }
+        let open: (() -> Void)? = notice.notificationID.map { id in { [weak self] in self?.openNotification(id) } }
         bubbles.show(Bubble(id: notice.id, symbol: notice.symbol, tint: tint, title: notice.title, subtitle: notice.subtitle, body: notice.body,
-                            actions: actions, expires: notice.expires.map { Date().addingTimeInterval($0) }))
+                            actions: actions, onTap: open, expires: notice.expires.map { Date().addingTimeInterval($0) }))
         chime()
         if alsoSystemNotifications || notice.systemNotification { notifier.announceAutomation(notice) }
     }
@@ -153,7 +167,16 @@ final class Announcer {
 
     /// Replaces the previous one, so a run shows one bubble however many suggestions it stored.
     func taskSuggestions(_ added: [TaskSuggestion], review: @escaping () -> Void = {}) {
-        if Self.showTaskSuggestions(added, in: bubbles, review: review) { chime() }
+        guard var bubble = Self.taskSuggestionsBubble(added, review: review), let first = added.first else { return }
+        var source = NotificationItem.systemSource
+        if case .automation(let id, _) = first.origin { source = id }
+        let lines = added.map { "- " + $0.title }.joined(separator: "\n")
+        let draft = NotificationDraft(source: source, type: .other, title: bubble.title,
+                                      summary: "\(added.count) \(added.count == 1 ? "suggestion" : "suggestions") for review",
+                                      description: lines + "\n\nAdd or skip them in the Tasks section.")
+        if let show = store(draft) { bubble.onTap = show }
+        bubbles.show(bubble)
+        chime()
     }
 
     /// Shows the bubble and returns whether there was one to show.
@@ -301,7 +324,11 @@ final class Announcer {
 
     /// The morning brief or the day's recap from a `digest` automation. Open shows it on the Today page.
     func brief(_ brief: Brief, automation: Automation, open: @escaping () -> Void) {
-        let bubble = Self.briefBubble(brief, automation: automation, now: Date(), open: open)
+        var bubble = Self.briefBubble(brief, automation: automation, now: Date(), open: open)
+        let draft = NotificationDraft(source: automation.id, type: .digest, title: bubble.title,
+                                      summary: brief.isEmpty ? "Nothing to report" : brief.lines.first.map { NotificationDraft.summary(of: $0) } ?? "",
+                                      description: brief.isEmpty ? "Nothing to report" : brief.lines.joined(separator: "\n"))
+        if let show = store(draft) { bubble.onTap = show }
         bubbles.show(bubble)
         guard !brief.isEmpty else { return }
         chime()
