@@ -1,13 +1,16 @@
 import Foundation
 
 /// Reads the `## Action items` checklist that `MeetingController.summaryPrompt` asks for:
-/// `- [ ] <task> (owner: <Me, Them, or a name>, due: <date>)`. Items owned by "Me" become task suggestions, items owned by
-/// anyone else become suggestions the user waits on, and items without an owner are left out.
+/// `- [ ] <task> (owner: <Me, Them, or a name>, due: <date>, waiting: yes)`. Items owned by "Me" become task suggestions.
+/// An item owned by someone else becomes a suggestion the user waits on only when it carries `waiting: yes`, which the model
+/// adds when the work is for the user or blocks the user. Other items, and items without an owner, are not suggested.
 enum ActionItems {
     struct Item: Equatable {
         var title: String
         var owner: String?
         var due: String?
+        /// `waiting: yes`: the user depends on this item, which someone else owns.
+        var waiting = false
     }
 
     /// Every checklist item in the section, in order. "None." and a missing section give an empty list.
@@ -65,12 +68,13 @@ enum ActionItems {
         return lines.joined(separator: "\n")
     }
 
-    /// The items with an owner, as suggestions for `TaskStore.suggest`: the user's own, and everyone else's with the owner as
-    /// the person they are waiting on.
+    /// The suggestions for `TaskStore.suggest`: the user's own items, and other people's items marked `waiting: yes`, with
+    /// the owner as the person the user waits on.
     static func suggestions(_ markdown: String) -> [(title: String, due: String?, waitingOn: String?)] {
         parse(markdown).compactMap { item in
             guard let owner = item.owner else { return nil }
-            return (item.title, item.due, owner.caseInsensitiveCompare("me") == .orderedSame ? nil : owner)
+            if owner.caseInsensitiveCompare("me") == .orderedSame { return (item.title, item.due, nil) }
+            return item.waiting ? (item.title, item.due, owner) : nil
         }
     }
 
@@ -96,12 +100,14 @@ enum ActionItems {
         let inside = body[open.upperBound..<body.index(before: body.endIndex)]
         var owner: String?
         var due: String?
+        var waiting = false
         var inDue = false
         for part in inside.split(separator: ",") {
             let pair = part.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
             switch pair.count == 2 ? pair[0].lowercased() : nil {
             case "owner": owner = pair[1]; inDue = false
             case "due": due = pair[1]; inDue = true
+            case "waiting": waiting = ["yes", "true"].contains(pair[1].lowercased()); inDue = false
             default:
                 // A date with a comma, as in `due: Nov 20, 2026`. An owner list keeps its first name only.
                 if inDue, let start = due { due = start + ", " + part.trimmingCharacters(in: .whitespaces) }
@@ -111,6 +117,6 @@ enum ActionItems {
         due = due.flatMap { $0.isEmpty ? nil : $0 }
         guard owner != nil || due != nil else { return Item(title: body) }
         let title = body[..<open.lowerBound].trimmingCharacters(in: .whitespaces)
-        return Item(title: title.isEmpty ? body : title, owner: owner, due: due)
+        return Item(title: title.isEmpty ? body : title, owner: owner, due: due, waiting: waiting)
     }
 }

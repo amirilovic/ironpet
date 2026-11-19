@@ -7,6 +7,7 @@ final class ChatReplyTests: XCTestCase {
     private var turns: [ACPTurn] = []
 
     override func setUp() async throws {
+        TestMemory.isolate()
         session = ChatSession(restore: false)
         turns = []
         session.workspace = FileManager.default.temporaryDirectory

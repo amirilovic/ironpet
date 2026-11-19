@@ -21,8 +21,8 @@ struct Presence {
 final class MicWatch {
     private let monitor: CallMonitor
 
-    init(monitor: CallMonitor? = nil) {
-        self.monitor = monitor ?? CallMonitor(detector: CallDetector(source: { [] }, debounce: 0))
+    init(monitor: CallMonitor? = nil, ignored: @escaping () -> [String] = { [] }) {
+        self.monitor = monitor ?? CallMonitor(detector: CallDetector(source: { [] }, debounce: 0, ignored: ignored))
     }
 
     var isRunning: Bool { monitor.isRunning }

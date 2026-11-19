@@ -33,6 +33,17 @@ final class TaskStoreTests: XCTestCase {
         return store
     }
 
+    func testLabelEditsPublishTheNewUpdatedTime() throws {
+        let id = try store.create(title: "Ship", source: .user, by: "user").id
+        advance(30)
+        _ = try store.update(id, addLabels: ["team": "core"], by: "user")
+        XCTAssertEqual(store.task(id)?.updated, clock)
+        advance(30)
+        _ = try store.update(id, removeLabels: ["team"], by: "user")
+        XCTAssertEqual(store.task(id)?.updated, clock)
+        XCTAssertEqual(store.task(id)?.labels, [:])
+    }
+
     private func advance(_ seconds: TimeInterval) { clock = clock.addingTimeInterval(seconds) }
 
     private func day(_ text: String) -> Date {
@@ -63,6 +74,71 @@ final class TaskStoreTests: XCTestCase {
 
     private func linkRows(_ id: String) throws -> Int64 {
         try XCTUnwrap(database.read { try $0.rows("SELECT COUNT(*) FROM task_links WHERE task = ?", [id]) }.first?.first as? Int64)
+    }
+
+    // MARK: Labels
+
+    private func labels(_ result: [String: Any]) -> [String: String] { result["labels"] as? [String: String] ?? [:] }
+
+    private func createLabelled(_ title: String, _ labels: [String: Any]?) throws -> String {
+        var args: [String: Any] = ["title": title, "origin": ["kind": "agent", "ref": "t", "reason": "test"]]
+        if let labels { args["labels"] = labels }
+        return try XCTUnwrap(try call("create", args)["id"] as? String)
+    }
+
+    func testCreateWithLabelsReturnsThemFromGet() throws {
+        let id = try createLabelled("Ship it", ["merge": "auto"])
+        XCTAssertEqual(labels(try call("get", ["id": id])), ["merge": "auto"])
+        // Survives a reload from the database.
+        store = makeStore()
+        XCTAssertEqual(store.task(id)?.labels, ["merge": "auto"])
+    }
+
+    func testUpdateWithoutLabelsKeepsThem() throws {
+        let id = try createLabelled("Ship it", ["merge": "auto", "repo": "band"])
+        _ = try call("update", ["id": id, "changes": ["notes": "new notes", "title": "Ship it now"]])
+        _ = try call("update", ["id": id, "changes": ["status": "in_progress"], "note": "started"])
+        _ = try call("close", ["id": id, "note": "done"])
+        XCTAssertEqual(labels(try call("get", ["id": id])), ["merge": "auto", "repo": "band"])
+    }
+
+    func testUpdateMergesAndRemovesLabels() throws {
+        let id = try createLabelled("Ship it", ["a": "1", "b": "2"])
+        _ = try call("update", ["id": id, "changes": ["labels": ["c": "3"], "remove_labels": ["a"]]])
+        XCTAssertEqual(labels(try call("get", ["id": id])), ["b": "2", "c": "3"])
+        _ = try call("update", ["id": id, "changes": ["labels": ["b": "9"]]])
+        XCTAssertEqual(labels(try call("get", ["id": id])), ["b": "9", "c": "3"])
+        let history = try XCTUnwrap(try call("get", ["id": id])["history"] as? [[String: Any]])
+        XCTAssertTrue(history.contains { ($0["detail"] as? String)?.hasPrefix("labels:") == true })
+    }
+
+    func testListFiltersByLabel() throws {
+        let auto = try createLabelled("Auto one", ["merge": "auto", "repo": "band"])
+        _ = try createLabelled("Manual", ["merge": "manual"])
+        _ = try createLabelled("Plain", nil)
+        XCTAssertEqual(ids(try call("list", ["labels": ["merge": "auto"]])), [auto])
+        XCTAssertEqual(ids(try call("list", ["labels": ["merge": "auto", "repo": "ironpet"]])), [])
+        XCTAssertEqual(ids(try call("list", [:])).count, 3)
+    }
+
+    func testInvalidLabelKeysAreRefused() throws {
+        for key in ["", "   ", "two words", "a=b", "a,b", "tab\there"] {
+            let message = callError("create", ["title": "X \(key.count)", "origin": ["kind": "agent", "ref": "t", "reason": "r"], "labels": [key: "v"]])
+            XCTAssertNotNil(message, "key \"\(key)\" was accepted")
+        }
+        XCTAssertTrue(try XCTUnwrap(callError("create", ["title": "Y", "origin": ["kind": "agent", "ref": "t", "reason": "r"], "labels": [" ": "v"]])).contains("label key is empty"))
+        let id = try createLabelled("Z", ["a": "1"])
+        XCTAssertNotNil(callError("update", ["id": id, "changes": ["labels": ["bad key": "v"]]]))
+        XCTAssertNotNil(callError("update", ["id": id, "changes": ["remove_labels": [" "]]]))
+        XCTAssertNotNil(callError("update", ["id": id, "changes": ["labels": ["a": ""]]]))
+        XCTAssertEqual(store.task(id)?.labels, ["a": "1"])
+    }
+
+    func testDeleteRemovesLabelRows() throws {
+        let id = try createLabelled("Gone", ["a": "1"])
+        _ = try call("delete", ["id": id])
+        let count = try XCTUnwrap(database.read { try $0.rows("SELECT COUNT(*) FROM task_labels WHERE task = ?", [id]) }.first?.first as? Int64)
+        XCTAssertEqual(count, 0)
     }
 
     // MARK: Create and update

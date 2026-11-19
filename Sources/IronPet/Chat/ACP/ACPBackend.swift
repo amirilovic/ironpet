@@ -104,6 +104,8 @@ final class ACPBackend {
 
     /// A restricted run gets only its own working folder: no memory or screenshot folders. Meeting summaries use it.
     var restricted = false
+    /// False leaves the memory folder out of an unrestricted session's extra folders, for a session that is not the user's chat.
+    var sharesMemoryFolder = true
 
     /// The feature this backend's turns count under in the Usage tab. Nil records nothing, which is the default for anything
     /// that is not an ironpet feature.
@@ -113,6 +115,10 @@ final class ACPBackend {
 
     /// MCP servers every unrestricted session gets, as ACP `mcpServers` entries. ironpet's own automation tools go here.
     nonisolated(unsafe) static var defaultMCPServers: () -> [JSON] = { [] }
+
+    /// Names this session to ironpet's own MCP server when it is not the user's chat (`automation:<id>`), so a memory note it saves is
+    /// marked as outside text and not filed under the chat that happens to be open.
+    var mcpCaller: String?
 
     /// Receives transcript updates (text, tool calls) that arrive while no prompt is in flight, such as a background
     /// subagent's result after its turn ended.
@@ -422,7 +428,17 @@ final class ACPBackend {
     // MARK: Sessions
 
     /// The MCP servers this backend's sessions get: all of ironpet's for the chat, none for a restricted run.
-    var sessionMCPServers: [JSON] { restricted ? [] : mcpServers ?? Self.defaultMCPServers() }
+    var sessionMCPServers: [JSON] {
+        guard !restricted else { return [] }
+        let servers = mcpServers ?? Self.defaultMCPServers()
+        guard let mcpCaller else { return servers }
+        return servers.map { server in
+            guard server["name"] as? String == "ironpet" else { return server }
+            var named = server
+            named["env"] = (server["env"] as? [JSON] ?? []) + [["name": MCPEndpoint.callerVariable, "value": mcpCaller]]
+            return named
+        }
+    }
     /// Replaces `defaultMCPServers` for this backend's sessions, such as a background job's narrower set.
     var mcpServers: [JSON]?
 
@@ -445,8 +461,9 @@ final class ACPBackend {
         if let meta = Self.toolRulesMeta(turn) { params["_meta"] = meta }
         let sessionCapabilities = capabilities["sessionCapabilities"] as? JSON ?? [:]
         if sessionCapabilities["additionalDirectories"] != nil, !restricted {
-            for dir in [Memory.directory, ScreenCapture.directory] { try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
-            params["additionalDirectories"] = [Memory.directory.path, ScreenCapture.directory.path]
+            let folders = (sharesMemoryFolder ? [FileMemoryStore.directory] : []) + [ScreenCapture.directory]
+            for dir in folders { try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+            params["additionalDirectories"] = folders.map(\.path)
         }
         if let existing = sessionID ?? turn.resume, capabilities["loadSession"] as? Bool == true {
             sessionID = existing

@@ -55,17 +55,20 @@ final class JobService: ObservableObject {
     var turnTimeout: TimeInterval = 3_600
     /// True while the chat runs a turn of its own on this session (a thread id). A job must not start a second process on it.
     var sessionBusy: (String) -> Bool = { _ in false }
-    var makeAgent: (ACPAgent) -> JobAgent = { agent in
+    var makeAgent: (ACPAgent, Job) -> JobAgent = { agent, job in
         let backend = ACPBackend(agent: agent)
         backend.usageFeature = .jobs
         backend.mcpServers = MCPEndpoint.jobScoped(ACPBackend.defaultMCPServers())
+        // Memory notes the job saves name the job and default to its folder.
+        backend.mcpCaller = MemoryMCP.jobCaller + job.id
         // Nobody is watching a job to fill in a form, so the agent is told no and carries on.
         backend.onElicitation = { _, respond in respond(.decline) }
         return backend
     }
     /// The text a job's first turn starts with, before the request.
     var preamble: (Job) -> String = { job in
-        JobService.instructions(job) + "\n\n" + Memory.preamble(for: URL(fileURLWithPath: job.folder), keepsTasks: false)
+        JobService.instructions(job) + "\n\n"
+            + MemoryPreamble.build(store: FileMemoryStore.shared, workspace: URL(fileURLWithPath: job.folder), firstMessage: job.prompt, keepsTasks: false)
     }
     /// Shows Allow and Deny for a job's request. The id is unique per request; `clearApproval` takes it down.
     var askApproval: (_ id: String, _ job: Job, _ title: String, _ detail: String, _ decide: @escaping (Bool) -> Void) -> Void = { _, _, _, _, _ in }
@@ -308,7 +311,7 @@ final class JobService: ObservableObject {
             return finish(job.id, state: .failed, error: "The agent \(job.agent) is not available any more.")
         }
         let resumed = job.thread.flatMap(ThreadStore.load)
-        let run = Run(agent: makeAgent(agent), transcript: TranscriptRecorder(items: resumed?.items ?? []))
+        let run = Run(agent: makeAgent(agent, job), transcript: TranscriptRecorder(items: resumed?.items ?? []))
         run.followUps = pendingFollowUps.removeValue(forKey: job.id) ?? []
         runs[job.id] = run
         let id = job.id

@@ -9,6 +9,7 @@ final class ChatSpeechTests: XCTestCase {
     private var spoken: [String] = []
 
     override func setUp() async throws {
+        TestMemory.isolate()
         session = ChatSession(restore: false)
         session.sendAfterDictation = true
         session.workspace = FileManager.default.temporaryDirectory
@@ -97,6 +98,49 @@ final class ChatSpeechTests: XCTestCase {
         session.toggleSpeech(reply)
         await settle()
         XCTAssertEqual(spoken, ["CI passed."])
+    }
+
+    func testButtonReadsWithSpokenRepliesOff() async {
+        session.speech.isEnabled = { false }
+        session.receiveTranscript("status?")
+        await answer(0, "All green.")
+        XCTAssertEqual(spoken, [], "off reads nothing on its own")
+        let reply = try! XCTUnwrap(session.items.last { if case .assistant = $0.kind { true } else { false } })
+        session.toggleSpeech(reply)
+        await settle()
+        XCTAssertEqual(spoken, ["All green."])
+    }
+
+    func testSpokenRepliesOnStillReadsAutomaticallyAndShowsTheButton() async {
+        session.speech.isEnabled = { true }
+        session.receiveTranscript("status?")
+        await answer(0, "All green.")
+        XCTAssertEqual(spoken, ["All green."], "on reads the reply by itself")
+        var speech = Config.Speech()
+        speech.enabled = true
+        XCTAssertTrue(speech.canSpeak, "on still shows the speaker button")
+        let reply = try! XCTUnwrap(session.items.last { if case .assistant = $0.kind { true } else { false } })
+        session.toggleSpeech(reply)
+        await settle()
+        XCTAssertEqual(spoken, ["All green.", "All green."], "the button still reads on demand")
+    }
+
+    func testButtonShowsWithOffAndAModel() {
+        var speech = Config.Speech()
+        XCTAssertFalse(speech.enabled)
+        XCTAssertTrue(speech.canSpeak, "the default Kokoro model counts")
+        speech.model = "  "
+        XCTAssertFalse(speech.canSpeak)
+    }
+
+    func testFailedRequestShowsTheSpeechError() async {
+        struct Down: LocalizedError { var errorDescription: String? { "voice server unreachable" } }
+        session.speech.isEnabled = { false }
+        session.speech.synthesize = { _ in throw Down() }
+        session.toggleSpeech(.init(kind: .assistant("Hello there.")))
+        await settle()
+        XCTAssertTrue(session.items.contains { if case .error("voice server unreachable") = $0.kind { true } else { false } })
+        XCTAssertNil(session.speech.speakingID)
     }
 
     func testSendingStopsSpeech() async {

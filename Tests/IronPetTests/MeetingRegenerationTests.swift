@@ -240,7 +240,7 @@ final class MeetingRegenerationTests: XCTestCase {
     }
 
     func testOnlyNewItemsAreOfferedAsTasksAgain() {
-        let new = "## Action items\n- [ ] Send the deck (owner: Me)\n- [ ] Book the room (owner: Me)\n- [ ] Ask Sam (owner: Sam)\n"
+        let new = "## Action items\n- [ ] Send the deck (owner: Me)\n- [ ] Book the room (owner: Me)\n- [ ] Ask Sam (owner: Sam, waiting: yes)\n- [ ] Fix the build (owner: Joonas)\n"
         let offered = ActionItems.newSuggestions(old: oldSummary, new: new)
         XCTAssertEqual(offered.map(\.title), ["Book the room", "Ask Sam"])
         XCTAssertEqual(offered.map(\.waitingOn), [nil, "Sam"])

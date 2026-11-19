@@ -355,7 +355,7 @@ final class SkillInstallerTests: XCTestCase {
 
     // S6
     func testTheSystemPromptPointsToTheChecklist() {
-        let prompt = Memory.taskInstructions
+        let prompt = MemoryPreamble.taskInstructions
         XCTAssertTrue(prompt.contains("add it to ~/.ironpet/HEARTBEAT.md. The heartbeat skill explains the format."))
         XCTAssertTrue(prompt.contains("The ironpet-tasks skill has the rules for tasks and for when you may close one."))
     }

@@ -120,6 +120,25 @@ final class DatabaseTests: XCTestCase {
     }
 }
 
+final class MemoryMigrationTests: XCTestCase {
+    func testADatabaseFromTheLastReleaseGetsTheMemoryTablesAndKeepsItsData() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-memory-migration-\(UUID().uuidString)/ironpet.db")
+        addTeardownBlock { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        XCTAssertGreaterThan(MemoryIndex.migrations.map(\.version).min() ?? 0,
+                             AppMigrations.all.filter { !MemoryIndex.migrations.map(\.version).contains($0.version) && $0.version < 510 }.map(\.version).max() ?? 0,
+                             "the memory migration is numbered above every other, or installs already past it would skip it")
+        do {
+            let old = try Database(path: file, migrations: AppMigrations.all.filter { $0.version < 510 })
+            try old.write { try $0.execute("INSERT INTO usage_events(at, feature, model) VALUES(1, 'chat', 'm')") }
+        }
+        let migrated = try Database(path: file, migrations: AppMigrations.all)
+        XCTAssertEqual(migrated.schemaVersion, AppMigrations.all.map(\.version).max())
+        let names = Set(try migrated.read { try $0.rows("SELECT name FROM sqlite_master") }.compactMap { $0[0] as? String })
+        XCTAssertTrue(names.isSuperset(of: ["memory_docs", "memory_fts", "memory_reflections", "memory_changes"]))
+        XCTAssertEqual(try migrated.read { try $0.rows("SELECT COUNT(*) FROM usage_events") }.first?.first as? Int64, 1)
+    }
+}
+
 @MainActor
 final class DatabaseUnavailableTests: XCTestCase {
     private var dir: URL!

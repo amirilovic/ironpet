@@ -6,15 +6,10 @@ private final class FakeDeskAgent: FrontDeskAgent {
     var onPermission: ((ACPToolCall, @escaping (ApprovalDecision) -> Void) -> Void)?
     var turns: [ACPTurn] = []
     var replies = ["Two jobs are running.", "Started it."]
-    var summary = "Asked what was running; started the lint job."
     private(set) var prepared = 0
     private(set) var newSessions = 0
     private(set) var shutDown = false
     private(set) var cancels = 0
-    /// The summary turn waits for `releaseSummary()`.
-    var holdSummary = false
-    private var summaryGate: CheckedContinuation<Void, Never>?
-    var isSummarizing: Bool { summaryGate != nil }
     private var session = 1
 
     func prepare(_ workspace: URL) async { prepared += 1 }
@@ -25,20 +20,10 @@ private final class FakeDeskAgent: FrontDeskAgent {
     func cancel() { cancels += 1 }
     func shutdown() { shutDown = true }
 
-    func releaseSummary() {
-        summaryGate?.resume()
-        summaryGate = nil
-    }
-
     func runTurn(_ turn: ACPTurn, onEvent: @escaping (AgentEvent) -> Void) async {
         turns.append(turn)
         onEvent(.session("voice-\(session)"))
-        if turn.prompt == FrontDesk.summaryPrompt {
-            if holdSummary { await withCheckedContinuation { summaryGate = $0 } }
-            onEvent(.assistant(summary))
-        } else {
-            onEvent(.assistant(replies.isEmpty ? "Okay." : replies.removeFirst()))
-        }
+        onEvent(.assistant(replies.isEmpty ? "Okay." : replies.removeFirst()))
         onEvent(.finished(error: nil))
     }
 }
@@ -49,6 +34,7 @@ final class FrontDeskTests: XCTestCase {
     private var savedThreads: URL!
     private var agents: [FakeDeskAgent] = []
     private var memory: FileMemoryStore!
+    private var ended: [String] = []
 
     override func setUp() async throws {
         folder = FileManager.default.temporaryDirectory.appendingPathComponent("frontdesk-\(UUID().uuidString)")
@@ -57,6 +43,7 @@ final class FrontDeskTests: XCTestCase {
         ThreadStore.directory = folder.appendingPathComponent("threads")
         memory = FileMemoryStore(directory: folder.appendingPathComponent("memory"))
         agents = []
+        ended = []
     }
 
     override func tearDown() async throws {
@@ -72,7 +59,9 @@ final class FrontDeskTests: XCTestCase {
             agents.append(agent)
             return agent
         }
-        desk.memory = memory
+        let memory = memory!
+        desk.memory = { memory }
+        desk.onConversationEnded = { [unowned self] in ended.append($0) }
         desk.petName = { "Ghost" }
         desk.workspace = folder.appendingPathComponent("scratch")
         return desk
@@ -83,13 +72,14 @@ final class FrontDeskTests: XCTestCase {
         XCTAssertTrue(condition(), "timed out", file: file, line: line)
     }
 
-    func testAConversationIsOneVoiceThreadAndEndsWithASummary() async throws {
-        try memory.remember("Prefers short answers", kind: .fact, workspace: nil)
+    func testAConversationIsOneVoiceThreadThatMemoryReadsWhenItEnds() async throws {
+        _ = try memory.remember("Prefers short answers", scope: .me, source: MemoryNote.userSource).get()
+        _ = try memory.remember("Leads the platform team", scope: .people, person: "Maria", source: MemoryNote.userSource).get()
         let desk = desk()
         desk.prepare()
         await until { agents.first?.prepared == 1 }
 
-        let first = try await desk.reply(to: "what's running")
+        let first = try await desk.reply(to: "what's running for Maria")
         let second = try await desk.reply(to: "start the lint")
         XCTAssertEqual(first, "Two jobs are running.")
         XCTAssertEqual(second, "Started it.")
@@ -98,22 +88,22 @@ final class FrontDeskTests: XCTestCase {
         XCTAssertEqual(turns.map(\.model), ["haiku", "haiku"])
         let preamble = try XCTUnwrap(turns[0].preamble)
         XCTAssertTrue(preamble.contains("You are Ghost"))
-        XCTAssertTrue(preamble.contains("Prefers short answers"), "memory is recalled")
+        XCTAssertTrue(preamble.contains("Prefers short answers"), "the user's notes are recalled")
+        XCTAssertTrue(preamble.contains("Leads the platform team"), "so are the people the user names")
         XCTAssertNil(turns[1].preamble)
 
         let thread = try XCTUnwrap(ThreadStore.load("voice-1"))
         XCTAssertEqual(thread.voice, true)
-        XCTAssertEqual(thread.title, "what's running")
+        XCTAssertEqual(thread.title, "what's running for Maria")
         let said = thread.items.compactMap { item -> String? in
             if case .user(let text) = item.kind { return item.origin == ChatSession.voiceOrigin ? text : nil } else { return nil }
         }
-        XCTAssertEqual(said, ["what's running", "start the lint"])
+        XCTAssertEqual(said, ["what's running for Maria", "start the lint"])
 
         desk.finish()
-        await until { agents[0].newSessions == 1 }
-        XCTAssertEqual(agents[0].turns.last?.prompt, FrontDesk.summaryPrompt)
-        XCTAssertEqual(memory.list(kind: .conversation, workspace: nil).map(\.text), ["Asked what was running; started the lint job."])
-        XCTAssertEqual(ThreadStore.load("voice-1")?.items.count, thread.items.count, "the summary turn is not in the thread")
+        XCTAssertEqual(agents[0].newSessions, 1)
+        XCTAssertEqual(agents[0].turns.count, 2, "no extra turn after the conversation")
+        XCTAssertEqual(ended, ["voice-1"], "the thread goes to memory's reflection pass")
 
         // The next conversation is a new session with the preamble again.
         _ = try await desk.reply(to: "anything need me")
@@ -121,50 +111,14 @@ final class FrontDeskTests: XCTestCase {
         XCTAssertNotNil(ThreadStore.load("voice-2"))
     }
 
-    func testAReplyCancelledWhileTheSummaryRunsNeverReachesTheAgent() async throws {
-        let desk = desk()
-        _ = try await desk.reply(to: "what's running")
-        let agent = agents[0]
-        agent.holdSummary = true
-        desk.finish()
-        await until { agent.isSummarizing }
-
-        let next = Task { try await desk.reply(to: "start the lint") }
-        try await Task.sleep(for: .milliseconds(20))
-        desk.cancel()
-        XCTAssertEqual(agent.cancels, 0, "the summary turn is not the one cancelled")
-        agent.releaseSummary()
-        do {
-            _ = try await next.value
-            XCTFail("the cancelled reply should throw")
-        } catch {
-            XCTAssertTrue(error is CancellationError)
-        }
-        XCTAssertEqual(agent.turns.map(\.prompt), ["what's running", FrontDesk.summaryPrompt])
-        XCTAssertEqual(memory.list(kind: .conversation, workspace: nil).map(\.text), [agent.summary])
-    }
-
-    func testAConversationWithNothingSaidIsNotSummarized() async throws {
+    func testAConversationWithNothingSaidIsNotReadByMemory() async throws {
         let desk = desk()
         desk.prepare()
         await until { agents.first?.prepared == 1 }
         desk.finish()
         XCTAssertEqual(agents[0].newSessions, 1)
         XCTAssertTrue(agents[0].turns.isEmpty)
-    }
-
-    func testEndingAnEmptyConversationDuringTheSummaryKeepsTheSummarysSession() async throws {
-        let desk = desk()
-        _ = try await desk.reply(to: "what's running")
-        let agent = agents[0]
-        agent.holdSummary = true
-        desk.finish()
-        await until { agent.isSummarizing }
-        desk.finish()
-        XCTAssertEqual(agent.newSessions, 0, "the summary still needs its session")
-        agent.releaseSummary()
-        await until { agent.newSessions == 1 }
-        XCTAssertEqual(memory.list(kind: .conversation, workspace: nil).map(\.text), [agent.summary])
+        XCTAssertTrue(ended.isEmpty)
     }
 
     func testOnlyALiveReplyMayUseTools() async throws {

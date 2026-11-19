@@ -11,6 +11,18 @@ final class TaskCLIParsingTests: XCTestCase {
         do { _ = try TaskCLI.request(arguments); return nil } catch { return (error as? TaskError)?.message }
     }
 
+    func testLabelOptions() throws {
+        XCTAssertEqual(try request(["list", "--label", "merge=auto"]).args, ["labels": ["merge": "auto"]])
+        XCTAssertEqual(try request(["list", "--label", "merge=auto", "--label", "repo=band"]).args, ["labels": ["merge": "auto", "repo": "band"]])
+        XCTAssertEqual(try request(["add", "Ship", "--label", "merge=auto"]).args["labels"] as? NSDictionary, ["merge": "auto"])
+        let update = try request(["update", "t", "--label", "a=1", "--unlabel", "b"])
+        XCTAssertEqual(update.op, "update")
+        let changes = try XCTUnwrap(update.args["changes"] as? NSDictionary)
+        XCTAssertEqual(changes["labels"] as? NSDictionary, ["a": "1"])
+        XCTAssertEqual(changes["remove_labels"] as? [String], ["b"])
+        XCTAssertNotNil(error(["list", "--label", "nokey"]))
+    }
+
     func testList() throws {
         XCTAssertEqual(try request(["list"]).op, "list")
         XCTAssertEqual(try request(["list"]).args, [:])

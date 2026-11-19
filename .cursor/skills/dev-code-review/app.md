@@ -10,12 +10,13 @@ The design is `SPEC.md`. Swift 5.10 tools (Swift 5 language mode), macOS 14 mini
 | `App/` | App glue: `AppDelegate` (menus, status, wiring), Settings and welcome windows, hotkeys (Carbon), login item, notifications (`Notifier`), speech-bubble announcements (`Announcer`), jumping to a session's terminal or editor (`SourceJumper`, `Editors`), `TestControl` (`/test/*`, test mode only), `PreviewRenderer` (README screenshots) |
 | `Pet/` | The pet window and sprite atlas (`PetController`, `PetView`, `Atlas`, `PetMood`), speech bubbles, the ironpet window (`IronPetPanel`: chat, agents, alerts, tasks, transcripts, actions, automations and Today in one sidebar window) |
 | `Brief/` | The morning brief and recap: `BriefBuilder` (pure, local data only), `BriefSource` and `BriefModel` (gather from the stores, feed the Today page) |
-| `Jobs/` | Background jobs (`JobService`, `Job`, migration 500), folder matching (`ProjectResolver`), and the `jobs_*`, `status_*`, `memory_*` and `projects_resolve` tools (`AssistantMCP`, `AssistantContext`) |
+| `Jobs/` | Background jobs (`JobService`, `Job`, migration 500), folder matching (`ProjectResolver`), and the `jobs_*`, `status_*` and `projects_resolve` tools (`AssistantMCP`, `AssistantContext`) |
 | `Sessions/` | Watched agent sessions: hook event mapping to status (`SessionStore`, `AgentSession`), process ancestry (`ProcessTree`) |
 | `Hooks/` | The hook shell script (`HookScript`) and merging it into each agent's config, with backups and uninstall (`HookInstaller`) |
 | `Bridge/` | Local HTTP server on `127.0.0.1` with the token (`EventServer`), the status snapshot it serves |
-| `Chat/` | The chat view, sessions, saved threads, memory notes, markdown, screenshots and image/file intake, Wispr Flow bridge, workspace detection, MCP sign-in sharing |
+| `Chat/` | The chat view, sessions, saved threads, markdown, screenshots and image/file intake, Wispr Flow bridge, workspace detection, MCP sign-in sharing |
 | `Chat/ACP/` | Agent Client Protocol: JSON-RPC client over stdio (`ACPClient`), one process per chat (`ACPBackend`), runtimes for the bundled adapters and the Bun download (`ACPRuntime`), tool calls and `ApprovalRules` (`ACPToolCall`), the agent catalog (`AgentCatalogData.swift` is generated) |
+| `Memory/` | Ghost's memory: the note format and project keys from the git remote (`MemoryNote`), the `MemoryStore` protocol and the files with `.history` and Undo behind it (`FileMemoryStore`), the search index, reflection cursors and change log in `ironpet.db` (`MemoryIndex`), the preamble (`MemoryPreamble`), the restricted reflection and tidy passes (`MemoryReflector`, `MemoryTidier`) and the `memory_*` MCP tools (`MemoryMCP`). Settings → Memory is `App/MemorySettings.swift` |
 | `Signals/` | GitHub (via `gh`) and Sentry polling and the alert store |
 | `Voice/` | Voice notes: hold-to-talk key, microphone capture and conversion, WAV encoding, the transcription client, the level buffer and waveform bar, the Keychain key. Spoken replies: the speech client, reply-to-speech text and the player. Voice mode: the conversation state machine (`VoiceConversation`), the echo-cancelled microphone and end-of-speech detection (`ConversationMic`, `VoiceActivity`), the front-desk agent session (`FrontDesk`), the pill and the app wiring (`VoicePill`, `VoiceModeController`) |
 | `Meeting/` | Meeting transcripts: call detection, track sources (mic and ScreenCaptureKit), recorder and chunker, transcript assembly, summary, panel |
@@ -96,6 +97,7 @@ Installed-app and e2e checks change the user's machine (see Ground rules in `SKI
 | `Tasks/`, task tools, `IronPet tasks` | `tasks` |
 | `Activity/`, digest bubbles | `welcome-back` |
 | `Brief/`, `TodayView`, `digest` actions, daily `catchUpMinutes` | `brief` |
+| `Memory/`, `MemoryPreamble`, `memory_*` tools, Settings → Memory | `memory` (opt-in, runs chat turns and one reflection pass); `cursor` and `claude` for the preamble |
 
 Summary rows for the **App** table:
 

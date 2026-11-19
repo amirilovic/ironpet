@@ -4,7 +4,7 @@ import Foundation
 /// (Band agents, Claude Code or Codex sessions reported through hooks, automation shell commands) has no feature here, so it
 /// cannot be recorded.
 enum UsageFeature: String, CaseIterable, Codable {
-    case chat, automations, jobs, voiceMode, meetingSummary, voiceTranscription, meetingTranscription
+    case chat, automations, jobs, voiceMode, meetingSummary, voiceTranscription, meetingTranscription, memory
 
     var title: String {
         switch self {
@@ -15,6 +15,7 @@ enum UsageFeature: String, CaseIterable, Codable {
         case .meetingSummary: return "Meeting summaries"
         case .voiceTranscription: return "Voice transcription"
         case .meetingTranscription: return "Meeting transcription"
+        case .memory: return "Memory"
         }
     }
 
@@ -233,7 +234,7 @@ final class UsageStore: @unchecked Sendable {
 /// Every feature's migrations, in the order the database applies them.
 enum AppMigrations {
     static let all = AutomationState.migrations + UsageStore.migrations + TaskStore.migrations + CaptureStore.migrations + ActivityLog.migrations
-        + JobService.migrations
+        + JobService.migrations + MemoryIndex.migrations
 }
 
 // MARK: Agent usage

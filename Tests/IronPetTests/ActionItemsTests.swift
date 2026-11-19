@@ -45,13 +45,49 @@ final class ActionItemsTests: XCTestCase {
         XCTAssertEqual(mine.map(\.due), ["2026-11-20", nil, "tomorrow", "Monday", "Nov 20, 2026"])
     }
 
-    func testOthersItemsAreWaitingOnTheirOwnerAndUnownedOnesAreLeftOut() {
+    func testOthersItemsAreSuggestedOnlyWhenTheUserWaitsOnThem() {
+        let text = """
+        ## Action items
+        - [ ] Send the budget (owner: Me)
+        - [ ] Deliver the contract (owner: Ana, waiting: yes)
+        - [ ] Refactor the parser (owner: Joonas)
+        - [ ] Book the venue (owner: Priya, waiting: no)
+        """
+        let suggested = ActionItems.suggestions(text)
+        XCTAssertEqual(suggested.map(\.title), ["Send the budget", "Deliver the contract"])
+        XCTAssertEqual(suggested.map(\.waitingOn), [nil, "Ana"])
+    }
+
+    func testASummaryWithoutWaitingSuggestsOnlyMyItems() {
         let suggested = ActionItems.suggestions(summary)
-        XCTAssertEqual(suggested.map(\.title), ["Send the deck to Sam", "Review the budget", "Book the venue", "Fix login (the SSO one)",
-                                                "Draft the agenda", "Call   the bank", "Pay the invoice"])
-        XCTAssertEqual(suggested.map(\.waitingOn), [nil, "Them", "Priya", nil, nil, nil, nil])
-        XCTAssertEqual(suggested[2].due, "Friday")
-        XCTAssertEqual(ActionItems.suggestions("## Action items\n- [ ] Send the slides (owner: Ana, Me)\n").map(\.waitingOn), ["Ana"])
+        XCTAssertEqual(suggested.map(\.title), ["Send the deck to Sam", "Fix login (the SSO one)", "Draft the agenda", "Call   the bank",
+                                                "Pay the invoice"])
+        XCTAssertEqual(suggested.compactMap(\.waitingOn), [])
+    }
+
+    func testWaitingIsReadInAnyOrderWithOwnerAndDue() {
+        let text = """
+        ## Action items
+        - [ ] A (waiting: yes, owner: Ana, due: Nov 20, 2026)
+        - [ ] B (owner: Ana, due: Nov 20, 2026, waiting: yes)
+        - [ ] C (due: Friday, waiting: yes, owner: Ana)
+        - [ ] D (owner: Ana, waiting: no)
+        """
+        let items = ActionItems.parse(text)
+        XCTAssertEqual(items.map(\.waiting), [true, true, true, false])
+        XCTAssertEqual(items.map(\.due), ["Nov 20, 2026", "Nov 20, 2026", "Friday", nil])
+        XCTAssertEqual(items.map(\.owner), ["Ana", "Ana", "Ana", "Ana"])
+    }
+
+    func testOpenItemsStayTheUsersOwnWhateverWaitingSays() {
+        let text = "## Action items\n- [ ] Mine (owner: Me)\n- [ ] Theirs (owner: Ana, waiting: yes)\n- [ ] Nobody's\n"
+        XCTAssertEqual(ActionItems.openItems(text).map(\.title), ["Mine", "Nobody's"])
+    }
+
+    func testPromptTextAsksForWaitingOnlyOnOthersItems() async {
+        let prompt = await MeetingController.summaryPrompt(transcript: "x")
+        XCTAssertTrue(prompt.contains("waiting: yes"))
+        XCTAssertTrue(prompt.contains("never add it to an item owned by Me"))
     }
 
     func testNoneAndMissingSectionGiveNothing() {

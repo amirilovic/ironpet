@@ -63,6 +63,8 @@ struct TaskItem: Identifiable, Equatable {
     var waitingOn: String? = nil
     /// Where the task came from, for diagnostics: a JSON object such as `{"meeting": "/path"}`. Nil when unknown.
     var sourceRef: String? = nil
+    /// Key/value labels such as `merge=auto`. Data for filtering, never instructions.
+    var labels: [String: String] = [:]
 
     /// Only the user can take the next step. A task waiting on someone else never counts, whatever its status.
     var needsUser: Bool { status == .needsYou && waitingOn == nil }
@@ -208,6 +210,52 @@ enum TaskValidator {
     static let maxNotes = 4096
     static let maxLinks = 10
     static let maxWaitingOn = 100
+    static let maxLabels = 20
+    static let maxLabelKey = 40
+    static let maxLabelValue = 100
+
+    /// A label key: one word with no whitespace, control characters, `=` or `,`.
+    static func labelKey(_ raw: String) throws -> String {
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { throw TaskError(message: "label key is empty") }
+        guard key.count <= maxLabelKey else { throw TaskError(message: "label key \"\(key)\" is longer than \(maxLabelKey) characters") }
+        guard !key.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) || $0.properties.generalCategory == .control || $0 == "=" || $0 == "," }) else {
+            throw TaskError(message: "label key \"\(key)\" must not contain whitespace, \"=\" or \",\"")
+        }
+        return key
+    }
+
+    /// A `{key: value}` object. Values are strings (numbers and booleans are written as text) on one line.
+    static func labels(_ value: Any?) throws -> [String: String] {
+        guard let value, !(value is NSNull) else { return [:] }
+        guard let object = value as? [String: Any] else { throw TaskError(message: "labels must be an object of key/value strings") }
+        var result: [String: String] = [:]
+        for (rawKey, rawValue) in object {
+            let key = try labelKey(rawKey)
+            guard result[key] == nil else { throw TaskError(message: "label key \"\(key)\" is given twice") }
+            let text: String
+            if let string = rawValue as? String { text = string }
+            else if let number = rawValue as? NSNumber { text = "\(number)" }
+            else { throw TaskError(message: "label \"\(key)\" must have a string value") }
+            let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !clean.isEmpty else { throw TaskError(message: "label \"\(key)\" has an empty value") }
+            guard !clean.contains("\n"), clean.count <= maxLabelValue else {
+                throw TaskError(message: "label \"\(key)\" must be one line of at most \(maxLabelValue) characters")
+            }
+            result[key] = clean
+        }
+        return result
+    }
+
+    /// A list of keys to remove.
+    static func labelKeys(_ value: Any?) throws -> [String] {
+        guard let value, !(value is NSNull) else { return [] }
+        let list = (value as? [Any]) ?? [value]
+        return try list.map { item in
+            guard let raw = item as? String else { throw TaskError(message: "remove_labels must be a list of keys") }
+            return try labelKey(raw)
+        }
+    }
 
     static func title(_ value: Any?) throws -> String {
         guard let raw = value as? String else { throw TaskError(message: "title must be a string") }
@@ -276,5 +324,15 @@ enum TaskValidator {
             }
             return TaskLink(kind: kind, ref: ref, label: (item["label"] as? String).map { String($0.prefix(100)) })
         }
+    }
+}
+
+/// Relative times for task rows. A time up to a minute ahead of the clock, or less than a second behind it, reads "just now"
+/// instead of "in 0 sec.", because a task is stamped by one clock read and drawn by a later one.
+enum TaskTime {
+    static func relative(_ date: Date, now: Date = Date()) -> String {
+        let delta = date.timeIntervalSince(now)
+        if delta > -1, delta < 60 { return "just now" }
+        return date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))
     }
 }
