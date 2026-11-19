@@ -3,7 +3,7 @@ import SwiftUI
 /// The Telegram accordion of Settings → Integrations.
 struct TelegramIntegration: View {
     @ObservedObject var bridge: TelegramBridge
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var token = ""
     @State private var tokenError = false
     @State private var testing = false

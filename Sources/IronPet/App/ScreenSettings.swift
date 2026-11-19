@@ -18,7 +18,7 @@ private struct ScreenSettingsBody: View {
     let service: CaptureService
     let settings: SettingsModel
     @ObservedObject var model: CaptureStatusModel
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var seen: [(bundleId: String, name: String, captures: Int)] = []
     @State private var excludeText = ""
 
@@ -202,7 +202,7 @@ private struct ScreenSettingsBody: View {
 /// Settings → Screen → Desktop control: the switch for the `desktop_*` tools and the list of what agents did with them.
 struct DesktopControlSections: View {
     let settings: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var log: [ActivityEvent] = []
 
     var body: some View {

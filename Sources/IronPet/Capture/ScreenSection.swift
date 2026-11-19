@@ -25,7 +25,7 @@ enum ScreenSectionText {
 /// goes to a model, to MCP or to a log.
 struct ScreenSection: View {
     @ObservedObject var model: CaptureStatusModel
-    @ObservedObject private var config = ConfigStore.shared
+    @ObservedObject private var config = SettingsAPI.live
     /// The capture database. Nil before the app has started.
     var store: CaptureStore?
     var onOpenSettings: () -> Void = {}

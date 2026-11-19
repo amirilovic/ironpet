@@ -38,7 +38,7 @@ final class PetGalleryModel: ObservableObject {
         self.spriteOverride = sprite
     }
 
-    private var sprite: String? { spriteOverride.map { $0() } ?? ConfigStore.shared.config.pet.sprite }
+    private var sprite: String? { spriteOverride.map { $0() } ?? SettingsAPI.live.config.pet.sprite }
 
     var isActive: Bool { viewShown && windowShown }
 
@@ -102,7 +102,7 @@ final class PetGalleryModel: ObservableObject {
     }
 
     func select(_ entry: PetEntry) {
-        ConfigStore.shared.update { PetLibrary.select(entry, in: &$0) }
+        SettingsAPI.live.update { PetLibrary.select(entry, in: &$0) }
     }
 
     /// Copies a sheet the user picked into the pets folder and makes it the pet.
@@ -124,7 +124,7 @@ final class PetGalleryModel: ObservableObject {
 struct PetGallery: View {
     @ObservedObject var gallery: PetGalleryModel
     var buildPet: (String) -> Void
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var asking = false
 
     private let columns = [GridItem(.adaptive(minimum: 92, maximum: 120), spacing: 10)]

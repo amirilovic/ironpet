@@ -9,7 +9,7 @@ struct ActionsSection: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Make \(ConfigStore.shared.config.pet.name) do something")
+                    Text("Make \(SettingsAPI.live.config.pet.name) do something")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)
@@ -249,7 +249,7 @@ private struct SignalRow: View {
                 HStack(spacing: 6) {
                     if signal.url != nil { Button("Open", action: onOpen) }
                     if let onAsk {
-                        Button(action: onAsk) { Label("Ask \(ConfigStore.shared.config.pet.name)", systemImage: "sparkles") }
+                        Button(action: onAsk) { Label("Ask \(SettingsAPI.live.config.pet.name)", systemImage: "sparkles") }
                     }
                 }
                 .controlSize(.small)

@@ -8,7 +8,7 @@ extension Notification.Name {
 /// The Skills section of the General tab: every skill that ships with ironpet, whether agents have it, and a switch to keep
 /// the installed ones up to date without asking.
 struct SkillsSettings: View {
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var entries = SkillManager.standard.entries()
     @State private var note: String?
 

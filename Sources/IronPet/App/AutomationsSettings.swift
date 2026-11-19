@@ -4,7 +4,7 @@ import SwiftUI
 /// The Automations tab: every reminder and watcher with a switch, when it runs next, and how its last run went.
 struct AutomationsSettings: View {
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var config = ConfigStore.shared
+    @ObservedObject private var config = SettingsAPI.live
 
     var body: some View {
         if let service = model.automations {
@@ -17,7 +17,7 @@ struct AutomationsSettings: View {
 
 private struct AutomationList: View {
     @ObservedObject var api: AutomationsAPI
-    @ObservedObject var config: ConfigStore
+    @ObservedObject var config: SettingsAPI
     let showLogs: (String?) -> Void
     let createWithAgent: (String) -> Void
     @State private var asking = false

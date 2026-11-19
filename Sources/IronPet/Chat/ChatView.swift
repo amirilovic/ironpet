@@ -19,7 +19,7 @@ extension View {
 
 struct ChatView: View {
     @ObservedObject var session: ChatAPI
-    @ObservedObject private var config = ConfigStore.shared
+    @ObservedObject private var config = SettingsAPI.live
     @FocusState private var inputFocused: Bool
     @State private var showSettings = false
     @State private var follow = TranscriptFollow()
@@ -124,7 +124,7 @@ struct ChatView: View {
 
     /// The same header as every section: the avatar and the pet's name as the title, the chat's controls on the right.
     private var header: some View {
-        PageHeader(title: ConfigStore.shared.config.pet.name, leading: { PetAvatar(size: 22) }, trailing: { headerControls })
+        PageHeader(title: SettingsAPI.live.config.pet.name, leading: { PetAvatar(size: 22) }, trailing: { headerControls })
     }
 
     private var headerControls: some View {
@@ -984,7 +984,7 @@ struct ChatView: View {
                 .padding(.top, 4)
             }
             HStack(alignment: .bottom, spacing: 6) {
-                TextField(session.isRunning ? "\(ConfigStore.shared.config.pet.name) is working. Enter queues your message." : "Ask \(ConfigStore.shared.config.pet.name)…", text: $session.input, axis: .vertical)
+                TextField(session.isRunning ? "\(SettingsAPI.live.config.pet.name) is working. Enter queues your message." : "Ask \(SettingsAPI.live.config.pet.name)…", text: $session.input, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13.5))
                     .lineLimit(1...8)
@@ -1723,7 +1723,7 @@ struct Thumbnail: View {
 /// The pet's first idle frame, cropped to the face, used as the chat avatar.
 struct PetAvatar: View {
     let size: CGFloat
-    @ObservedObject private var config = ConfigStore.shared
+    @ObservedObject private var config = SettingsAPI.live
     @MainActor private static var cache: (sprite: String?, image: NSImage?)?
 
     @MainActor private static func image(sprite: String?) -> NSImage? {

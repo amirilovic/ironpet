@@ -509,7 +509,7 @@ struct IronPetWindowView: View {
     /// The Today page's content. Nil in tests that do not show it.
     var brief: BriefModel?
     let actions: SessionActions
-    @ObservedObject private var config = ConfigStore.shared
+    @ObservedObject private var config = SettingsAPI.live
 
     var body: some View {
         // One background under the sidebar and the page; the sidebar is glass over it.

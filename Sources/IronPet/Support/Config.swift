@@ -243,6 +243,9 @@ struct Config: Codable, Equatable {
 
     static let file = Paths.root.appendingPathComponent("config.json")
 
+    /// Settings that have no value until set, so the encoded defaults leave them out. `SettingsAPI.patch` accepts these.
+    static let optionalKeys: Set<String> = ["pet.sprite", "meetings.summaryModel", "chat.customImage"]
+
     /// Reads the file, laying it over the defaults. An unreadable or invalid file gives the defaults plus an error.
     static func load(from file: URL = Config.file) -> (config: Config, error: String?) {
         guard let data = try? Data(contentsOf: file) else { return (Config(), nil) }
@@ -266,7 +269,8 @@ struct Config: Codable, Equatable {
         try encoder.encode(self).write(to: file, options: .atomic)
     }
 
-    private func sanitized() -> Config {
+    /// The config with every value clamped into its range and every text trimmed. Loading and every change go through it.
+    func sanitized() -> Config {
         var c = self
         c.pet.name = c.pet.name.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.pet.name.isEmpty { c.pet.name = Pet().name }
@@ -306,7 +310,7 @@ struct Config: Codable, Equatable {
         return c
     }
 
-    private static func merge(_ user: [String: Any], over base: [String: Any]) -> [String: Any] {
+    static func merge(_ user: [String: Any], over base: [String: Any]) -> [String: Any] {
         var result = base
         for (key, value) in user {
             if let nested = value as? [String: Any], let baseNested = base[key] as? [String: Any] {
@@ -318,7 +322,7 @@ struct Config: Codable, Equatable {
         return result
     }
 
-    private static func describe(_ error: Error) -> String {
+    static func describe(_ error: Error) -> String {
         switch error {
         case DecodingError.typeMismatch(_, let context), DecodingError.valueNotFound(_, let context),
              DecodingError.dataCorrupted(let context):
@@ -344,12 +348,22 @@ final class ConfigStore: ObservableObject {
     private var stamp: Date?
     private var timer: Timer?
 
+    /// False for a store that only lives in memory (tests, previews): it never reads or writes `config.json`.
+    private let persists: Bool
+
     private init() {
+        persists = true
         (config, error) = Config.load()
         stamp = Self.modificationDate()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.reloadIfChanged() }
         }
+    }
+
+    /// A store that keeps `config` in memory only.
+    init(memory config: Config) {
+        persists = false
+        self.config = config.sanitized()
     }
 
     /// For `--render-previews`: uses `config` in memory only, never saves it, and stops watching the file.
@@ -359,10 +373,13 @@ final class ConfigStore: ObservableObject {
         error = nil
     }
 
+    /// Applies `change`, clamps the result like loading does, and saves it. Every client's change takes this path.
     func update(_ change: (inout Config) -> Void) {
         var next = config
         change(&next)
+        next = next.sanitized()
         guard next != config else { return }
+        guard persists else { config = next; return }
         if error != nil, FileManager.default.fileExists(atPath: Config.file.path) {
             // The file on disk didn't parse; keep the user's hand edits before replacing it.
             let backup = Config.file.deletingPathExtension().appendingPathExtension("invalid.json")
@@ -380,6 +397,7 @@ final class ConfigStore: ObservableObject {
     }
 
     func reloadIfChanged() {
+        guard persists else { return }
         let current = Self.modificationDate()
         guard current != stamp else { return }
         stamp = current

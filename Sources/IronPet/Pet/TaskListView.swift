@@ -63,7 +63,7 @@ struct TaskListView: View {
         }
     }
 
-    private var petName: String { ConfigStore.shared.config.pet.name }
+    private var petName: String { SettingsAPI.live.config.pet.name }
 
     private var open: [TaskItem] { tasks.all.filter { $0.status != .done } }
 

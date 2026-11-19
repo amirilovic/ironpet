@@ -61,7 +61,7 @@ final class SettingsModel: ObservableObject {
 
     func refresh() {
         launchAtLogin = LoginItem.isEnabled
-        ConfigStore.shared.reloadIfChanged()
+        SettingsAPI.live.reloadIfChanged()
     }
 }
 
@@ -152,7 +152,7 @@ struct SettingsView: View {
     static func page(_ tag: String) -> Page? { pages.first { $0.tag == tag } }
 
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
 
     var body: some View {
         HStack(spacing: 0) {
@@ -231,8 +231,8 @@ struct SettingsHeader: View {
 
 private struct GeneralSettings: View {
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
-    @State private var name = ConfigStore.shared.config.pet.name
+    @ObservedObject private var store = SettingsAPI.live
+    @State private var name = SettingsAPI.live.config.pet.name
 
     private var welcomeBackFooter: String {
         let minutes = Int(store.config.reminders.idleResetMinutes)
@@ -333,7 +333,7 @@ private struct ShortcutRow: View {
     let title: String
     let path: WritableKeyPath<Config.Hotkeys, String>
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var recording = false
     @State private var monitor: Any?
     @State private var message: String?
@@ -407,10 +407,10 @@ private struct ShortcutRow: View {
 
 struct VoiceSettings: View {
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
-    @State private var baseUrl = ConfigStore.shared.config.voice.baseUrl
-    @State private var modelName = ConfigStore.shared.config.voice.model
-    @State private var speechModel = ConfigStore.shared.config.speech.model
+    @ObservedObject private var store = SettingsAPI.live
+    @State private var baseUrl = SettingsAPI.live.config.voice.baseUrl
+    @State private var modelName = SettingsAPI.live.config.voice.model
+    @State private var speechModel = SettingsAPI.live.config.speech.model
     @State private var key = ""
     @State private var keySaved = VoiceKey.isSet
     @State private var keyError = false
@@ -528,7 +528,7 @@ struct VoiceSettings: View {
 /// The spoken replies section of the Voice page: the switch, the voice and Preview. The speech model is under Server.
 private struct SpokenReplySettings: View {
     let speech: SpeechPlayer?
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var voices: [String] = []
     @State private var previewing = false
     @State private var result: (ok: Bool, text: String)?
@@ -631,7 +631,7 @@ private struct SpokenReplySettings: View {
 
 private struct MeetingSettings: View {
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var testing = false
     @State private var enableError: String?
     @State private var installedAgents: [ACPAgent] = []
@@ -756,7 +756,7 @@ private struct MeetingSettings: View {
 
 /// The "Recognise speakers in meetings" section: the toggle, the one-time model download and the stored voices.
 private struct SpeakerSettings: View {
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @ObservedObject private var models = SpeakerModels.shared
     @State private var voices: [StoredVoice] = []
     @State private var confirmForgetAll = false
@@ -818,7 +818,7 @@ private struct SpeakerSettings: View {
 
 struct IntegrationsSettings: View {
     let telegram: TelegramBridge
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
 
     var body: some View {
         Form {
@@ -861,7 +861,7 @@ struct IntegrationsSettings: View {
 // MARK: - Pasted text
 
 private struct PasteLimitsSection: View {
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
 
     var body: some View {
         Section {
@@ -919,7 +919,7 @@ private struct NumberField: View {
 // MARK: - Chat background
 
 private struct ChatBackgroundSection: View {
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var message: String?
 
     private var current: String { store.config.chat.background }

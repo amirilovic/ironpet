@@ -23,6 +23,7 @@ final class IronPetAPI {
         var chat: ChatSession
         var meeting: MeetingController
         var meetingLibrary: MeetingLibrary
+        var config: ConfigStore
     }
 
     let events: APIEventBus
@@ -33,6 +34,7 @@ final class IronPetAPI {
     let agents: AgentsAPI
     let chat: ChatAPI
     let meetings: MeetingsAPI
+    let settings: SettingsAPI
 
     init(stores: Stores, events: APIEventBus? = nil) {
         let events = events ?? APIEventBus()
@@ -51,6 +53,10 @@ final class IronPetAPI {
         chat = ChatAPI(session: stores.chat)
         stores.meeting.events = events
         stores.meetingLibrary.events = events
+        stores.config.events = events
+        settings = SettingsAPI(store: stores.config)
+        // Tests build their own API over a memory-only config and must not replace the app's.
+        if stores.config === ConfigStore.shared { SettingsAPI.live = settings }
         meetings = MeetingsAPI(controller: stores.meeting, library: stores.meetingLibrary)
     }
 }

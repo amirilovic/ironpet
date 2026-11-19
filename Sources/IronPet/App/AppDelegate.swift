@@ -244,7 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
         let service = AutomationService(store: store, engine: engine, database: database)
-        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, sessions: self.store, chat: chat, meeting: meeting, meetingLibrary: meetings), events: events)
+        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, sessions: self.store, chat: chat, meeting: meeting, meetingLibrary: meetings, config: config), events: events)
         pet.tasks = api.tasks
         pet.alerts = api.alerts
         pet.agents = api.agents

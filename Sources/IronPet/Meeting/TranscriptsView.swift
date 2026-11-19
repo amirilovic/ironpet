@@ -24,7 +24,7 @@ struct TranscriptsView: View {
         VStack(spacing: 0) {
             if meetings.meetings.isEmpty {
                 EmptyState(symbol: "waveform", title: "No meetings yet",
-                           detail: "Start one from \(ConfigStore.shared.config.pet.name)'s right-click menu; its transcript and summary show up here.")
+                           detail: "Start one from \(SettingsAPI.live.config.pet.name)'s right-click menu; its transcript and summary show up here.")
             } else {
                 HStack(spacing: 0) {
                     list
@@ -143,9 +143,9 @@ struct TranscriptsView: View {
             Spacer()
             Button { try? meetings.ask(meeting.id) } label: {
                 if askLabel {
-                    Label("Ask \(ConfigStore.shared.config.pet.name)", systemImage: "sparkles")
+                    Label("Ask \(SettingsAPI.live.config.pet.name)", systemImage: "sparkles")
                 } else {
-                    Label("Ask \(ConfigStore.shared.config.pet.name)", systemImage: "sparkles").labelStyle(.iconOnly)
+                    Label("Ask \(SettingsAPI.live.config.pet.name)", systemImage: "sparkles").labelStyle(.iconOnly)
                 }
             }
             .disabled(meeting.chatFiles.isEmpty)
