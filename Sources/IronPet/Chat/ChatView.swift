@@ -1576,9 +1576,10 @@ struct PulsingDots: NSViewRepresentable {
 
         /// Removes any old animations and adds fresh ones, so a re-hosted view never has stale or doubled pulses.
         func installAnimations() {
+            let start = CACurrentMediaTime()
             for (i, dot) in dots.enumerated() {
                 dot.removeAnimation(forKey: Self.animationKey)
-                let now = dot.convertTime(CACurrentMediaTime(), from: nil)
+                let now = dot.convertTime(start, from: nil)
                 dot.add(Self.animation(index: i, layerTime: now, reduceMotion: reduceMotion), forKey: Self.animationKey)
             }
         }
