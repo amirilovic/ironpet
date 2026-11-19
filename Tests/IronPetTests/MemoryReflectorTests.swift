@@ -189,6 +189,8 @@ final class MemoryReflectorTests: XCTestCase {
         index.setCursor(MemoryReflector.seededKey, item: "1", at: clock)
         threads["c1"] = ChatThread(id: "c1", title: "t", workspace: workspace.path, updatedAt: clock, items: [.init(kind: .user("I use zsh"))],
                                    agent: "cursor")
+        reflector.turnEnded(thread: "c1")
+        XCTAssertNotNil(index.cursor("c1"), "a chat the picked agent never had is marked read at once, not after its quiet time")
         reflector.left(thread: "c1")
         reflector.automationFinished(id: "a", name: "A", answer: "Ana is out", agent: "codex")
         let folder = dir.appendingPathComponent("2026-11-18-1100")

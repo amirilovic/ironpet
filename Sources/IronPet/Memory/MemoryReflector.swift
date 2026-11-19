@@ -87,7 +87,7 @@ final class MemoryReflector {
     /// A turn ended in this thread. It is read once it has been quiet for `quietMinutes`.
     func turnEnded(thread: String) {
         guard automatic else { return }
-        guard config().reflect else { return markRead(thread) }
+        guard config().reflect, let agent = threads(thread)?.agent, config().reader(for: agent) != nil else { return markRead(thread) }
         due[thread] = now().addingTimeInterval(Double(config().quietMinutes) * 60)
     }
 
