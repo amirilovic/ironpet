@@ -18,26 +18,29 @@ private final class FakeOpenAgent: JobAgent {
 final class AssistantMCPTests: XCTestCase {
     private var folder: URL!
     private var context: AssistantContext!
+    private var memory: MemoryMCP.Services!
 
     override func setUp() async throws {
         folder = FileManager.default.temporaryDirectory.appendingPathComponent("assistant-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         context = AssistantContext()
-        context.memory = FileMemoryStore(directory: folder.appendingPathComponent("memory"))
+        memory = MemoryMCP.Services(store: FileMemoryStore(directory: folder.appendingPathComponent("memory")), index: nil)
     }
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: folder)
     }
 
-    private func rpc(_ method: String, _ params: [String: Any] = [:], jobScope: Bool = false) async throws -> [String: Any] {
+    private func rpc(_ method: String, _ params: [String: Any] = [:], jobScope: Bool = false, caller: String? = nil) async throws -> [String: Any] {
         let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": method, "params": params])
-        let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, assistant: context.map { AssistantAPI(context: $0) }, jobScope: jobScope)
+        let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, memory: memory.map { services in MemoryAPI(services: { services }) },
+                                                 assistant: context.map { AssistantAPI(context: $0) }, caller: caller, jobScope: jobScope)
         return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
-    private func call(_ name: String, _ args: [String: Any] = [:], jobScope: Bool = false) async throws -> (json: [String: Any], text: String, isError: Bool) {
-        let reply = try await rpc("tools/call", ["name": name, "arguments": args], jobScope: jobScope)
+    private func call(_ name: String, _ args: [String: Any] = [:], jobScope: Bool = false,
+                      caller: String? = nil) async throws -> (json: [String: Any], text: String, isError: Bool) {
+        let reply = try await rpc("tools/call", ["name": name, "arguments": args], jobScope: jobScope, caller: caller)
         let result = try XCTUnwrap(reply["result"] as? [String: Any], "\(reply)")
         let text = ((result["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
         let json = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] ?? [:]
@@ -54,17 +57,18 @@ final class AssistantMCPTests: XCTestCase {
         let all = try await names(jobScope: false)
         XCTAssertTrue(all.isSuperset(of: ["jobs_start", "jobs_list", "jobs_get", "jobs_followup", "jobs_stop", "jobs_open",
                                           "projects_resolve", "status_overview", "status_sessions", "status_alerts", "status_today",
-                                          "status_meetings", "memory_recall", "memory_remember", "memory_forget", "memory_list"]))
+                                          "status_meetings", "memory_remember", "memory_forget", "memory_search", "memory_get"]))
+        XCTAssertFalse(all.contains("memory_recall"), "memory_search replaced it")
         let inJob = try await names(jobScope: true)
         XCTAssertTrue(inJob.isDisjoint(with: MCPEndpoint.jobOnlyHidden))
-        XCTAssertTrue(inJob.contains("status_overview"))
+        XCTAssertTrue(inJob.isSuperset(of: ["status_overview", "memory_remember", "memory_search"]))
         let refused = try await call("jobs_start", ["title": "x", "prompt": "y", "folder": folder.path], jobScope: true)
         XCTAssertTrue(refused.isError)
         XCTAssertTrue(refused.text.contains("not available inside a background job"))
     }
 
     func testReadOnlyAssistantToolsSkipApprovalButStartingAJobAsks() {
-        for tool in ["status_overview", "jobs_list", "memory_remember", "projects_resolve"] {
+        for tool in ["status_overview", "jobs_list", "memory_remember", "memory_search", "projects_resolve"] {
             XCTAssertTrue(ApprovalRules.isOwnTaskTool(server: "ironpet", tool: tool), tool)
         }
         for tool in ["jobs_start", "jobs_followup", "jobs_stop"] {
@@ -96,22 +100,28 @@ final class AssistantMCPTests: XCTestCase {
         XCTAssertTrue(known.text.contains("no agent"))
     }
 
-    func testMemoryToolsRememberListAndForget() async throws {
-        let saved = try await call("memory_remember", ["text": "Prefers short answers", "kind": "fact"])
+    func testAJobSessionKeepsMemoryAndSavesAsTheJob() async throws {
+        let project = folder.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        memory.jobFolder = { $0 == "job-1" ? project : nil }
+        let store = try XCTUnwrap(memory.store as? FileMemoryStore)
+
+        let saved = try await call("memory_remember", ["text": "Prefers short answers", "scope": "me"], jobScope: true, caller: "job:job-1")
         XCTAssertFalse(saved.isError, saved.text)
-        _ = try await call("memory_remember", ["text": "Sara leads the payments team", "kind": "person"])
+        XCTAssertEqual(store.document(store.aboutMe)?.notes.first?.source, "job:job-1", "a job is not outside text")
+        let projectNote = try await call("memory_remember", ["text": "Tests run with swift test", "scope": "project"], jobScope: true, caller: "job:job-1")
+        XCTAssertEqual(projectNote.json["file"] as? String, store.relativePath(store.projectFile(ProjectKey.of(project))), "the job's folder")
+        _ = try await call("memory_remember", ["text": "Leads the payments team", "scope": "people", "person": "Sara"], jobScope: true, caller: "job:job-1")
+        XCTAssertEqual(store.document(store.people)?.sections, ["Sara"])
 
-        let recall = try await call("memory_recall")
-        XCTAssertTrue((recall.json["memory"] as? String ?? "").contains("Sara leads the payments team"))
-        let people = try await call("memory_list", ["kind": "person"])
-        XCTAssertEqual((people.json["entries"] as? [[String: Any]])?.count, 1)
-
-        let forgot = try await call("memory_forget", ["text": "payments"])
-        XCTAssertEqual(forgot.json["forgotten"] as? [String], ["Sara leads the payments team"])
-        let secret = try await call("memory_remember", ["text": "my token is ghp_abcdefghijklmnopqrstuvwxyz0123456789", "kind": "fact"])
+        let forgot = try await call("memory_forget", ["query": "payments"], jobScope: true, caller: "job:job-1")
+        XCTAssertFalse(forgot.isError, forgot.text)
+        let secret = try await call("memory_remember", ["text": "my token is ghp_abcdefghijklmnopqrstuvwxyz0123456789", "scope": "me"], jobScope: true, caller: "job:job-1")
         XCTAssertTrue(secret.isError)
-        let badKind = try await call("memory_remember", ["text": "x y z", "kind": "dream"])
-        XCTAssertTrue(badKind.isError)
+        let badScope = try await call("memory_remember", ["text": "x y z", "scope": "dream"], jobScope: true, caller: "job:job-1")
+        XCTAssertTrue(badScope.isError)
+        let recall = try await rpc("tools/call", ["name": "memory_recall", "arguments": [String: Any]()], jobScope: true)
+        XCTAssertNotNil(recall["error"], "memory_search replaced memory_recall")
     }
 
     func testStatusOverviewGathersSessionsAlertsAndTasks() async throws {
@@ -135,7 +145,7 @@ final class AssistantMCPTests: XCTestCase {
         let database = Database.open(path: nil, migrations: TaskStore.migrations + JobService.migrations).database
         let jobs = JobService(database: database, tasks: nil)
         jobs.currentAgent = { (AgentCatalog.all[0], nil) }
-        jobs.makeAgent = { _ in FakeOpenAgent() }
+        jobs.makeAgent = { _, _ in FakeOpenAgent() }
         jobs.preamble = { _ in "" }
         context.jobs = { jobs }
         context.projects = { [folder] in [ProjectCandidate(url: folder!, sources: [.chat])] }

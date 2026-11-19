@@ -10,6 +10,7 @@ final class ChatResetTests: XCTestCase {
     private let folder = FileManager.default.temporaryDirectory
 
     override func setUp() async throws {
+        TestMemory.isolate()
         session = ChatSession(restore: false)
         deliver = []
         turns = []

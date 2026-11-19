@@ -54,13 +54,17 @@ final class SpeechPlayerTests: XCTestCase {
         XCTAssertEqual(speech.phase, .idle)
     }
 
-    func testDoesNothingWhenOffOrNothingToSay() {
+    func testDoesNothingWhenThereIsNothingToSay() {
         speech.speak("```\nls\n```", id: UUID())
         XCTAssertFalse(speech.isSpeaking)
+        XCTAssertEqual(requested, [])
+    }
+
+    func testSpeaksWithTheSwitchOffBecauseTheCallerChecksIt() async {
         speech.isEnabled = { false }
         speech.speak("Hello.", id: UUID())
-        XCTAssertFalse(speech.isSpeaking)
-        XCTAssertEqual(requested, [])
+        await waitUntilIdle()
+        XCTAssertEqual(requested, ["Hello."])
     }
 
     func testStopCutsTheClipAndSkipsTheRest() async {

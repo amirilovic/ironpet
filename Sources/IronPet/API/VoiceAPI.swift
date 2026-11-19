@@ -22,8 +22,10 @@ struct TranscribeRequest: Codable, Equatable {
 }
 
 struct VoiceStatus: Codable, Equatable {
-    /// Spoken replies are switched on in settings.
+    /// Every reply is read aloud automatically (`speech.enabled`).
     var speechEnabled: Bool
+    /// A speech model is set, so the speaker button can read a reply.
+    var canSpeak: Bool
     /// Voice notes and dictation are switched on in settings.
     var transcriptionEnabled: Bool
     /// The Mac's speaker is reading something now.
@@ -58,12 +60,13 @@ final class VoiceAPI {
     static func standalone(settings: SettingsAPI) -> VoiceAPI { VoiceAPI(speech: SpeechPlayer(), settings: settings) }
 
     var status: VoiceStatus {
-        VoiceStatus(speechEnabled: settings.config.speech.enabled, transcriptionEnabled: settings.config.voice.enabled, speaking: speech.isSpeaking)
+        VoiceStatus(speechEnabled: settings.config.speech.enabled, canSpeak: settings.config.speech.canSpeak, transcriptionEnabled: settings.config.voice.enabled, speaking: speech.isSpeaking)
     }
 
-    /// Reads a reply aloud on this Mac's speaker. Replaces whatever is being read.
+    /// Reads a reply aloud on this Mac's speaker. Replaces whatever is being read. It needs a speech model, not the switch for
+    /// reading every reply: a press on the speaker button reads with spoken replies off.
     func speak(_ request: SpeakRequest) throws {
-        guard settings.config.speech.enabled else { throw APIError.unavailable("spoken replies are off in Settings") }
+        guard settings.config.speech.canSpeak else { throw APIError.unavailable("no speech model is set in Settings") }
         guard !SpeechText.chunks(of: request.text).isEmpty else { throw APIError.invalid("there is nothing to read in that text") }
         speech.speak(request.text, id: request.item ?? UUID())
     }
@@ -82,7 +85,7 @@ final class VoiceAPI {
     /// The audio for a reply, one chunk at a time, without playing anything here. The first chunk is one sentence, so a client
     /// can start playing early.
     func audio(_ request: SpeakRequest) throws -> AsyncThrowingStream<SpeechChunk, Error> {
-        guard settings.config.speech.enabled else { throw APIError.unavailable("spoken replies are off in Settings") }
+        guard settings.config.speech.canSpeak else { throw APIError.unavailable("no speech model is set in Settings") }
         let producer = SpeechProducer(synthesize: synthesize)
         let chunks = producer.chunks(of: request.text)
         guard !chunks.isEmpty else { throw APIError.invalid("there is nothing to read in that text") }

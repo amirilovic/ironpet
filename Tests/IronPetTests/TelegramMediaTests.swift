@@ -40,6 +40,7 @@ final class TelegramMediaTests: XCTestCase {
     private var users = UserStore()
 
     override func setUp() async throws {
+        TestMemory.isolate()
         client = FakeTelegram()
         session = ChatSession(restore: false)
         chatAPI = ChatAPI(session: session)

@@ -7,6 +7,7 @@ final class SendVoiceOnlyTests: XCTestCase {
     private var session: ChatSession!
 
     override func setUp() {
+        TestMemory.isolate()
         session = ChatSession(restore: false)
         session.sendAfterDictation = true
         session.workspace = FileManager.default.temporaryDirectory

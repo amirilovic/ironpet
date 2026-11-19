@@ -51,6 +51,7 @@ final class IronPetAPI {
     private(set) var screen: ScreenAPI?
     private(set) var desktop: DesktopAPI?
     private(set) var assistant: AssistantAPI?
+    private(set) var memory: MemoryAPI?
     let pet: PetAPI
 
     init(stores: Stores, events: APIEventBus? = nil) {
@@ -92,4 +93,7 @@ final class IronPetAPI {
     func attach(desktop service: DesktopService) { desktop = DesktopAPI(service: service, settings: settings) }
 
     func attach(assistant context: AssistantContext) { assistant = AssistantAPI(context: context) }
+
+    /// `services` is asked each time a `memory_*` tool runs, since it names the chat that is open then.
+    func attach(memory services: @escaping () -> MemoryMCP.Services?) { memory = MemoryAPI(services: services) }
 }

@@ -9,6 +9,7 @@ final class ChatQueueTests: XCTestCase {
     private var deliver: [(AgentEvent) -> Void] = []
 
     override func setUp() async throws {
+        TestMemory.isolate()
         session = ChatSession(restore: false)
         turns = []
         deliver = []
@@ -40,6 +41,29 @@ final class ChatQueueTests: XCTestCase {
 
     private var assistantTexts: [String] {
         session.items.compactMap { if case .assistant(let text) = $0.kind { text } else { nil } }
+    }
+
+    func testMemoryHearsTurnEndsThreadSwitchesAndAutomationAnswers() async {
+        let saved = ThreadStore.directory
+        ThreadStore.directory = FileManager.default.temporaryDirectory.appendingPathComponent("memory-hooks-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: ThreadStore.directory); ThreadStore.directory = saved }
+        var ended: [String] = [], left: [String] = [], answers: [String] = []
+        session.onTurnEnded = { ended.append($0) }
+        session.onThreadLeft = { left.append($0) }
+        session.onAutomationAnswer = { id, answer in answers.append("\(id): \(answer)") }
+        await type("hello")
+        deliver[0](.session("thread-1"))
+        await complete(0)
+        XCTAssertEqual(ended, ["thread-1"])
+        session.submitFromAutomation("check things", automation: "watcher")
+        await settle()
+        deliver[1](.assistant("All quiet."))
+        await complete(1)
+        XCTAssertEqual(answers, ["watcher: All quiet."])
+        session.newChat()
+        XCTAssertEqual(left, ["thread-1"])
+        session.newChat()
+        XCTAssertEqual(left, ["thread-1"], "a chat with no thread has nothing to leave")
     }
 
     func testBackgroundResultAfterTheTurnShowsAsItsOwnReplyAndKeepsTheChatIdle() async {

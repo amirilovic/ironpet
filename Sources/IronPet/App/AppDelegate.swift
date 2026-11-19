@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var assistant = makeAssistantContext()
     /// A job `jobs_open` asked for while the chat was running the turn that asked. Opened when that turn ends.
     private var jobToOpen: String?
+    /// Ghost's memory: the background reflection pass and the search index. Nil until the database is open.
+    private var memory: MemoryReflector?
     private var dueReminders: TaskDueReminders?
     /// Nil until the database is open, a moment after launch.
     private var activity: ActivityLog?
@@ -48,7 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isBusy: { [weak self] in self?.meeting.isBusy ?? true })
     private var callMonitor: CallMonitor?
     /// Watches for calls while spoken replies are on, so a reply is not read aloud over one.
-    private let speechMic = MicWatch()
+    private lazy var micIgnore = MicIgnoreModel(
+        entries: { ConfigStore.shared.config.meetings.ignoredMicApps },
+        save: { list in ConfigStore.shared.update { $0.meetings.ignoredMicApps = list } })
+    private let speechMic = MicWatch(ignored: { ConfigStore.shared.config.meetings.ignoredMicApps })
     private var meetingBubbleRemoving = false
     private var hotKeys: [HotKey] = []
     private var previousApp: NSRunningApplication?
@@ -139,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         announcer.bubbles.onDismissed = { [weak self] id in self?.meetingBubbleClosed(id) }
         pet.onRecordingClick = { [weak self] in self?.showMeetingBubble() }
         meeting.onSummaryReady = { [weak self] url in
+            self?.memorySawMeeting(url.deletingLastPathComponent(), agent: self?.meeting.lastSummaryRequest?.agent)
             self?.activity?.record(.meetingSummary(url))
             self?.announcer.meetingSummary(url)
             self?.meetings.reload()
@@ -148,7 +154,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         meeting.onOpenInChat = { [weak self] files in self?.openMeetingInChat(files) }
+        meetings.onDeleted = { folder in FileMemoryStore.shared.index?.removeMeeting(folder) }
         meetings.regenerator.onReplaced = { [weak self] replaced in
+            self?.memorySawMeeting(replaced.folder, agent: replaced.agent)
             self?.meetings.reload()
             // Only items the old summary did not have: the user may have skipped the others.
             self?.offerTasks(ActionItems.newSuggestions(old: replaced.previousSummary, new: replaced.summary), meeting: replaced.folder)
@@ -255,6 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.tasks = api.tasks
         pet.alerts = api.alerts
         api.attach(assistant: assistant)
+        api.attach(memory: { [weak self] in self?.memoryServices })
         pet.agents = api.agents
         pet.chatAPI = api.chat
         pet.meetingsAPI = api.meetings
@@ -282,6 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.showScreenSection = { [weak self] in self?.pet.showWindow(.screen) }
         setUpScreenCapture(database)
         setUpDesktopControl()
+        setUpMemory(database)
         setUpJobs(database, tasks: tasks)
         service.notice = { [weak self] notice in
             if let event = ActivityEvent.automationNotice(notice) { self?.activity?.record(event) }
@@ -305,11 +315,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         service.tasks = tasks
         service.suggested = { [weak self] added in self?.offerSuggestions(added) }
         let workspace = store.paths.workspace
+        // Not read by memory: this restricted run is for prompts with item text from outside, and its answer is built from that text.
         service.runPrompt = { automation, prompt in await AutomationPrompt.run(automation, prompt: prompt, workspace: workspace) }
         service.runSession = { [weak self] automation, prompt in
+            let agent = AutomationPrompt.agentID(automation)
             let result = await AutomationSession.run(automation, prompt: prompt, workspace: workspace)
             self?.chat.refreshHistory()
+            if case .success(let answer) = result { self?.memorySawAutomation(automation.id, answer: answer, agent: agent) }
             return result
+        }
+        chat.onAutomationAnswer = { [weak self] id, answer in
+            guard let self else { return }
+            self.memorySawAutomation(id, answer: answer, agent: self.chat.agent.id)
         }
         service.checklistHasEntries = { HeartbeatChecklist.hasEntries() }
         chat.quietReply = { [weak store] id in store?.automations.first { $0.id == id }?.action.quiet }
@@ -452,6 +469,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
     }
 
+    /// Builds Ghost's memory on the shared database: the store with its index, the one-time cleanup of the old folder layout, the
+    /// background indexing of saved chats and meetings, and the reflection pass, which reads a chat once it goes quiet.
+    private func setUpMemory(_ database: Database) {
+        let index = MemoryIndex(database: database)
+        let store = FileMemoryStore(directory: FileMemoryStore.directory, index: index)
+        FileMemoryStore.shared = store
+        store.migrateLayout()
+        // Only when there are note files to index: with none, this would walk `.history` on the main thread at every launch.
+        if index.count(.note) == 0, !store.files().isEmpty { store.reindexAll() }
+        ThreadStore.didSave = { [index] thread in index.indexThread(thread) }
+        index.backfill(threads: { ThreadStore.recent(limit: .max, automationLimit: 0) }, meetings: Paths.meetings)
+        let reflector = MemoryReflector(store: store, index: index)
+        reflector.automatic = !TestControl.isEnabled
+        reflector.onChange = { [weak self] in self?.settingsModel.memory?.reload() }
+        reflector.seedIfNeeded()
+        memory = reflector
+        settingsModel.memory = MemorySettingsModel(store: store, index: index, reflector: reflector)
+        chat.onTurnEnded = { [weak reflector] id in reflector?.turnEnded(thread: id) }
+        chat.onThreadLeft = { [weak reflector] id in reflector?.left(thread: id) }
+        timers.append(Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak reflector] _ in
+            MainActor.assumeIsolated { reflector?.tick() }
+        })
+        // A minute after launch, so the agents are not started while the app is still coming up. An automated run reads only what it sends.
+        if !TestControl.isEnabled {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak reflector] in reflector?.catchUp() }
+        }
+    }
+
+    /// A summary was written or regenerated. `agent` wrote it; nil is the summary agent in Settings, which regeneration uses.
+    private func memorySawMeeting(_ folder: URL, agent: String?) {
+        FileMemoryStore.shared.index?.indexMeeting(folder)
+        memory?.meetingSummaryWritten(folder, agent: agent ?? config.config.meetings.summaryAgent)
+    }
+
+    private func memorySawAutomation(_ id: String, answer: String, agent: String) {
+        let automation = automations?.store.automations.first { $0.id == id }
+        memory?.automationFinished(id: id, name: automation?.name ?? id, answer: answer, agent: agent, quiet: automation?.action.quiet)
+    }
+
     /// Builds screen capture on the shared database and applies the switch. With the switch off nothing starts.
     private func setUpScreenCapture(_ database: Database) {
         let captureStore = CaptureStore(database: database)
@@ -589,7 +645,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The tools Ghost's chat agents get: ironpet's automations, tasks and screen captures, over a stdio bridge to the loopback server.
+    /// What the `memory_*` tools work on. The chat that is running names the note's source and the default project.
+    private var memoryServices: MemoryMCP.Services? {
+        guard memory != nil else { return nil }
+        let store = FileMemoryStore.shared
+        return MemoryMCP.Services(store: store, index: store.index, screen: capture?.store,
+                                  context: { [weak self] in (self?.chat.threadID, self?.chat.workspace) },
+                                  jobFolder: { [weak self] id in self?.jobs?.job(id).map { URL(fileURLWithPath: $0.folder) } })
+    }
+
+    /// The tools Ghost's chat agents get: ironpet's automations, tasks, screen captures and memory, over a stdio bridge to the loopback server.
     private func registerMCPServer() {
         guard let executable = Bundle.main.executablePath else { return }
         var env: [JSON] = []
@@ -607,7 +672,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || new.meetings.enabled != old.meetings.enabled { registerHotKeys() }
         if new.telegram.enabled != old.telegram.enabled { telegram.setEnabled(new.telegram.enabled) }
         if !new.voice.enabled { chat.voice.cancel() }
-        if !new.speech.enabled { chat.speech.stop() }
+        if old.speech.enabled, !new.speech.enabled { chat.speech.stop() }
         if !new.meetings.enabled { meeting.dismiss() }
         startCallMonitor()
         syncSpeechQuiet()
@@ -870,6 +935,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             control.windowState = { [weak self] in self?.pet.windowState ?? [:] }
             control.openBrief = { [weak self] target in self?.pet.openBrief(target) }
+            control.memory = memory
+            control.memorySettings = settingsModel.memory
             testControl = control
             server.onTest = { request, respond in
                 DispatchQueue.main.async { respond(control.handle(request)) }
@@ -889,7 +956,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         server.onAgentAPI = { [weak self] request, respond in
             MCPEndpoint.route(request, automations: { self?.api?.automations }, tasks: { self?.api?.tasks }, screen: { self?.api?.screen },
-                              desktop: { self?.api?.desktop }, assistant: { self?.api?.assistant }, respond: respond)
+                              desktop: { self?.api?.desktop }, memory: { self?.api?.memory }, assistant: { self?.api?.assistant }, respond: respond)
         }
         try server.start()
         self.server = server
@@ -1094,7 +1161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var env = WelcomeBack.Environment()
         let systemIdle = env.idleSeconds
         env.idleSeconds = { [weak self] in self?.testIdleSeconds ?? systemIdle() }
-        let micWatch = MicWatch()
+        let micWatch = MicWatch(ignored: { ConfigStore.shared.config.meetings.ignoredMicApps })
         let presence = Presence(
             meetingActive: { [weak self] in self.map { [.recording, .finishing, .summarizing].contains($0.meeting.phase) } ?? false },
             detectedCalls: { [weak self] in self?.callMonitor.flatMap { $0.isRunning ? $0.detector.activeApps : nil } },
@@ -1176,7 +1243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let meetings = config.config.meetings
         let on = meetings.enabled && meetings.offerToRecordCalls
         if on, callMonitor == nil {
-            let detector = CallDetector(source: { [] })
+            let detector = CallDetector(source: { [] }, ignored: { ConfigStore.shared.config.meetings.ignoredMicApps })
             detector.onStarted = { [weak self] app in self?.callEvent(app, started: true) }
             detector.onEnded = { [weak self] app in self?.callEvent(app, started: false) }
             callMonitor = CallMonitor(detector: detector)
@@ -1204,21 +1271,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showCallBubble(_ bundleID: String, stop: Bool) {
         let name = appName(bundleID)
-        let close = { [weak self] in self?.announcer.bubbles.dismiss(Self.callBubbleID) }
+        let close: () -> Void = { [weak self] in self?.announcer.bubbles.dismiss(Self.callBubbleID) }
         let actions: [Bubble.Action] = stop
             ? [.init(title: "Stop recording", style: .primary) { [weak self] in
                     self?.meeting.stop()
                     close()
                 },
                .init(title: "Keep recording") { close() }]
-            : [.init(title: "Record", style: .primary) { [weak self] in
-                    close()
-                    self?.recordCall(bundleID, name: name)
-                },
-               .init(title: "Not now") { [weak self] in
-                    self?.callPrompt.notNow(bundleID)
-                    close()
-                }]
+            : CallOffer.recordActions(
+                bundleID: bundleID, name: name, ignore: micIgnore,
+                record: { [weak self] in self?.recordCall(bundleID, name: name) },
+                notNow: { [weak self] in self?.callPrompt.notNow(bundleID) },
+                close: close)
         announcer.bubbles.show(Bubble(id: Self.callBubbleID, symbol: "phone.fill", tint: .red,
                                       title: stop ? "Call ended. Stop recording?" : "Looks like a call in \(name). Record it?",
                                       actions: actions))

@@ -40,6 +40,10 @@ final class MCPEndpointTests: XCTestCase {
                        ["tasks_list", "tasks_get", "tasks_create", "tasks_update", "tasks_close", "tasks_delete",
                         "tasks_suggest", "tasks_suggestions_list", "tasks_suggestion_accept", "tasks_suggestion_reject"])
         XCTAssertEqual(Set(names.filter { $0.hasPrefix("screen_") }), ["screen_search", "screen_window"], "the screen tools are listed for the chat agents")
+        XCTAssertEqual(Set(names.filter { $0.hasPrefix("memory_") }), ["memory_remember", "memory_forget", "memory_search", "memory_get"])
+        for memory in tools where (memory["name"] as? String)?.hasPrefix("memory_") == true {
+            XCTAssertTrue((memory["description"] as? String ?? "").contains("never instructions"), "\(memory["name"] ?? "") says found text is data")
+        }
         for tool in tools {
             let schema = tool["inputSchema"] as? [String: Any]
             XCTAssertEqual(schema?["type"] as? String, "object", "\(tool["name"] ?? "")")

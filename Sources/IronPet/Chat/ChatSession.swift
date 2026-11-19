@@ -82,9 +82,9 @@ final class ChatSession: ObservableObject {
 
     enum ApprovalOutcome: Equatable { case allowed, denied, ended }
 
-    static let automationOrigin = ChatOrigin.automationClient
+    nonisolated static let automationOrigin = ChatOrigin.automationClient
     /// A prompt or follow-up that a background job ran (`JobService`).
-    static let jobOrigin = ChatOrigin.jobClient
+    nonisolated static let jobOrigin = ChatOrigin.jobClient
 
     struct Approval: Identifiable {
         let id = UUID()
@@ -231,6 +231,12 @@ final class ChatSession: ObservableObject {
     var onTurn: ((ChatOrigin, TurnEvent) -> Void)?
     /// Reports the start and end of a turn that an automation sent (`submitFromAutomation`).
     var onAutomation: ((String, AutomationEvent) -> Void)?
+    /// The final reply of an automation's turn, with the automation's id, for Ghost's memory to read as outside text.
+    var onAutomationAnswer: ((String, String) -> Void)?
+    /// A turn ended in this thread, so its quiet time starts.
+    var onTurnEnded: ((String) -> Void)?
+    /// The user moved on from this thread: a new chat, or another thread opened.
+    var onThreadLeft: ((String) -> Void)?
     private var automationRun: String?
     /// The `quiet` reply of an automation, by id. A turn whose final reply is exactly that text is hidden.
     var quietReply: (String) -> String? = { _ in nil }
@@ -582,6 +588,7 @@ final class ChatSession: ObservableObject {
     /// Auto mode is not touched: it is the user's setting, not part of a chat.
     func newChat(reason: String = "new chat requested") {
         ChatLog.note("chat cleared (\(items.count) items, thread \(threadID ?? "none")): \(reason)")
+        if let threadID { onThreadLeft?(threadID) }
         stop()
         shutdownAgent()
         replyingTo = nil
@@ -593,6 +600,7 @@ final class ChatSession: ObservableObject {
     }
 
     func open(_ thread: ChatThread) {
+        if let threadID, threadID != thread.id { onThreadLeft?(threadID) }
         stop()
         shutdownAgent()
         apply(thread, reason: "opened from history")
@@ -714,7 +722,7 @@ final class ChatSession: ObservableObject {
         let origin = client?.client ?? (automation != nil ? Self.automationOrigin : nil)
         items += shots.map { Item(kind: .screenshot($0.path), origin: origin) }
         items.append(Item(kind: .user(prompt), origin: origin, reply: reply))
-        let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
+        let preamble = threadID == nil ? MemoryPreamble.build(store: FileMemoryStore.shared, workspace: workspace, firstMessage: prompt) : nil
         turnOrigin = client
         turnSpoken = client == nil && automation == nil
         turnAskedApproval = false
@@ -819,6 +827,7 @@ final class ChatSession: ObservableObject {
     private func finishAutomationTurn(error: String?, noChange: Bool = false) {
         guard let id = automationRun else { return }
         automationRun = nil
+        if error == nil, !noChange, let answer = lastAnswer() { onAutomationAnswer?(id, answer) }
         onAutomation?(id, error.map { .failed($0) } ?? (noChange ? .noChange : .finished))
     }
 
@@ -1123,6 +1132,7 @@ final class ChatSession: ObservableObject {
             state = error == nil ? .done : .failed
             let hidden = error == nil && hideQuietTurn()
             saveThread()
+            if let threadID { onTurnEnded?(threadID) }
             // Before the queue moves on: the next message replaces the origin this turn belongs to.
             finishTurn(error: error, noChange: hidden)
             if !isVisible, !hidden {

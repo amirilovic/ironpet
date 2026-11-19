@@ -67,6 +67,9 @@ final class TestControl {
     var windowState: (() -> [String: Any])?
     /// Presses a Today row, as a click would.
     var openBrief: ((Brief.Target) -> Void)?
+    /// Ghost's memory: the reflection pass, and the Settings page whose Undo `/test/memory/undo` presses.
+    var memory: MemoryReflector?
+    var memorySettings: MemorySettingsModel?
 
     init(chat: ChatSession, actions: Actions) {
         self.chat = chat
@@ -147,7 +150,6 @@ final class TestControl {
             chat.voice.stop()
         case ("POST", "/test/speech/speak"):
             // Reads the last reply aloud, like its speaker button.
-            guard ConfigStore.shared.config.speech.enabled else { return Self.encode(["ok": false, "error": "spoken replies are off"]) }
             guard let reply = chat.items.last(where: { if case .assistant = $0.kind { true } else { false } }) else {
                 return Self.encode(["ok": false, "error": "no reply to read"])
             }
@@ -328,6 +330,8 @@ final class TestControl {
             return tasksSnapshot()
         case ("GET", "/test/screen"):
             return screenSnapshot()
+        case ("GET", "/test/memory"), ("POST", "/test/memory/reflect"), ("POST", "/test/memory/undo"), ("POST", "/test/memory/reset"):
+            return memoryEndpoint(request.path, body)
         case ("POST", "/test/screen/ingest"), ("POST", "/test/screen/filter"), ("POST", "/test/screen/send"), ("POST", "/test/screen/propose"), ("POST", "/test/screen/inspector"), ("POST", "/test/screen/stub"), ("POST", "/test/screen/reset"):
             return screenEndpoint(request.method, request.path, body)
         default:
@@ -368,6 +372,63 @@ final class TestControl {
             break
         }
         return screenSnapshot()
+    }
+
+    /// `GET /test/memory` is the files, the recent changes and the last reflection. `reflect` runs the reflection pass now on the open
+    /// thread (or `thread`) and answers at once; poll `GET` until `running` is false. `undo` presses Undo on a change in Settings → Memory.
+    /// `reset` forgets everything, or with `reindex` only rebuilds the notes' index from the files, for after a test puts them back.
+    private func memoryEndpoint(_ path: String, _ body: [String: Any]) -> Data {
+        guard let memory else { return Self.encode(["ok": false, "error": "memory is not built"]) }
+        let store = FileMemoryStore.shared
+        switch path {
+        case "/test/memory/reflect":
+            guard let thread = body["thread"] as? String ?? chat.threadID else { return Self.encode(["ok": false, "error": "no open thread"]) }
+            Task { _ = await memory.reflectNow(.thread(thread)) }
+        case "/test/memory/undo":
+            let id = (body["id"] as? NSNumber)?.int64Value ?? 0
+            guard let change = store.recentChanges(limit: 50).first(where: { $0.id == id }) else {
+                return Self.encode(["ok": false, "error": "no change \(id)"])
+            }
+            if let memorySettings { memorySettings.undo(change) } else { _ = store.undo(change) }
+        case "/test/memory/reset":
+            if body["reindex"] as? Bool == true { store.reindexAll() } else { memory.cancelAll(); store.forgetEverything() }
+            memorySettings?.reload()
+        default:
+            break
+        }
+        return memorySnapshot(memory)
+    }
+
+    private func memorySnapshot(_ memory: MemoryReflector) -> Data {
+        let store = FileMemoryStore.shared
+        var outcome: [String: Any] = [:]
+        if let last = memory.lastOutcome {
+            var job = ""
+            switch last.job {
+            case .thread(let id): job = "thread:\(id)"
+            case .meeting(let folder, _): job = "meeting:\(folder.path)"
+            case .automation(let id, _, _, _): job = "automation:\(id)"
+            }
+            outcome = ["job": job, "saved": last.saved, "dropped": last.dropped, "error": last.error ?? NSNull(), "skipped": last.skipped]
+        }
+        let project = chat.workspace.flatMap(MemoryMCP.project).map { store.relativePath(store.projectFile($0)) }
+        return Self.encode([
+            "ok": true,
+            "directory": store.directory.path,
+            "reflect": ConfigStore.shared.config.memory.reflect,
+            "running": memory.running != nil || !memory.queue.isEmpty,
+            "due": Array(memory.due.keys),
+            "lastOutcome": outcome,
+            "thread": chat.threadID ?? "",
+            "project": project ?? NSNull(),
+            "files": store.files().map { file in
+                ["path": file.path, "notes": (store.document(file.url)?.notes ?? []).map { ["text": $0.text, "source": $0.source] }]
+            },
+            "changes": store.recentChanges(limit: 20).map { change in
+                ["id": change.id, "action": change.action.rawValue, "note": MemoryNote.parse(change.note)?.text ?? change.note,
+                 "file": change.file, "source": change.source, "undone": change.undone]
+            },
+        ])
     }
 
     /// Files named by `mic` and `them` stand in for the microphone and the app's audio.

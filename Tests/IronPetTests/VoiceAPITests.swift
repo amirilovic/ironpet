@@ -18,10 +18,13 @@ final class VoiceAPITests: XCTestCase {
 
     private let reply = "First sentence here. Second sentence follows right after it. " + String(repeating: "More words fill the third part of the reply. ", count: 12)
 
-    func testSpeakingNeedsTheSettingAndSomethingToRead() {
-        XCTAssertThrowsError(try api.voice.speak(SpeakRequest(text: reply))) { XCTAssertEqual(($0 as? APIError)?.code, .unavailable) }
-        api.settings.update { $0.speech.enabled = true }
+    func testSpeakingNeedsSomethingToReadButNotTheSwitchForReadingEveryReply() throws {
+        XCTAssertFalse(api.voice.status.speechEnabled)
+        XCTAssertTrue(api.voice.status.canSpeak, "a speech model is set by default, which is all the speaker button needs")
         XCTAssertThrowsError(try api.voice.speak(SpeakRequest(text: "```\ncode only\n```"))) { XCTAssertEqual(($0 as? APIError)?.code, .invalid) }
+        try api.voice.speak(SpeakRequest(text: reply))
+        XCTAssertTrue(api.voice.status.speaking)
+        api.voice.stop()
     }
 
     func testSpeakStartsReadingAndStopEndsIt() throws {

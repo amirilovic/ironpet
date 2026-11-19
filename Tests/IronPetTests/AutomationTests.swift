@@ -39,6 +39,7 @@ class AutomationTestCase: XCTestCase {
     var clock: AutomationTestClock!
 
     override func setUp() async throws {
+        TestMemory.isolate()
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-auto-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         paths = AutomationPaths(file: dir.appendingPathComponent("automations.json"), directory: dir.appendingPathComponent("automations"))

@@ -121,6 +121,7 @@ final class TelegramTests: XCTestCase {
     private var transcribeStub: @Sendable (Data, String) async throws -> String = { _, _ in "transcript" }
 
     override func setUp() async throws {
+        TestMemory.isolate()
         client = FakeTelegram()
         session = ChatSession(restore: false)
         chatAPI = ChatAPI(session: session)

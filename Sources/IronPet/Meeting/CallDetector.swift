@@ -25,12 +25,18 @@ enum CallApps {
         return id
     }
 
-    /// The app a client belongs to, or nil if it is ironpet, a system service or an assistant.
-    static func app(for client: MicClient, ownPID: pid_t, ownBundleID: String?) -> String? {
+    /// Whether the built-in list ignores this bundle id.
+    static func isBuiltInIgnored(_ id: String) -> Bool { ignoredPrefixes.contains { id.hasPrefix($0) } }
+
+    /// The app a client belongs to, or nil if it is ironpet, a system service, an assistant or a prefix in `ignored`
+    /// (the user's list, matched without regard to case).
+    static func app(for client: MicClient, ownPID: pid_t, ownBundleID: String?, ignored: [String] = []) -> String? {
         guard client.pid != ownPID, !client.bundleID.isEmpty else { return nil }
         let id = parentBundleID(client.bundleID)
         if id == ownBundleID { return nil }
-        if ignoredPrefixes.contains(where: { id.hasPrefix($0) }) { return nil }
+        if isBuiltInIgnored(id) { return nil }
+        let lowered = id.lowercased()
+        if ignored.contains(where: { !$0.isEmpty && lowered.hasPrefix($0.lowercased()) }) { return nil }
         // Other system processes (coreaudiod, helpers of the OS) are not calls. FaceTime and Safari are.
         if id.hasPrefix("com.apple."), !AudioApps.meetingApps.contains(id), !AudioApps.browsers.contains(id) { return nil }
         return id
@@ -45,6 +51,8 @@ final class CallDetector {
     var debounce: TimeInterval
     var ownPID: pid_t
     var ownBundleID: String?
+    /// The user's extra ignored prefixes, read on every tick so a change applies without a restart.
+    var ignored: () -> [String]
     var onStarted: ((String) -> Void)?
     var onEnded: ((String) -> Void)?
 
@@ -54,8 +62,10 @@ final class CallDetector {
     private var active: Set<String> = []
 
     init(source: @escaping () -> [MicClient], now: @escaping () -> Date = Date.init, debounce: TimeInterval = 10,
-         ownPID: pid_t = ProcessInfo.processInfo.processIdentifier, ownBundleID: String? = Bundle.main.bundleIdentifier) {
+         ownPID: pid_t = ProcessInfo.processInfo.processIdentifier, ownBundleID: String? = Bundle.main.bundleIdentifier,
+         ignored: @escaping () -> [String] = { [] }) {
         self.source = source
+        self.ignored = ignored
         self.now = now
         self.debounce = debounce
         self.ownPID = ownPID
@@ -73,7 +83,8 @@ final class CallDetector {
 
     func tick() {
         let time = now()
-        let holding = Set(source().compactMap { CallApps.app(for: $0, ownPID: ownPID, ownBundleID: ownBundleID) })
+        let extra = ignored()
+        let holding = Set(source().compactMap { CallApps.app(for: $0, ownPID: ownPID, ownBundleID: ownBundleID, ignored: extra) })
         for id in holding {
             lastHeld[id] = time
             if since[id] == nil { since[id] = time }
@@ -176,6 +187,7 @@ final class CallMonitor {
             loggedSlow = false
         }
         snapshot = result
+        RecentMicApps.shared.note(result)
         detector.tick()
         onPolled?()
     }
