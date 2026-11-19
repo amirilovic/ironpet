@@ -46,7 +46,7 @@ final class ChatSpeechTests: XCTestCase {
     }
 
     func testTelegramAndAutomationRepliesAreNotRead() async {
-        session.submitFromTelegram("status?", chat: 42)
+        session.submit("status?", from: .telegram(chat: 42))
         await answer(0, "All green.")
         XCTAssertTrue(session.submitFromAutomation("check CI", automation: "ci"))
         await answer(1, "CI passed.")

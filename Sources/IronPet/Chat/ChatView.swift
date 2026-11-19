@@ -18,7 +18,7 @@ extension View {
 }
 
 struct ChatView: View {
-    @ObservedObject var session: ChatSession
+    @ObservedObject var session: ChatAPI
     @ObservedObject private var config = ConfigStore.shared
     @FocusState private var inputFocused: Bool
     @State private var showSettings = false
@@ -56,7 +56,7 @@ struct ChatView: View {
     @State private var jumpTick: JumpRequest?
     @State private var highlightedID: UUID?
     @State private var highlightClear: DispatchWorkItem?
-    struct SelectionAsk { let item: ChatSession.Item; let point: CGPoint }
+    struct SelectionAsk { let item: ChatItem; let point: CGPoint }
     /// The Ask button shown beside a text selection, with where the selection ended.
     @State private var selectionAsk: SelectionAsk?
     @State private var hoverTracker = HoverTracker()
@@ -640,12 +640,12 @@ struct ChatView: View {
     }
 
     /// Asks about the text selected in `item`. With nothing selected it replies to the whole message.
-    private func askAbout(_ item: ChatSession.Item) {
+    private func askAbout(_ item: ChatItem) {
         session.reply(to: item, selection: SelectionProbe.selectedText())
         selectionAsk = nil
     }
 
-    private func copyText(_ item: ChatSession.Item, _ whole: String) {
+    private func copyText(_ item: ChatItem, _ whole: String) {
         let text = SelectionProbe.selectedText(keepOnPasteboard: true)
         if text == nil {
             NSPasteboard.general.clearContents()
@@ -804,7 +804,7 @@ struct ChatView: View {
         }
     }
 
-    private func approvalCard(_ approval: ChatSession.Approval) -> some View {
+    private func approvalCard(_ approval: ChatApproval) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(approval.title, systemImage: "hand.raised.fill")
                 .font(.system(size: 13, weight: .semibold))
@@ -924,7 +924,7 @@ struct ChatView: View {
                     if session.isRunning {
                         sendButton("stop.fill", color: .red, help: "Stop (Esc)", action: session.stop)
                     }
-                    sendButton("arrow.up", color: .accentColor, help: session.isRunning ? "Queue (Enter)" : "Send (Enter)", action: session.send)
+                    sendButton("arrow.up", color: .accentColor, help: session.isRunning ? "Queue (Enter)" : "Send (Enter)", action: session.sendDraft)
                         .disabled(session.input.trimmingCharacters(in: .whitespaces).isEmpty && session.attachments.isEmpty)
                 }
             }
@@ -989,7 +989,7 @@ struct ChatView: View {
                     .font(.system(size: 13.5))
                     .lineLimit(1...8)
                     .focused($inputFocused)
-                    .onSubmit(session.send)
+                    .onSubmit(session.sendDraft)
                     // Return sends; Shift-Return adds a line break at the caret (Option-Return already did).
                     .onKeyPress(.return, phases: .down) { press in
                         if !press.modifiers.contains(.shift), session.completeSlash() { return .handled }
@@ -1174,7 +1174,7 @@ private struct ReplyButton: View {
 
 /// The quoted original: sender and the first two lines. Tapping it jumps to the original message.
 private struct ReplyQuote: View {
-    let reply: ChatSession.Reply
+    let reply: ChatReply
     var onUser = false
     var tap: (() -> Void)?
 
@@ -1202,7 +1202,7 @@ private struct ReplyQuote: View {
 private struct UserBubble: View {
     let text: String
     let date: Date?
-    var reply: ChatSession.Reply?
+    var reply: ChatReply?
     var highlighted = false
     var onReply: () -> Void = {}
     var onQuoteTap: () -> Void = {}
@@ -1252,7 +1252,7 @@ private struct UserBubble: View {
             }
             HStack(spacing: 4) {
                 ReplyButton(visible: hovering, action: onReply)
-                if source == ChatSession.telegramOrigin {
+                if source == ChatOrigin.telegramClient {
                     Image(systemName: "paperplane.fill").font(.system(size: 9))
                     Text("Telegram").font(.system(size: 10))
                 }
@@ -1263,7 +1263,7 @@ private struct UserBubble: View {
                 if let date { Text(timeFormatter.string(from: date)).font(.system(size: 10)) }
             }
             .foregroundStyle(.tertiary)
-            .help(source == ChatSession.telegramOrigin ? "Sent from Telegram" : source == ChatSession.automationOrigin ? "Sent by an automation" : "")
+            .help(source == ChatOrigin.telegramClient ? "Sent from Telegram" : source == ChatSession.automationOrigin ? "Sent by an automation" : "")
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 50)
@@ -1355,7 +1355,7 @@ private struct AssistantBubble: View {
 /// A run of consecutive tool steps, folded into one line ("Ran 3 commands, read 2 files ›") that expands on click.
 /// While a step is still running, the line shows it with a spinner so you can see progress without expanding.
 private struct ToolSteps: View {
-    let items: [ChatSession.Item]
+    let items: [ChatItem]
     /// Highlights for the steps that hold a match, by item id.
     var finds: [(UUID, ChatFind.RowHighlight)] = []
     @State private var expanded = false
@@ -1609,8 +1609,8 @@ struct PulsingDots: NSViewRepresentable {
 
 /// Consecutive tool steps are shown together as one activity block.
 enum TranscriptGroup {
-    case item(ChatSession.Item)
-    case tools([ChatSession.Item])
+    case item(ChatItem)
+    case tools([ChatItem])
 
     /// Items rendered at first, and added by each "Show earlier" press.
     static let pageSize = 300
@@ -1623,7 +1623,7 @@ enum TranscriptGroup {
     }
 
     /// Where the rendered window of the newest `limit` items starts. It never splits a run of tool steps.
-    static func windowStart(_ items: [ChatSession.Item], limit: Int) -> Int {
+    static func windowStart(_ items: [ChatItem], limit: Int) -> Int {
         let base = max(0, items.count - limit)
         var start = base
         // Pull in the rest of a run that straddles the boundary, but never more than `limit` extra items.
@@ -1631,9 +1631,9 @@ enum TranscriptGroup {
         return start
     }
 
-    static func make(_ items: ArraySlice<ChatSession.Item>) -> [TranscriptGroup] {
+    static func make(_ items: ArraySlice<ChatItem>) -> [TranscriptGroup] {
         var groups: [TranscriptGroup] = []
-        var run: [ChatSession.Item] = []
+        var run: [ChatItem] = []
         for item in items {
             if case .tool = item.kind {
                 run.append(item)

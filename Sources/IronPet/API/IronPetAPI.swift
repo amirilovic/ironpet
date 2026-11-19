@@ -20,6 +20,7 @@ final class IronPetAPI {
         var signals: SignalStore
         var bubbles: BubbleStore
         var sessions: SessionStore
+        var chat: ChatSession
     }
 
     let events: APIEventBus
@@ -28,6 +29,7 @@ final class IronPetAPI {
     let alerts: AlertsAPI
     let bubbles: BubblesAPI
     let agents: AgentsAPI
+    let chat: ChatAPI
 
     init(stores: Stores, events: APIEventBus? = nil) {
         let events = events ?? APIEventBus()
@@ -42,5 +44,7 @@ final class IronPetAPI {
         bubbles = BubblesAPI(store: stores.bubbles)
         stores.sessions.events = events
         agents = AgentsAPI(store: stores.sessions)
+        stores.chat.events = events
+        chat = ChatAPI(session: stores.chat)
     }
 }

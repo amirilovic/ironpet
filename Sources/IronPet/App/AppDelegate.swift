@@ -56,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var api: IronPetAPI!
     private var setupWindow: SetupWindow?
     private lazy var telegram = TelegramBridge(
-        client: TelegramAPI(token: { TelegramToken.shared.load() }), host: chat, tokens: TelegramToken.shared,
+        client: TelegramAPI(token: { TelegramToken.shared.load() }), host: api.chat, tokens: TelegramToken.shared,
         storage: .init(
             users: { ConfigStore.shared.config.telegram.allowedUsers },
             add: { user in ConfigStore.shared.update { $0.telegram.allowedUsers.append(user) } },
@@ -245,10 +245,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
         let service = AutomationService(store: store, engine: engine, database: database)
-        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, sessions: self.store), events: events)
+        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, sessions: self.store, chat: chat), events: events)
         pet.tasks = api.tasks
         pet.alerts = api.alerts
         pet.agents = api.agents
+        pet.chatAPI = api.chat
         api.agents.focusHandler = { [weak pet] session in pet?.jump(to: session) }
         api.agents.askHandler = { [weak self] prompt in self?.ask(prompt) }
         api.alerts.askHandler = { [weak self] prompt in self?.ask(prompt) }

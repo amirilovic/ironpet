@@ -24,7 +24,7 @@ enum PreviewRenderer {
         for (file, preview) in [("chat", ChatSession.Preview.done), ("chat-approval", .approval), ("chat-markdown", .markdown), ("chat-form", .form)] {
             let session = ChatSession(restore: false)
             session.loadPreview(preview)
-            render(ChatView(session: session).frame(width: 520, height: 640).panel(), to: dir, file)
+            render(ChatView(session: ChatAPI(session: session)).frame(width: 520, height: 640).panel(), to: dir, file)
         }
         // The reply markdown sample at the narrow chat width and a wider one, in both appearances, and with find open.
         for width in [420.0, 520.0] {
@@ -46,10 +46,10 @@ enum PreviewRenderer {
         let pasteDir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-paste-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: pasteDir) }
         pasted.attach(PasteIntake.importPaste(pasteboardHolding(log), imageDirectory: pasteDir, textDirectory: pasteDir))
-        render(ChatView(session: pasted).frame(width: 520, height: 640).panel(), to: dir, "chat-pasted-text")
+        render(ChatView(session: ChatAPI(session: pasted)).frame(width: 520, height: 640).panel(), to: dir, "chat-pasted-text")
         let settings = ChatSession(restore: false)
         settings.loadPreview(.done)
-        render(ChatView(session: settings, settingsOnly: true).panel(), to: dir, "chat-settings")
+        render(ChatView(session: ChatAPI(session: settings), settingsOnly: true).panel(), to: dir, "chat-settings")
 
         let sessions = SessionStore()
         sessions.loadPreview(sampleSessions)
@@ -63,7 +63,7 @@ enum PreviewRenderer {
         func list(_ sessions: SessionStore, tasks: TasksAPI, on section: IronPetSection? = nil) -> some View {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.section = section ?? IronPetSection.needingAttention(agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks)
-            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: chat,
+            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: ChatAPI(session: chat),
                                      meetings: meetings, actions: .none)
                 .frame(width: 780, height: 560).panel()
         }
@@ -119,7 +119,7 @@ enum PreviewRenderer {
             model.todayShown = true
             model.briefKind = kind
             model.section = .today
-            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: chat,
+            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: ChatAPI(session: chat),
                                      meetings: meetings, brief: content, actions: .none)
                 .frame(width: 780, height: 560).panel()
         }
@@ -145,7 +145,7 @@ enum PreviewRenderer {
                     model.sidebarCollapsed = collapsed
                     model.todayShown = true
                     model.section = section
-                    let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: chat,
+                    let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: ChatAPI(session: chat),
                                                  meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
                     renderWindow(model: model, session: chat, content: view, to: dir,
                                  "real-\(section.rawValue)-\(suffix)\(collapsed ? "-collapsed" : "")", scheme: scheme)
@@ -167,7 +167,7 @@ enum PreviewRenderer {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.sidebarCollapsed = true
             model.section = .chat
-            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: markdownChat,
+            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: ChatAPI(session: markdownChat),
                                          meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
             renderWindow(model: model, session: markdownChat, content: view, to: dir, "real-chat-markdown-\(suffix)", scheme: scheme)
         }
@@ -197,7 +197,7 @@ enum PreviewRenderer {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.sidebarCollapsed = true
             model.section = .chat
-            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: speaking,
+            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: ChatAPI(session: speaking),
                                          meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
             renderWindow(model: model, session: speaking, content: view, to: dir, "real-chat-speaking-\(suffix)", scheme: scheme)
         }
@@ -331,7 +331,7 @@ enum PreviewRenderer {
         let store = AutomationStore(paths: paths, defaults: { AutomationMigration.defaults(from: config, sentryConfigured: false) },
                                     builtIns: AutomationDefaults.builtIns, watch: false)
         let telegram = TelegramBridge(
-            client: TelegramAPI(token: { nil }), host: chat, tokens: TelegramToken.shared,
+            client: TelegramAPI(token: { nil }), host: ChatAPI(session: chat), tokens: TelegramToken.shared,
             storage: .init(users: { [] }, add: { _ in }, remove: { _ in }, offset: { 0 }, setOffset: { _ in }))
         let model = SettingsModel(actions: .init(suspendHotKeys: { _ in }, buildPet: { _ in }),
                                   announcer: Announcer(notifier: Notifier()), telegram: telegram)

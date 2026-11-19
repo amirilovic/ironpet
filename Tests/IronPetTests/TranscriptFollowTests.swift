@@ -177,7 +177,7 @@ final class TranscriptFollowTests: XCTestCase {
         stream(session, words: 800)
         session.items.append(.init(kind: .tool("Ran `ls`", ok: true)))
         session.items.append(.init(kind: .assistant("A later message")))
-        session.items.append(.init(kind: .user("A message from Telegram"), origin: ChatSession.telegramOrigin))
+        session.items.append(.init(kind: .user("A message from Telegram"), origin: ChatOrigin.telegramClient))
         spin(1.5)
         let after = try XCTUnwrap(topIndex())
         print("FOLLOW top row index \(before) -> \(after)")
