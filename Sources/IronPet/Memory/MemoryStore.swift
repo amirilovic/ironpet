@@ -72,9 +72,15 @@ final class FileMemoryStore: MemoryStore {
         set { current = newValue }
     }
 
-    /// Whether a path is inside the memory folder. Edits there are answered without a card (`ApprovalRules`).
+    /// Whether a path is inside the memory folder, `.history` included.
     nonisolated static func contains(_ path: String) -> Bool {
         URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(directory.standardizedFileURL.path + "/")
+    }
+
+    /// A note file an agent may edit without a card (`ApprovalRules`): inside the memory folder, outside `.history`, which is what
+    /// Undo and forgotten notes come back from.
+    nonisolated static func isNoteFile(_ path: String) -> Bool {
+        contains(path) && !URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(directory.standardizedFileURL.path + "/.history/")
     }
 
     /// Past this size a file is tidied after the next reflection.
@@ -377,7 +383,9 @@ final class FileMemoryStore: MemoryStore {
             guard removeLine(change.note) else { return .failure(changed) }
             change.previous?.components(separatedBy: "\n").forEach(restore)
         case .tidied, .edited:
-            guard let previous = change.previous, let text = try? String(contentsOf: directory.appendingPathComponent(previous), encoding: .utf8) else {
+            guard let previous = change.previous,
+                  directory.appendingPathComponent(previous).standardizedFileURL.path.hasPrefix(directory.standardizedFileURL.path + "/"),
+                  let text = try? String(contentsOf: directory.appendingPathComponent(previous), encoding: .utf8) else {
                 return .failure(MemoryError(message: "the earlier version of \(change.file) is gone"))
             }
             document = MemoryDocument(text)

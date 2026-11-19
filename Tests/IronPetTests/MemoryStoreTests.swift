@@ -362,5 +362,8 @@ final class MemoryStoreTests: XCTestCase {
         XCTAssertTrue(FileMemoryStore.contains("/tmp/m/memory/me.md"))
         XCTAssertFalse(FileMemoryStore.contains("/tmp/m/memory-other/me.md"))
         XCTAssertFalse(FileMemoryStore.contains("/tmp/m/memory"))
+        XCTAssertTrue(FileMemoryStore.isNoteFile("/tmp/m/memory/projects/app-1a2b3c4d.md"))
+        XCTAssertFalse(FileMemoryStore.isNoteFile("/tmp/m/memory/.history/me.md/2026-11-18T10-00-00.000Z.md"), "Undo needs .history")
+        XCTAssertTrue(FileMemoryStore.contains("/tmp/m/memory/.history/me.md/x.md"), "an automation still may not touch it")
     }
 }

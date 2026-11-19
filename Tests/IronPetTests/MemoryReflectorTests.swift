@@ -144,6 +144,20 @@ final class MemoryReflectorTests: XCTestCase {
         XCTAssertEqual(prompts.count, 1, "the same summary is read once")
     }
 
+    func testOutsideTextIsSentWithoutTheNotes() async throws {
+        _ = try store.remember("Works from Lisbon", scope: .me, source: "chat:a").get()
+        _ = try store.remember("Leads payments", scope: .people, person: "Ana", source: "chat:a").get()
+        reflector.automationFinished(id: "prs", name: "PR watcher", answer: "Ana merged PR 12.", agent: "claude")
+        await waitIdle()
+        XCTAssertEqual(prompts.count, 1)
+        XCTAssertFalse(prompts[0].contains("Works from Lisbon"), "the agent that ran the automation never had the notes")
+        XCTAssertFalse(prompts[0].contains("Leads payments"))
+        chat("t1", [.init(kind: .user("hi")), .init(kind: .assistant("hello"))])
+        reflector.left(thread: "t1")
+        await waitIdle()
+        XCTAssertTrue(prompts[1].contains("Works from Lisbon"), "a chat's agent had them in its preamble")
+    }
+
     func testAnAutomationAnswerIsOutsideText() async {
         answers = [notes(#"{"notes":[{"scope":"me","text":"Likes red"},{"scope":"people","person":"Bo","text":"Reviews PRs on Mondays"}]}"#)]
         reflector.automationFinished(id: "prs", name: "PR watcher", answer: "Bo reviewed PR 12, as he does on Mondays.", agent: "claude")
@@ -353,6 +367,26 @@ final class MemoryReflectorTests: XCTestCase {
         answers = [notes(#"{"notes":[{"scope":"me","text":"Prefers dark mode"}]}"#)]
         let outcome = await reflector.reflectNow(.thread("t1"))
         XCTAssertEqual(outcome.saved, ["Prefers dark mode"])
+    }
+
+    func testForgetEverythingAnswersAQueuedReflectNow() async {
+        chat("t1", [.init(kind: .user("a"))])
+        chat("t2", [.init(kind: .user("b"))])
+        var release: CheckedContinuation<Void, Never>?
+        reflector.runner = { _, _ in
+            await withCheckedContinuation { release = $0 }
+            return .success(#"{"notes":[]}"#)
+        }
+        let first = Task { await self.reflector.reflectNow(.thread("t1")) }
+        for _ in 0..<200 where release == nil { try? await Task.sleep(nanoseconds: 5_000_000) }
+        let second = Task { await self.reflector.reflectNow(.thread("t2")) }
+        for _ in 0..<200 where reflector.queue.isEmpty { try? await Task.sleep(nanoseconds: 5_000_000) }
+        reflector.cancelAll()
+        let dropped = await second.value
+        XCTAssertTrue(dropped.skipped)
+        release?.resume()
+        let finished = await first.value
+        XCTAssertTrue(finished.skipped, "the run in flight saves nothing")
     }
 
     func testTranscriptKeepsTheNewestMessagesWithinTheLimit() {

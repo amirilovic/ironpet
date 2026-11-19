@@ -135,6 +135,9 @@ final class MemoryReflector {
         due = [:]
         queue = []
         generation += 1
+        let dropped = waiting.filter { $0.0 != running }
+        waiting.removeAll { $0.0 != running }
+        for (job, continuation) in dropped { continuation.resume(returning: Outcome(job: job, skipped: true)) }
     }
 
     /// Runs the job now (after any that are already queued) and returns what it did. For the test endpoint.
@@ -257,7 +260,10 @@ final class MemoryReflector {
             return outcome
         }
         let reader = Reader(agent: found.agent, model: found.model)
-        let prompt = Self.prompt(input: input.text, kind: input.kind, notes: currentNotes(input.project, about: input.text), outside: input.outside,
+        // The agent of a meeting summary or an automation answer never got a preamble, so it gets no notes either. Outside text can't
+        // write me.md or replace notes, and the store drops a note it already has.
+        let notes = input.outside ? [] : currentNotes(input.project, about: input.text)
+        let prompt = Self.prompt(input: input.text, kind: input.kind, notes: notes, outside: input.outside,
                                  hasProject: input.project != nil, petName: petName())
         let answer = await runner(prompt, reader)
         // Forget Everything, or the switch turned off, while the agent ran.
@@ -293,7 +299,7 @@ final class MemoryReflector {
             }
             if let cursor = input.cursor { index.setCursor(cursor.key, item: cursor.item, at: now()) }
             // Tidying rewrites whole files, so only the file store has it.
-            if config.tidy, let files = store as? FileMemoryStore {
+            if config.tidy, !input.outside, let files = store as? FileMemoryStore {
                 for scope in touched {
                     guard let url = files.file(scope, project: input.project), let limit = FileMemoryStore.sizeLimit[scope] else { continue }
                     await MemoryTidier.tidy(url, limit: limit, store: files, reader: reader, runner: runner)

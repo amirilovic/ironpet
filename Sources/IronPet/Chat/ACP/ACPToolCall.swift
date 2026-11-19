@@ -144,7 +144,7 @@ enum ApprovalRules {
 
     /// Whether ironpet answers a permission request itself or shows a card. The agent only asks about calls it
     /// considers risky, so anything not clearly read-only still asks.
-    static func policy(for call: ACPToolCall, auto: Bool, isMemoryFile: (String) -> Bool = FileMemoryStore.contains) -> ApprovalPolicy {
+    static func policy(for call: ACPToolCall, auto: Bool, isMemoryFile: (String) -> Bool = FileMemoryStore.isNoteFile) -> ApprovalPolicy {
         switch call.kind {
         case "read", "search", "think", "fetch":
             return .allow
@@ -155,7 +155,8 @@ enum ApprovalRules {
             return .ask(title: dangerous ? "Run a destructive command?" : "Run this command?", detail: command)
         case "edit", "delete", "move":
             let path = call.path
-            if auto || path.map(isMemoryFile) == true { return .allow }
+            // Only edits: deleting or moving a note file skips its .history copy.
+            if auto || call.kind == "edit" && path.map(isMemoryFile) == true { return .allow }
             let preview = ((call.input["content"] ?? call.input["new_string"] ?? call.input["new_source"]) as? String)?
                 .split(separator: "\n", omittingEmptySubsequences: false).prefix(8).joined(separator: "\n")
             let verb = call.kind == "delete" ? "Delete" : call.kind == "move" ? "Move" : "Edit"

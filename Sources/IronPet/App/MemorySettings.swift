@@ -163,6 +163,7 @@ struct MemorySettingsBody: View {
     private var learningSection: some View {
         Section {
             Toggle("Learn from chats", isOn: Binding(get: { config.reflect }, set: { on in store.update { $0.memory.reflect = on } }))
+                .help("A chat goes to its own agent, a meeting summary to the summary agent and an automation's answer to the agent that ran it. The agent only answers: no tools, a scratch folder, every permission refused. Summaries and automation answers can teach about people and projects, never about you. Notes with keys or passwords are never saved.")
             Picker("Agent", selection: Binding(get: { config.reflectAgent ?? "" }, set: setAgent)) {
                 Text("Same as the chat (recommended)").tag("")
                 ForEach(agents) { agent in Text(agent.name).tag(agent.id) }
@@ -193,7 +194,7 @@ struct MemorySettingsBody: View {
         } header: {
             Text("Learning")
         } footer: {
-            Text("On by default. When a chat has been quiet this long, or you start a new chat, \(petName) sends the new messages and its notes to the agent that already had them, the chat's own agent, and saves the lasting facts it names. Meeting summaries go to the summary agent and automation answers to the agent that ran them. Pick one agent here to have only its chats read. The agent only answers: no tools, a scratch folder, every permission request refused. Meeting summaries and automation answers can teach about people, never about you. Notes with keys or passwords are never saved. Tidying is off by default because it sends a whole file, which can hold notes that agent has not seen. Each pass shows as Memory in the Usage tab.")
+Text("When a chat goes quiet, \(petName) sends its new messages to the agent that already had them, which names the facts worth keeping. Each pass uses that agent's quota and shows as Memory in the Usage tab.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
