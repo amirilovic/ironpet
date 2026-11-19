@@ -180,6 +180,17 @@ enum PreviewRenderer {
         for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
             render(ScreenSettings(model: settingsModel).frame(width: 560, height: 900).panel(), to: dir, "settings-screen" + suffix, scheme: scheme)
         }
+        // Settings → Memory with sample notes and recent changes, and with nothing learned yet.
+        ConfigStore.shared.usePreview(patterned)
+        let memoryFolder = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-memory-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: memoryFolder) }
+        for (name, sample) in [("settings-memory", true), ("settings-memory-empty", false)] {
+            let model = sampleMemory(in: memoryFolder.appendingPathComponent(name), filled: sample)
+            for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
+                render(MemorySettingsBody(memory: model, listsAgents: false).frame(width: 560, height: sample ? 1500 : 1000).panel(),
+                       to: dir, name + suffix, scheme: scheme)
+            }
+        }
         // Settings → Voice with spoken replies on, and a reply being read aloud with its Stop button showing.
         var speechOn = patterned
         speechOn.voice.enabled = true
@@ -321,6 +332,32 @@ enum PreviewRenderer {
             render(UsageSettings(range: days, sample: summary, showCost: cost).frame(width: 560, height: 700).panel(),
                    to: dir, name)
         }
+    }
+
+    /// A memory folder with a few notes learned over the last days, one of them undone, or an empty one.
+    private static func sampleMemory(in folder: URL, filled: Bool) -> MemorySettingsModel {
+        let index = (try? Database(path: nil, migrations: AppMigrations.all)).map(MemoryIndex.init(database:))
+        let store = FileMemoryStore(directory: folder, index: index)
+        guard filled else { return MemorySettingsModel(store: store, index: index) }
+        var clock = Date().addingTimeInterval(-3 * 86_400)
+        store.now = { clock }
+        let project = ProjectKey(key: "github.com/you/demo-app", name: "demo-app", isRepo: true, workspace: URL(fileURLWithPath: "/Users/you/code/demo-app"))
+        let notes: [(String, MemoryScope, String?, String, TimeInterval)] = [
+            ("Prefers pnpm over npm.", .me, nil, "chat:3f2a9c1d", 0),
+            ("Tests run with `swift test`; e2e needs the installed app.", .project, nil, "chat:3f2a9c1d", 3600),
+            ("Leads the payments team and reviews API changes.", .people, "Ana", "meeting:2026-11-17-1000", 86_400),
+            ("Writes commit messages in the conventional style.", .me, nil, "chat:8b1e77c0", 2 * 86_400),
+            ("Works from Lisbon, one hour behind Helsinki.", .me, nil, "chat:8b1e77c0", 2 * 86_400 + 3000),
+            ("Reviews release PRs on Thursdays.", .people, "Bo", "automation:release-watch", 3 * 86_400 - 600),
+        ]
+        for (text, scope, person, source, offset) in notes {
+            clock = Date().addingTimeInterval(-3 * 86_400 + offset)
+            _ = store.remember(text, scope: scope, person: person, project: project, source: source)
+        }
+        clock = Date().addingTimeInterval(-300)
+        _ = store.remember("Uses Vim keybindings everywhere.", scope: .me, source: "chat:c41d09aa")
+        if let added = store.recentChanges(limit: 1).first { _ = store.undo(added) }
+        return MemorySettingsModel(store: store, index: index)
     }
 
     private static func sampleSettings(chat: ChatSession, config: Config) -> SettingsModel {
