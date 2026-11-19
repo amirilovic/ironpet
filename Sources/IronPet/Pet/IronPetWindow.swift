@@ -66,11 +66,11 @@ enum IronPetSection: String, CaseIterable, Identifiable {
 
     /// Agents that need the user win; otherwise alerts when there are some and no agent is working, then tasks that
     /// wait on the user or on Add / Skip.
-    @MainActor static func needingAttention(store: SessionStore, signals: SignalStore, tasks: TaskStore) -> IronPetSection {
+    @MainActor static func needingAttention(store: SessionStore, signals: SignalStore, tasks: TasksAPI) -> IronPetSection {
         if store.ordered.contains(where: { $0.status == .needsInput || $0.status == .failed }) { return .agents }
         let idle = store.ordered.allSatisfy { $0.status != .running }
         if !signals.signals.isEmpty, idle { return .alerts }
-        if idle, !tasks.suggestions.isEmpty || tasks.tasks.contains(where: \.needsUser) { return .tasks }
+        if idle, !tasks.suggestions.isEmpty || tasks.all.contains(where: \.needsUser) { return .tasks }
         return .agents
     }
 }
@@ -500,7 +500,7 @@ struct IronPetWindowView: View {
     @ObservedObject var model: IronPetWindowModel
     @ObservedObject var store: SessionStore
     @ObservedObject var signals: SignalStore
-    @ObservedObject var tasks: TaskStore
+    @ObservedObject var tasks: TasksAPI
     /// Nil in previews and tests that do not show it; its row is hidden then.
     var chat: ChatSession?
     var meetings: MeetingLibrary?

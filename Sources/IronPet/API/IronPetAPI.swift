@@ -13,9 +13,18 @@ import Foundation
 ///   `BoundaryTests` fails when a client file names a store type.
 @MainActor
 final class IronPetAPI {
-    let events: APIEventBus
+    /// The stores the API serves. Only `IronPetAPI` and the AppKit owners that create them hold these.
+    struct Stores {
+        var tasks: TaskStore
+    }
 
-    init(events: APIEventBus? = nil) {
-        self.events = events ?? APIEventBus()
+    let events: APIEventBus
+    let tasks: TasksAPI
+
+    init(stores: Stores, events: APIEventBus? = nil) {
+        let events = events ?? APIEventBus()
+        self.events = events
+        stores.tasks.events = events
+        tasks = TasksAPI(store: stores.tasks)
     }
 }

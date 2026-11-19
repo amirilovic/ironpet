@@ -181,11 +181,11 @@ final class DatabaseUnavailableTests: XCTestCase {
         _ = try makeNewerFile()
         let store = TaskStore(database: Database.open(path: file, migrations: AppMigrations.all).database)
         for op in ["list", "create"] {
-            guard case .failure(let error) = store.call(op, ["title": "x"], by: "agent:mcp") else { return XCTFail("\(op) succeeded") }
+            guard case .failure(let error) = TaskJSON.call(TasksAPI(store: store), op, ["title": "x"], by: "agent:mcp") else { return XCTFail("\(op) succeeded") }
             XCTAssertTrue(error.message.contains("newer than this ironpet knows"), error.message)
             XCTAssertTrue(error.message.contains("Not saved"), error.message)
         }
-        let cli = TaskMCP.handleCLI(Data(#"{"op":"list"}"#.utf8), store: store)
+        let cli = TaskMCP.handleCLI(Data(#"{"op":"list"}"#.utf8), tasks: TasksAPI(store: store))
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: cli.body) as? [String: Any])
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertTrue((object["error"] as? String)?.contains("newer than this ironpet knows") == true)
@@ -199,6 +199,6 @@ final class DatabaseUnavailableTests: XCTestCase {
         let store = TaskStore(database: database)
         XCTAssertNil(store.unavailable)
         XCTAssertNil(UsageStore(database: database).unavailable)
-        guard case .success = store.call("list", [:], by: "agent:mcp") else { return XCTFail("list failed") }
+        guard case .success = TaskJSON.call(TasksAPI(store: store), "list", [:], by: "agent:mcp") else { return XCTFail("list failed") }
     }
 }

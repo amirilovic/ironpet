@@ -5,8 +5,10 @@ import XCTest
 /// stores here as its namespace appears.
 @MainActor
 enum APITestSupport {
-    static func makeAPI(events: APIEventBus? = nil) -> IronPetAPI {
-        IronPetAPI(events: events)
+    /// The API over in-memory stores. `now` is the clock the task store uses.
+    static func makeAPI(events: APIEventBus? = nil, now: @escaping () -> Date = Date.init) -> IronPetAPI {
+        let tasks = TaskStore(database: memoryDatabase(), now: now, keepDoneDays: { 30 })
+        return IronPetAPI(stores: .init(tasks: tasks), events: events)
     }
 
     static func memoryDatabase() -> Database {

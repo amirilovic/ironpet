@@ -491,7 +491,7 @@ final class BriefModelTests: XCTestCase {
     func testARecapOpenedForYesterdayStaysOnItUntilTheUserPicksAKind() throws {
         let tasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-brief-\(UUID().uuidString)")
-        let source = BriefSource(tasks: tasks, sessions: SessionStore(), signals: SignalStore(), meetingsRoot: root,
+        let source = BriefSource(tasks: TasksAPI(store: tasks), sessions: SessionStore(), signals: SignalStore(), meetingsRoot: root,
                                  activity: FixedBriefActivity(events: [F.turn("a", .sessionDone, at: F.tuesday(hour: 10))]))
         source.now = { F.tuesday(hour: 25) }
         source.calendar = F.calendar
@@ -513,7 +513,7 @@ final class BriefModelTests: XCTestCase {
     /// `PetController` calls `setVisible(false)` when the panel closes, which fires no onDisappear.
     func testAHiddenPageStopsRebuildingOnStoreChanges() throws {
         let tasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
-        let source = BriefSource(tasks: tasks, sessions: SessionStore(), signals: SignalStore(),
+        let source = BriefSource(tasks: TasksAPI(store: tasks), sessions: SessionStore(), signals: SignalStore(),
                                  meetingsRoot: FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-brief-\(UUID().uuidString)"),
                                  activity: FixedBriefActivity(events: []))
         let model = BriefModel(source: source)

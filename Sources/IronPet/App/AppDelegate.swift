@@ -50,8 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timers: [Timer] = []
     private var cancellables: Set<AnyCancellable> = []
     private let config = ConfigStore.shared
-    /// The in-process API. Stores publish their changes into its event bus.
-    private let api = IronPetAPI()
+    /// Stores publish their changes here. It exists before the API, which needs the database.
+    private let events = APIEventBus()
+    /// The in-process API, built once the database is open.
+    private var api: IronPetAPI!
     private var setupWindow: SetupWindow?
     private lazy var telegram = TelegramBridge(
         client: TelegramAPI(token: { TelegramToken.shared.load() }), host: chat, tokens: TelegramToken.shared,
@@ -70,11 +72,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
-        config.events = api.events
-        store.events = api.events
-        signals.events = api.events
-        announcer.bubbles.events = api.events
-        meeting.events = api.events
+        config.events = events
+        store.events = events
+        signals.events = events
+        announcer.bubbles.events = events
+        meeting.events = events
 
         announcer.openSession = { [weak self] id in self?.openSession(id) }
         announcer.openChat = { [weak self] in self?.showChat() }
@@ -242,8 +244,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activity = log
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
-        tasks.events = api.events
-        pet.tasks = tasks
+        api = IronPetAPI(stores: .init(tasks: tasks), events: events)
+        pet.tasks = api.tasks
         setUpDueReminders(tasks)
         setUpWelcomeBack(log, tasks: tasks)
         pet.settings = settingsModel
@@ -318,7 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The morning brief and the recap: built from the stores for `digest` automations and the Today page. The Today row is
     /// listed while one of those automations is on.
     private func setUpBrief(_ service: AutomationService, tasks: TaskStore) {
-        let source = BriefSource(tasks: tasks, sessions: store, signals: signals, activity: activity)
+        let source = BriefSource(tasks: api.tasks, sessions: store, signals: signals, activity: activity)
         source.now = { [weak self] in Date().addingTimeInterval(self?.testClockOffset ?? 0) }
         let model = BriefModel(source: source)
         let automations = service.store
@@ -773,7 +775,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         }
         server.onAgentAPI = { [weak self] request, respond in
-            MCPEndpoint.route(request, automations: { self?.automations }, tasks: { TaskStore.shared }, screen: { self?.capture?.store }, desktop: { self?.desktop }, respond: respond)
+            MCPEndpoint.route(request, automations: { self?.automations }, tasks: { self?.api?.tasks }, screen: { self?.capture?.store }, desktop: { self?.desktop }, respond: respond)
         }
         try server.start()
         self.server = server

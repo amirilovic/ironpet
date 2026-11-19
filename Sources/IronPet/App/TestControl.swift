@@ -452,8 +452,8 @@ final class TestControl {
         return Self.encode([
             "ok": true,
             "tasks": store.ordered.map { item -> [String: Any] in
-                var object = TaskStore.json(item)
-                object["history"] = store.history(item.id).map(TaskStore.json)
+                var object = TaskJSON.json(item)
+                object["history"] = store.history(item.id).map(TaskJSON.json)
                 return object
             },
             "suggestions": store.suggestions.map(Self.json),

@@ -5,7 +5,7 @@ import SwiftUI
 /// and add or skip suggestions from meetings and watchers. Clicking a row shows everything stored about it.
 /// Anything else goes to the chat through "Tell Ghost…".
 struct TaskListView: View {
-    @ObservedObject var tasks: TaskStore
+    @ObservedObject var tasks: TasksAPI
     let onTellGhost: (String) -> Void
     let onOpenThread: (String) -> Void
     let onOpenSession: (String) -> Void
@@ -65,14 +65,14 @@ struct TaskListView: View {
 
     private var petName: String { ConfigStore.shared.config.pet.name }
 
-    private var open: [TaskItem] { tasks.ordered.filter { $0.status != .done } }
+    private var open: [TaskItem] { tasks.all.filter { $0.status != .done } }
 
     private var waiting: [TaskItem] { open.filter { $0.waitingOn != nil } }
 
     /// Done tasks stay in the database for `tasks.keepDoneDays`; the list only shows the last week.
     private var done: [TaskItem] {
         let cutoff = Date().addingTimeInterval(-7 * 86_400)
-        return tasks.ordered.filter { $0.status == .done && ($0.closed ?? $0.updated) >= cutoff }
+        return tasks.all.filter { $0.status == .done && ($0.closed ?? $0.updated) >= cutoff }
     }
 
     @ViewBuilder private var suggestions: some View {
@@ -80,7 +80,7 @@ struct TaskListView: View {
             SectionHeader("Suggestions", action: "Add all", help: "Add every suggested new task. Updates to existing tasks are accepted one by one") { tasks.acceptAll() }
             ForEach(tasks.suggestions) { suggestion in
                 SuggestionRow(suggestion: suggestion,
-                              onAdd: { _ = try? tasks.accept(suggestion.id) },
+                              onAdd: { _ = try? tasks.accept(AcceptSuggestionRequest(id: suggestion.id)) },
                               onSkip: { tasks.skip(suggestion.id) },
                               onOpen: open(_:))
             }
@@ -118,8 +118,8 @@ struct TaskListView: View {
 
     private func row(_ task: TaskItem) -> some View {
         TaskRow(task: task,
-                onDone: { _ = try? tasks.close(task.id, by: "user") },
-                onDelete: { try? tasks.delete(task.id, by: "user") },
+                onDone: { _ = try? tasks.close(CloseTaskRequest(id: task.id)) },
+                onDelete: { try? tasks.delete(DeleteTaskRequest(id: task.id)) },
                 onOpen: open(_:),
                 history: { tasks.history(task.id) })
             .background {

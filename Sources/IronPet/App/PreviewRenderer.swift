@@ -60,7 +60,7 @@ enum PreviewRenderer {
         chat.loadPreview(.done)
         let meetings = MeetingLibrary(root: sampleMeetings())
         meetings.reload()
-        func list(_ sessions: SessionStore, tasks: TaskStore, on section: IronPetSection? = nil) -> some View {
+        func list(_ sessions: SessionStore, tasks: TasksAPI, on section: IronPetSection? = nil) -> some View {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.section = section ?? IronPetSection.needingAttention(store: sessions, signals: signals, tasks: tasks)
             return IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: chat,
@@ -105,7 +105,7 @@ enum PreviewRenderer {
         ConfigStore.shared.usePreview(screenConfig)
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks")
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks-light", scheme: .light)
-        let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
+        let noTasks = TasksAPI(store: TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database))
         render(list(sessions, tasks: noTasks, on: .tasks), to: dir, "tasks-empty")
 
         // Today, from the same sample stores plus a meeting on the last weekday and a few agent turns from today.
@@ -511,7 +511,7 @@ enum PreviewRenderer {
         return root
     }
 
-    private static func sampleTasks() -> TaskStore {
+    private static func sampleTasks() -> TasksAPI {
         var clock = Date()
         let store = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database, now: { clock })
         let day: TimeInterval = 86_400
@@ -545,7 +545,7 @@ enum PreviewRenderer {
                                             url: URL(string: "https://mail.google.com/mail/u/0/#inbox/1"))],
                       automation: "gmail-watch", name: "Gmail watcher")
         clock = Date()
-        return store
+        return TasksAPI(store: store)
     }
 
     private static var sampleSignals: [Signal] {

@@ -2,7 +2,7 @@ import Foundation
 
 /// The agent-facing endpoints on the loopback server: MCP over HTTP (`POST /mcp`) for every tool ironpet offers, and the
 /// plain CLI endpoints (`POST /automations`, `POST /tasks`). Tools are routed by prefix to `AutomationService.call` and
-/// `TaskStore.call`, which validate.
+/// `TaskJSON.call`, which validate.
 @MainActor
 enum MCPEndpoint {
     static var tools: [[String: Any]] { AutomationMCP.tools + TaskMCP.tools + ScreenMCP.tools + DesktopMCP.tools }
@@ -14,7 +14,7 @@ enum MCPEndpoint {
         """
 
     /// Handles one MCP JSON-RPC message. Returns the HTTP status line and body.
-    static func handle(_ body: Data, automations: AutomationService?, tasks: TaskStore?, screen: CaptureStore? = nil, desktop: DesktopService? = nil) async -> (status: String, body: Data) {
+    static func handle(_ body: Data, automations: AutomationService?, tasks: TasksAPI?, screen: CaptureStore? = nil, desktop: DesktopService? = nil) async -> (status: String, body: Data) {
         guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let method = message["method"] as? String else {
             return ("400 Bad Request", encode(["jsonrpc": "2.0", "id": NSNull(), "error": ["code": -32700, "message": "parse error"]]))
         }
@@ -48,7 +48,7 @@ enum MCPEndpoint {
             }
             if name.hasPrefix("tasks_") {
                 guard let tasks else { return toolResult("ironpet's task list is not available right now", isError: true) }
-                switch tasks.call(String(name.dropFirst("tasks_".count)), arguments, by: "agent:mcp") {
+                switch TaskJSON.call(tasks, String(name.dropFirst("tasks_".count)), arguments, by: "agent:mcp") {
                 case .success(let value): return toolResult(text(value), isError: false)
                 case .failure(let error): return toolResult(error.message, isError: true)
                 }
@@ -76,7 +76,7 @@ enum MCPEndpoint {
 
     /// Connects `EventServer.onAgentAPI` to the services. Called on the server's queue; the work runs on the main actor.
     nonisolated static func route(_ request: HTTPRequest, automations: @escaping @MainActor () -> AutomationService?,
-                                  tasks: @escaping @MainActor () -> TaskStore?, screen: @escaping @MainActor () -> CaptureStore? = { nil },
+                                  tasks: @escaping @MainActor () -> TasksAPI?, screen: @escaping @MainActor () -> CaptureStore? = { nil },
                                   desktop: @escaping @MainActor () -> DesktopService? = { nil },
                                   respond: @escaping (String, Data) -> Void) {
         let path = request.path, body = request.body
@@ -86,8 +86,8 @@ enum MCPEndpoint {
             case "/mcp":
                 result = await handle(body, automations: automations(), tasks: tasks(), screen: screen(), desktop: desktop())
             case "/tasks":
-                guard let store = tasks() else { return respond("503 Service Unavailable", Data()) }
-                result = TaskMCP.handleCLI(body, store: store)
+                guard let tasks = tasks() else { return respond("503 Service Unavailable", Data()) }
+                result = TaskMCP.handleCLI(body, tasks: tasks)
             default:
                 guard let service = automations() else { return respond("503 Service Unavailable", Data()) }
                 result = await AutomationMCP.handleCLI(body, service: service)

@@ -1,7 +1,7 @@
 import Foundation
 
 /// The task tools agents see (served by `MCPEndpoint` at `POST /mcp`) and the plain endpoint for the CLI
-/// (`POST /tasks`). Both call `TaskStore.call`, which validates.
+/// (`POST /tasks`). Both call `TaskJSON.call`, which validates and goes through `TasksAPI`.
 @MainActor
 enum TaskMCP {
     static let guide = """
@@ -79,11 +79,11 @@ enum TaskMCP {
     }
 
     /// `POST /tasks` with `{"op": "list", "args": {...}}`, for the CLI.
-    static func handleCLI(_ body: Data, store: TaskStore) -> (status: String, body: Data) {
+    static func handleCLI(_ body: Data, tasks: TasksAPI) -> (status: String, body: Data) {
         guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let op = message["op"] as? String else {
             return ("400 Bad Request", MCPEndpoint.encode(["ok": false, "error": "send {\"op\": ..., \"args\": {...}}"]))
         }
-        switch store.call(op, message["args"] as? [String: Any] ?? [:], by: "agent:cli") {
+        switch TaskJSON.call(tasks, op, message["args"] as? [String: Any] ?? [:], by: "agent:cli") {
         case .success(let value): return ("200 OK", MCPEndpoint.encode(["ok": true, "result": value]))
         case .failure(let error): return ("200 OK", MCPEndpoint.encode(["ok": false, "error": error.message]))
         }

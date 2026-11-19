@@ -35,8 +35,8 @@ final class PetController: NSObject {
     /// "Ask Ghost" on an alert: open the chat with this prompt ready to send.
     var onAsk: ((String) -> Void)?
     var onCapture: ((_ region: Bool) -> Void)?
-    /// The Tasks section's list. Falls back to `TaskStore.shared`, then to an empty list.
-    var tasks: TaskStore?
+    /// The Tasks section's list. Falls back to an empty list.
+    var tasks: TasksAPI?
     /// The Automations section. Set before the window first opens.
     var settings: SettingsModel?
     /// The Settings row at the bottom of the sidebar: opens the Settings window.
@@ -260,7 +260,7 @@ final class PetController: NSObject {
         onChatShown?(chatShown)
     }
 
-    private var taskList: TaskStore { tasks ?? TaskStore.shared ?? Self.noTasks }
+    private var taskList: TasksAPI { tasks ?? Self.noTasks }
 
     private func makeWindow() -> IronPetPanel {
         let actions = SessionActions(
@@ -316,7 +316,7 @@ final class PetController: NSObject {
     }
 
     /// Stands in until the app hands over its store, so the tab shows its empty state instead of failing.
-    private static let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
+    private static let noTasks = TasksAPI(store: TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database))
 
     /// Reloads the sprite sheet after `pet.sprite` changes.
     func reloadAtlas() {
