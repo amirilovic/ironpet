@@ -289,10 +289,10 @@ final class TelegramTests: XCTestCase {
                 emit(.finished(error: nil))
             }
         }
-        session.input = "from the mac"
-        session.send()
+        session.submitLocal("from the mac", files: [], reply: nil)
         XCTAssertTrue(session.isRunning)
         bridge.handle(telegramMessage("from telegram", from: 10))
+        await bridge.flush()
         XCTAssertEqual(session.userQueueCount, 1)
         XCTAssertEqual(runs, [])
         for _ in 0..<50 where release == nil { try? await Task.sleep(nanoseconds: 20_000_000) }
@@ -318,13 +318,13 @@ final class TelegramTests: XCTestCase {
             await MainActor.run { emit(.finished(error: nil)) }
         }
         session.autoMode = true
-        session.input = "busy"
-        session.send()
+        session.submitLocal("busy", files: [], reply: nil)
         for _ in 0..<50 where release == nil { try? await Task.sleep(nanoseconds: 20_000_000) }
         session.isVisible = false
         let before = session.items.map(\.id)
         bridge.handle(telegramMessage("while busy", from: 10))
         bridge.handle(telegramMessage("/status", from: 10, update: 2))
+        await bridge.flush()
         XCTAssertEqual(session.userQueueCount, 1)
         XCTAssertEqual(session.items.map(\.id), before)
         session.cancel(from: .telegram(chat: 10))
@@ -507,11 +507,13 @@ final class TelegramTests: XCTestCase {
     func testRemovedUserLosesQueuedMessagesAndAnswers() async {
         allow(10)
         session.turnRunner = { _, _ in await withCheckedContinuation { _ in } }
-        session.input = "from the mac"
-        session.send()
+        session.submitLocal("from the mac", files: [], reply: nil)
         bridge.handle(telegramMessage("queued", from: 10))
+        await bridge.flush()
         XCTAssertEqual(session.userQueueCount, 1)
         bridge.removeUser(id: 10)
+        await bridge.flush()
+        for _ in 0..<5 { await Task.yield() }
         XCTAssertEqual(session.userQueueCount, 0)
         XCTAssertTrue(store.users.isEmpty)
     }
@@ -573,7 +575,7 @@ final class TelegramAutoApprovalTests: XCTestCase {
         session.use(URL(fileURLWithPath: "/tmp/telegram-test-project"))
         session.autoMode = auto
         session.turnRunner = { _, _ in }
-        if telegram { session.submit("hi", from: .telegram(chat: 5)) } else { session.input = "hi"; session.send() }
+        if telegram { session.submit("hi", from: .telegram(chat: 5)) } else { session.submitLocal("hi", files: [], reply: nil) }
         return session
     }
 

@@ -4,14 +4,15 @@ import XCTest
 @MainActor
 final class ChatSpeechTests: XCTestCase {
     private var session: ChatSession!
+    private var h: ChatHarness!
     private var deliver: [(AgentEvent) -> Void] = []
     /// What was sent to the speech server, in order.
     private var spoken: [String] = []
 
     override func setUp() async throws {
         TestMemory.isolate()
-        session = ChatSession(restore: false)
-        session.sendAfterDictation = true
+        h = ChatHarness(); session = h.session
+        h.model.sendAfterDictation = true
         session.workspace = FileManager.default.temporaryDirectory
         deliver = []
         spoken = []
@@ -34,14 +35,14 @@ final class ChatSpeechTests: XCTestCase {
     }
 
     func testVoiceNoteReplyIsReadAloud() async {
-        session.receiveTranscript("what changed?")
+        h.model.receiveTranscript("what changed?")
         await answer(0, "Two files changed.\n\n```\ndiff\n```")
         XCTAssertEqual(spoken, ["Two files changed."])
     }
 
     func testTypedMessageReplyIsReadAloud() async {
-        session.input = "what changed?"
-        session.send()
+        h.model.input = "what changed?"
+        await h.model.sendNow()
         await answer(0, "Two files changed.")
         XCTAssertEqual(spoken, ["Two files changed."])
     }
@@ -56,7 +57,7 @@ final class ChatSpeechTests: XCTestCase {
 
     func testQuietDuringACall() async {
         session.isQuiet = { true }
-        session.receiveTranscript("status?")
+        h.model.receiveTranscript("status?")
         await answer(0, "All green.")
         XCTAssertEqual(spoken, [])
     }
@@ -65,24 +66,24 @@ final class ChatSpeechTests: XCTestCase {
         var quietChecks = 0
         session.isQuiet = { quietChecks += 1; return false }
         session.speech.isEnabled = { false }
-        session.receiveTranscript("status?")
+        h.model.receiveTranscript("status?")
         await answer(0, "All green.")
         XCTAssertEqual(spoken, [])
         XCTAssertEqual(quietChecks, 0, "the quiet check polls the microphone list, so it must not run while off")
     }
 
     func testFailedTurnIsNotRead() async {
-        session.receiveTranscript("status?")
+        h.model.receiveTranscript("status?")
         await answer(0, "Partial", error: "agent crashed")
         XCTAssertEqual(spoken, [])
     }
 
     func testQueuedMessageIsReadWhenItsTurnEnds() async {
-        session.input = "first"
-        session.send()
+        h.model.input = "first"
+        await h.model.sendNow()
         await settle()
-        session.input = "then this"
-        session.send()
+        h.model.input = "then this"
+        await h.model.sendNow()
         XCTAssertEqual(session.queue.count, 1)
         await answer(0, "First answer.")
         XCTAssertEqual(spoken, ["First answer."])
@@ -102,7 +103,7 @@ final class ChatSpeechTests: XCTestCase {
 
     func testButtonReadsWithSpokenRepliesOff() async {
         session.speech.isEnabled = { false }
-        session.receiveTranscript("status?")
+        h.model.receiveTranscript("status?")
         await answer(0, "All green.")
         XCTAssertEqual(spoken, [], "off reads nothing on its own")
         let reply = try! XCTUnwrap(session.items.last { if case .assistant = $0.kind { true } else { false } })
@@ -113,7 +114,7 @@ final class ChatSpeechTests: XCTestCase {
 
     func testSpokenRepliesOnStillReadsAutomaticallyAndShowsTheButton() async {
         session.speech.isEnabled = { true }
-        session.receiveTranscript("status?")
+        h.model.receiveTranscript("status?")
         await answer(0, "All green.")
         XCTAssertEqual(spoken, ["All green."], "on reads the reply by itself")
         var speech = Config.Speech()
@@ -148,8 +149,8 @@ final class ChatSpeechTests: XCTestCase {
         let item = ChatSession.Item(kind: .assistant("Long reply."))
         session.toggleSpeech(item)
         XCTAssertEqual(session.speech.speakingID, item.id)
-        session.input = "interrupting"
-        session.send()
+        h.model.input = "interrupting"
+        await h.model.sendNow()
         XCTAssertNil(session.speech.speakingID)
     }
 }

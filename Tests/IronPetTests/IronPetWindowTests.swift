@@ -195,7 +195,7 @@ final class IronPetWindowTests: XCTestCase {
     }
 
     func testEscClosesAnIdleChat() {
-        let session = ChatSession(restore: false)
+        let h = ChatHarness(); let session = h.session
         let panel = IronPetPanel.chat(session)
         var closed = 0
         panel.onClose = { closed += 1 }
@@ -455,7 +455,7 @@ final class IronPetWindowTests: XCTestCase {
         chat.loadPreview(.done)
         let meetings = MeetingLibrary(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         var seen = PageHeaderFrames()
-        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks()), chat: ChatAPI(session: chat),
+        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks()), chat: ChatHarness(session: chat).model,
                                      meetings: MeetingsAPI(controller: MeetingController(), library: meetings), settings: nil, actions: .none)
             .onPreferenceChange(PageHeaderFrames.self) { seen = $0 }
             .frame(width: IronPetPanel.minimumSize.width, height: IronPetPanel.minimumSize.height)
@@ -660,14 +660,14 @@ final class WindowAutoHideTests: XCTestCase {
     private var enabled = false
     private var capturing = false
 
-    private func open() -> (ChatSession, IronPetPanel) {
-        let session = ChatSession(restore: false)
-        let panel = IronPetPanel.chat(session)
+    private func open() -> (ChatHarness, IronPetPanel) {
+        let h = ChatHarness()
+        let panel = IronPetPanel.chat(h)
         panel.autoHideEnabled = { self.enabled }
         panel.isCapturing = { self.capturing }
         panel.setFrame(CGRect(x: 100, y: 100, width: 800, height: 600), display: false)
         panel.orderFront(nil)
-        return (session, panel)
+        return (h, panel)
     }
 
     private func resign() { NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp) }
@@ -683,9 +683,9 @@ final class WindowAutoHideTests: XCTestCase {
 
     func testOnHidesAndBringsBackTheSameFrameAndDraft() {
         enabled = true
-        let (session, panel) = open()
+        let (h, panel) = open()
         defer { panel.close() }
-        session.input = "half a thought"
+        h.model.input = "half a thought"
         let frame = panel.frame
         resign()
         XCTAssertFalse(panel.isVisible)
@@ -694,7 +694,7 @@ final class WindowAutoHideTests: XCTestCase {
         XCTAssertTrue(panel.isVisible)
         XCTAssertFalse(panel.autoHidden)
         XCTAssertEqual(panel.frame, frame)
-        XCTAssertEqual(session.input, "half a thought")
+        XCTAssertEqual(h.model.input, "half a thought")
     }
 
     func testAWindowClosedByEscStaysClosed() {
@@ -708,12 +708,12 @@ final class WindowAutoHideTests: XCTestCase {
 
     func testOwnSheetsDragsAndCapturesKeepItOpen() {
         enabled = true
-        let (session, panel) = open()
+        let (h, panel) = open()
         defer { panel.close() }
-        session.fileDragActive = true
+        h.model.fileDragActive = true
         resign()
         XCTAssertTrue(panel.isVisible)
-        session.fileDragActive = false
+        h.model.fileDragActive = false
         capturing = true
         resign()
         XCTAssertTrue(panel.isVisible)
@@ -742,21 +742,21 @@ final class WindowAutoHideTests: XCTestCase {
     /// reply is there on return.
     func testReplyArrivingWhileHiddenIsThereOnReturn() {
         enabled = true
-        let (session, panel) = open()
+        let (h, panel) = open()
         defer { panel.close() }
         resign()
         XCTAssertFalse(panel.isVisible)
-        session.items.append(.init(kind: .assistant("done")))
+        h.session.items.append(.init(kind: .assistant("done")))
         activate()
         XCTAssertTrue(panel.isVisible)
-        XCTAssertEqual(session.items.count, 1)
+        XCTAssertEqual(h.session.items.count, 1)
     }
 }
 
 extension WindowAutoHideTests {
     func testShortcutShowsAHiddenWindowAndABusyVoiceControllerBlocksTheHide() async throws {
         enabled = true
-        let (session, panel) = open()
+        let (h, panel) = open()
         defer { panel.close() }
         resign()
         XCTAssertFalse(panel.isVisible)
@@ -764,9 +764,9 @@ extension WindowAutoHideTests {
         panel.show(near: CGRect(x: 0, y: 0, width: 50, height: 50))
         XCTAssertTrue(panel.isVisible)
 
-        session.voice.isEnabled = { true }
-        session.voice.start(.file(URL(fileURLWithPath: "/nonexistent.m4a")))
-        XCTAssertTrue(session.voice.isBusy)
+        h.model.voice.isEnabled = { true }
+        h.model.voice.start(.file(URL(fileURLWithPath: "/nonexistent.m4a")))
+        XCTAssertTrue(h.model.voice.isBusy)
         resign()
         XCTAssertTrue(panel.isVisible, "recording or transcribing keeps the window")
         XCTAssertFalse(panel.autoHidden)
@@ -774,9 +774,9 @@ extension WindowAutoHideTests {
 
     func testIdleVoiceDoesNotBlockTheHide() {
         enabled = true
-        let (session, panel) = open()
+        let (h, panel) = open()
         defer { panel.close() }
-        XCTAssertFalse(session.voice.isBusy)
+        XCTAssertFalse(h.model.voice.isBusy)
         resign()
         XCTAssertFalse(panel.isVisible)
     }

@@ -651,7 +651,7 @@ private struct MeetingSettings: View {
 
     /// Models the agent reported the last time it ran in the chat. An agent that never ran there has none yet.
     private var models: [ChatModel] {
-        AgentCatalog.agent(id: meetings.summaryAgent).map(ChatAPI.cachedModels(for:)) ?? []
+        ChatAPI.cachedModels(forAgent: meetings.summaryAgent).map { ChatModel(id: $0.id, name: $0.name) }
     }
 
     var body: some View {

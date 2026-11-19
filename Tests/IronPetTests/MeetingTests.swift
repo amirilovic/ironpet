@@ -289,15 +289,15 @@ final class MeetingOpenTests: XCTestCase {
 
     @MainActor
     func testOpenInChatKeepsSessionAndFolder() {
-        let session = ChatSession(restore: false)
+        let h = ChatHarness(); let session = h.session
         let folder = URL(fileURLWithPath: "/tmp/project")
         session.use(folder)
         let existing = URL(fileURLWithPath: "/tmp/a.png")
-        session.attachments = [existing]
+        h.model.attachments = [existing]
         let transcript = URL(fileURLWithPath: "/tmp/m/transcript.md")
         let summary = URL(fileURLWithPath: "/tmp/m/summary.md")
-        session.attach([transcript, summary, existing])
-        XCTAssertEqual(session.attachments, [existing, transcript, summary])
+        h.model.attach([transcript, summary, existing])
+        XCTAssertEqual(h.model.attachments, [existing, transcript, summary])
         XCTAssertEqual(session.workspace, folder)
     }
 }

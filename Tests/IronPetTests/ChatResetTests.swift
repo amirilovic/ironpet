@@ -4,6 +4,7 @@ import XCTest
 @MainActor
 final class ChatResetTests: XCTestCase {
     private var session: ChatSession!
+    private var h: ChatHarness!
     private var deliver: [(AgentEvent) -> Void] = []
     private var log: [String] = []
     private var turns: [ACPTurn] = []
@@ -11,7 +12,7 @@ final class ChatResetTests: XCTestCase {
 
     override func setUp() async throws {
         TestMemory.isolate()
-        session = ChatSession(restore: false)
+        h = ChatHarness(); session = h.session
         deliver = []
         turns = []
         log = []
@@ -28,8 +29,8 @@ final class ChatResetTests: XCTestCase {
     private func settle() async { for _ in 0..<5 { await Task.yield() } }
 
     private func chatted(thread: String = "s1") async {
-        session.input = "hello"
-        session.send()
+        h.model.input = "hello"
+        await h.model.sendNow()
         await settle()
         deliver[0](.session(thread))
         deliver[0](.assistant("hi"))
@@ -75,8 +76,8 @@ final class ChatResetTests: XCTestCase {
     func testS3FailedTurnKeepsTranscriptAndThread() async {
         await chatted()
         let before = session.items.map(\.id)
-        session.input = "again"
-        session.send()
+        h.model.input = "again"
+        await h.model.sendNow()
         await settle()
         deliver[1](.finished(error: "The agent stopped"))
         await settle()
@@ -86,8 +87,8 @@ final class ChatResetTests: XCTestCase {
 
     func testS3LoadFallbackKeepsThread() async {
         await chatted()
-        session.input = "again"
-        session.send()
+        h.model.input = "again"
+        await h.model.sendNow()
         await settle()
         // The agent could not load s1 and made a new session.
         deliver[1](.session("fresh"))
@@ -96,8 +97,8 @@ final class ChatResetTests: XCTestCase {
         XCTAssertEqual(session.threadID, "s1")
         XCTAssertGreaterThanOrEqual(session.items.count, 3)
         XCTAssertTrue(log.contains { $0.contains("fresh") && $0.contains("kept") })
-        session.input = "third"
-        session.send()
+        h.model.input = "third"
+        await h.model.sendNow()
         await settle()
         XCTAssertEqual(turns.last?.resume, "s1", "the next message continues in the same thread")
     }
@@ -105,8 +106,8 @@ final class ChatResetTests: XCTestCase {
     func testS4TelegramWhileBusyQueuesWithoutClearing() async {
         await chatted()
         session.autoMode = true
-        session.input = "busy"
-        session.send()
+        h.model.input = "busy"
+        await h.model.sendNow()
         await settle()
         let count = session.items.count
         session.submit("from phone", from: .telegram(chat: 7))

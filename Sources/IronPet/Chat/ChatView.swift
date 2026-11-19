@@ -18,7 +18,7 @@ extension View {
 }
 
 struct ChatView: View {
-    @ObservedObject var session: ChatAPI
+    @ObservedObject var session: ChatViewModel
     @ObservedObject private var config = SettingsAPI.live
     @FocusState private var inputFocused: Bool
     @State private var showSettings = false
@@ -805,7 +805,7 @@ struct ChatView: View {
         }
     }
 
-    private func approvalCard(_ approval: ChatApproval) -> some View {
+    private func approvalCard(_ approval: ChatApprovalInfo) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(approval.title, systemImage: "hand.raised.fill")
                 .font(.system(size: 13, weight: .semibold))
@@ -925,7 +925,7 @@ struct ChatView: View {
                     if session.isRunning {
                         sendButton("stop.fill", color: .red, help: "Stop (Esc)", action: session.stop)
                     }
-                    sendButton("arrow.up", color: .accentColor, help: session.isRunning ? "Queue (Enter)" : "Send (Enter)", action: session.sendDraft)
+                    sendButton("arrow.up", color: .accentColor, help: session.isRunning ? "Queue (Enter)" : "Send (Enter)", action: session.send)
                         .disabled(session.input.trimmingCharacters(in: .whitespaces).isEmpty && session.attachments.isEmpty)
                 }
             }
@@ -990,7 +990,7 @@ struct ChatView: View {
                     .font(.system(size: 13.5))
                     .lineLimit(1...8)
                     .focused($inputFocused)
-                    .onSubmit(session.sendDraft)
+                    .onSubmit(session.send)
                     // Return sends; Shift-Return adds a line break at the caret (Option-Return already did).
                     .onKeyPress(.return, phases: .down) { press in
                         if !press.modifiers.contains(.shift), session.completeSlash() { return .handled }
@@ -1035,8 +1035,8 @@ struct ChatView: View {
                         Text(message.text.isEmpty ? "Screenshot" : (message.text.components(separatedBy: .newlines).first ?? message.text))
                             .font(.system(size: 12))
                             .lineLimit(1)
-                        if !message.attachments.isEmpty {
-                            Label("\(message.attachments.count)", systemImage: "photo")
+                        if !message.files.isEmpty {
+                            Label("\(message.files.count)", systemImage: "photo")
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
                         }

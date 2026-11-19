@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 struct SpeakRequest: Codable, Equatable {
@@ -35,7 +36,7 @@ struct VoiceStatus: Codable, Equatable {
 /// Speak, stop and transcribe. Speaking either plays on this Mac's speaker (`speak`) or hands the audio to the caller (`audio`),
 /// so a remote client can play it on its own. Both use the voice server in Settings → Voice.
 @MainActor
-final class VoiceAPI {
+final class VoiceAPI: ObservableObject {
     private let speech: SpeechPlayer
     private let settings: SettingsAPI
 
@@ -49,15 +50,21 @@ final class VoiceAPI {
         return try await TelegramVoice.transcribe(audio, name: name, with: transcriber)
     }
 
+    private var forwarding: AnyCancellable?
+
     init(speech: SpeechPlayer, settings: SettingsAPI) {
         self.speech = speech
         self.settings = settings
+        forwarding = speech.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         // The player and every client decide from the same settings.
         speech.isEnabled = { [weak settings] in settings?.config.speech.enabled ?? false }
     }
 
     /// A voice API with its own speaker, for Settings rendered without the app, so Preview still has something to play through.
     static func standalone(settings: SettingsAPI) -> VoiceAPI { VoiceAPI(speech: SpeechPlayer(), settings: settings) }
+
+    /// The chat message being read aloud, so its speaker button shows Stop.
+    var speakingItem: UUID? { speech.speakingID }
 
     var status: VoiceStatus {
         VoiceStatus(speechEnabled: settings.config.speech.enabled, canSpeak: settings.config.speech.canSpeak, transcriptionEnabled: settings.config.voice.enabled, speaking: speech.isSpeaking)

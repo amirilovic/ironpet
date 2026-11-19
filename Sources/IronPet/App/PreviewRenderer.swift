@@ -24,7 +24,7 @@ enum PreviewRenderer {
         for (file, preview) in [("chat", ChatSession.Preview.done), ("chat-approval", .approval), ("chat-markdown", .markdown), ("chat-form", .form)] {
             let session = ChatSession(restore: false)
             session.loadPreview(preview)
-            render(ChatView(session: ChatAPI(session: session)).frame(width: 520, height: 640).panel(), to: dir, file)
+            render(ChatView(session: Self.chatModel(session)).frame(width: 520, height: 640).panel(), to: dir, file)
         }
         // The reply markdown sample at the narrow chat width and a wider one, in both appearances, and with find open.
         for width in [420.0, 520.0] {
@@ -45,11 +45,12 @@ enum PreviewRenderer {
         let log = (0..<1_800).map { "0x\(String($0, radix: 16)) frame \($0) in IronPet.crash()" }.joined(separator: "\n")
         let pasteDir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-paste-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: pasteDir) }
-        pasted.attach(PasteIntake.importPaste(pasteboardHolding(log), imageDirectory: pasteDir, textDirectory: pasteDir))
-        render(ChatView(session: ChatAPI(session: pasted)).frame(width: 520, height: 640).panel(), to: dir, "chat-pasted-text")
+        let pastedModel = Self.chatModel(pasted)
+        pastedModel.attach(PasteIntake.importPaste(pasteboardHolding(log), imageDirectory: pasteDir, textDirectory: pasteDir))
+        render(ChatView(session: pastedModel).frame(width: 520, height: 640).panel(), to: dir, "chat-pasted-text")
         let settings = ChatSession(restore: false)
         settings.loadPreview(.done)
-        render(ChatView(session: ChatAPI(session: settings), settingsOnly: true).panel(), to: dir, "chat-settings")
+        render(ChatView(session: Self.chatModel(settings), settingsOnly: true).panel(), to: dir, "chat-settings")
 
         let sessions = SessionStore()
         sessions.loadPreview(sampleSessions)
@@ -64,7 +65,7 @@ enum PreviewRenderer {
         func list(_ sessions: SessionStore, tasks: TasksAPI, on section: IronPetSection? = nil) -> some View {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.section = section ?? IronPetSection.needingAttention(agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks)
-            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: ChatAPI(session: chat),
+            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: Self.chatModel(chat),
                                      meetings: meetings, actions: .none)
                 .frame(width: 780, height: 560).panel()
         }
@@ -120,7 +121,7 @@ enum PreviewRenderer {
             model.todayShown = true
             model.briefKind = kind
             model.section = .today
-            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: ChatAPI(session: chat),
+            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: Self.chatModel(chat),
                                      meetings: meetings, brief: content, actions: .none)
                 .frame(width: 780, height: 560).panel()
         }
@@ -146,7 +147,7 @@ enum PreviewRenderer {
                     model.sidebarCollapsed = collapsed
                     model.todayShown = true
                     model.section = section
-                    let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: ChatAPI(session: chat),
+                    let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: Self.chatModel(chat),
                                                  meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
                     renderWindow(model: model, session: chat, content: view, to: dir,
                                  "real-\(section.rawValue)-\(suffix)\(collapsed ? "-collapsed" : "")", scheme: scheme)
@@ -168,7 +169,7 @@ enum PreviewRenderer {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.sidebarCollapsed = true
             model.section = .chat
-            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: ChatAPI(session: markdownChat),
+            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: Self.chatModel(markdownChat),
                                          meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
             renderWindow(model: model, session: markdownChat, content: view, to: dir, "real-chat-markdown-\(suffix)", scheme: scheme)
         }
@@ -209,7 +210,7 @@ enum PreviewRenderer {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.sidebarCollapsed = true
             model.section = .chat
-            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: ChatAPI(session: speaking),
+            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: Self.chatModel(speaking),
                                          meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
             renderWindow(model: model, session: speaking, content: view, to: dir, "real-chat-speaking-\(suffix)", scheme: scheme)
         }
@@ -377,13 +378,19 @@ enum PreviewRenderer {
         return model
     }
 
+    /// The Mac chat state over a sample session, built the way the app builds it, from the API's own snapshot.
+    @MainActor
+    static func chatModel(_ session: ChatSession) -> ChatViewModel {
+        ChatViewModel(api: ChatAPI(session: session), voiceAPI: .standalone(settings: .live), events: APIEventBus(), persists: false)
+    }
+
     /// Draws the ironpet window in a real `IronPetPanel` (traffic lights, sidebar selection and the blur of its
     /// materials) and captures that window from the window server. The offscreen `snapshot` cannot: a borderless
     /// window has no title bar, draws the sidebar selection black and does not blur materials.
     /// Falls back to nil when the window server gives no image (no display), and the caller skips the file.
     static func renderWindow(model: IronPetWindowModel, session: ChatSession?, content: some View, to dir: URL,
                              _ name: String, scheme: ColorScheme) {
-        let panel = IronPetPanel(model: model, session: session.map { ChatAPI(session: $0) }, content: content)
+        let panel = IronPetPanel(model: model, session: session.map { Self.chatModel($0) }, content: content)
         panel.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
         panel.setContentSize(CGSize(width: 780, height: 560))
         panel.setFrameOrigin(CGPoint(x: 60, y: 60))

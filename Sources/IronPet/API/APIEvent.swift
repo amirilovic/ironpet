@@ -48,6 +48,11 @@ final class APIEventBus {
         func cancel() { bus?.handlers[token] = nil }
     }
 
+    /// Kinds whose events replace an earlier buffered event with the same id.
+    private static let coalesces: Set<APIEventKind> = [.chatItem, .chatState]
+    /// How far back the buffer looks for the event to replace.
+    private static let coalesceWindow = 64
+
     let capacity: Int
     private(set) var lastSeq = 0
     private var buffer: [APIEvent] = []
@@ -62,6 +67,13 @@ final class APIEventBus {
     func publish(_ kind: APIEventKind, id: String? = nil) {
         lastSeq += 1
         let event = APIEvent(seq: lastSeq, at: now(), kind: kind, id: id)
+        // Streamed text changes one message hundreds of times. A client only needs to know that it changed since it last looked, so
+        // the buffer keeps the newest event for each message (and for each part of the chat state) instead of every one.
+        // Live subscribers still get every event. Without this a few seconds of streaming would push every other event out.
+        if Self.coalesces.contains(kind), let id,
+           let earlier = buffer[max(0, buffer.count - Self.coalesceWindow)...].lastIndex(where: { $0.kind == kind && $0.id == id }) {
+            buffer.remove(at: earlier)
+        }
         buffer.append(event)
         if buffer.count > capacity { buffer.removeFirst(buffer.count - capacity) }
         for handler in Array(handlers.values) { handler(event) }

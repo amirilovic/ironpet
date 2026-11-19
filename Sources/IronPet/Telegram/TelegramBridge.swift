@@ -121,7 +121,7 @@ final class TelegramBridge: ObservableObject {
             for request in pending { onPairingResolved?(request.id) }
             pending = []
             denied = []
-            for user in storage.users() { host?.cancel(from: .telegram(chat: user.id)) }
+            for user in storage.users() { cancelQueued(chat: user.id) }
         }
     }
 
@@ -206,7 +206,11 @@ final class TelegramBridge: ObservableObject {
     func removeUser(id: Int64) {
         storage.remove(id)
         stopTyping(id)
-        host?.cancel(from: .telegram(chat: id))
+        cancelQueued(chat: id)
+    }
+
+    private func cancelQueued(chat: Int64) {
+        Task { [weak host] in await host?.cancel(from: .telegram(chat: chat)) }
     }
 
     // MARK: Polling
@@ -262,7 +266,7 @@ final class TelegramBridge: ObservableObject {
         var groups: [[TelegramMessage]] = []
         for update in updates {
             if let callback = update.callbackQuery {
-                handleCallback(callback)
+                enqueueIncoming { [self] in await handleCallback(callback) }
             } else if let message = update.message, let from = message.from, from.isBot != true, message.chat.type == "private" {
                 if let id = message.mediaGroupId, let last = groups.last?.last, last.mediaGroupId == id, last.from?.id == from.id {
                     groups[groups.count - 1].append(message)
@@ -317,28 +321,24 @@ final class TelegramBridge: ObservableObject {
         }
         if media.isEmpty {
             if text.isEmpty { return reply(chat, "That kind of message is not supported. Send text, a photo, a file or a voice message.") }
-            if inboxPending == 0 {
-                handleText(text, chat: chat, reply: quote)
-            } else {
-                enqueueIncoming { [self] in handleText(text, chat: chat, reply: quote) }
-            }
+            enqueueIncoming { [self] in await handleText(text, chat: chat, reply: quote) }
         } else {
             enqueueIncoming { [self] in await handleMedia(media, text: text, chat: chat, reply: quote) }
         }
     }
 
-    private func handleText(_ text: String, chat: Int64, reply quote: ChatReply?) {
+    private func handleText(_ text: String, chat: Int64, reply quote: ChatReply?) async {
         guard let host else { return }
         switch Self.command(text) {
         case "/start":
             reply(chat, "Connected. Send a message to chat with \(petName()).")
         case "/status":
-            let queued = host.status.queued
-            let state = host.isRunning ? "busy" + (queued > 0 ? " (\(queued) queued)" : "") : "idle"
-            reply(chat, "Connected. Chat: \(host.title). \(petName()) is \(state).")
+            let status = await host.status()
+            let state = status.running ? "busy" + (status.queued > 0 ? " (\(status.queued) queued)" : "") : "idle"
+            reply(chat, "Connected. Chat: \(status.title). \(petName()) is \(state).")
         default:
             // Anything else, including /review or a path, is a prompt.
-            try? host.send(SendChatRequest(text: text, origin: .telegram(chat: chat), reply: quote))
+            _ = try? await host.send(SendChatRequest(text: text, origin: .telegram(chat: chat), reply: quote))
         }
     }
 
@@ -378,7 +378,7 @@ final class TelegramBridge: ObservableObject {
         guard epoch == started, storage.users().contains(where: { $0.id == chat }) else { return }
         for transcript in transcripts { reply(chat, "🎙 \(transcript)") }
         let message = ([text] + transcripts).filter { !$0.isEmpty }.joined(separator: "\n")
-        try? host?.send(SendChatRequest(text: message, origin: .telegram(chat: chat), attachments: urls, reply: quote))
+        _ = try? await host?.send(SendChatRequest(text: message, origin: .telegram(chat: chat), files: urls, reply: quote))
     }
 
     /// Runs incoming work one item at a time, in arrival order.
@@ -394,7 +394,7 @@ final class TelegramBridge: ObservableObject {
     }
 
     /// A tap on an Approve or Reject button.
-    private func handleCallback(_ callback: TelegramCallback) {
+    private func handleCallback(_ callback: TelegramCallback) async {
         func answer(_ text: String, alert: Bool = false) {
             // Not on the ordered outbox: Telegram only accepts the answer for a short while.
             callbackAnswers.append(Task { [client] in try? await client.answerCallback(id: callback.id, text: text, alert: alert) })
@@ -407,12 +407,12 @@ final class TelegramBridge: ObservableObject {
               callback.message?.chat.id == callback.from.id, approvalMessages[id]?.chat == callback.from.id else {
             return answer("That button is no longer active.")
         }
-        guard let host, host.hasPendingApproval(id) else {
+        guard let host, await host.approvals().contains(where: { $0.id == id }) else {
             return answer("Already answered.")
         }
         let allow = parts[2] == "1"
         applying.insert(id)
-        try? host.decide(DecideApprovalRequest(id: id, allow: allow))
+        try? await host.decide(DecideApprovalRequest(id: id, allow: allow))
         applying.remove(id)
         answer(allow ? "Approved." : "Rejected.")
     }

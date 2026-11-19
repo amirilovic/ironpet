@@ -19,10 +19,10 @@ final class IronPetPanel: NSPanel {
     /// The window was hidden because another app became active, and comes back when ironpet is activated again.
     private(set) var autoHidden = false
     private let model: IronPetWindowModel
-    private let session: ChatAPI?
+    private let session: ChatViewModel?
     private var observers: [NSObjectProtocol] = []
 
-    init<Content: View>(model: IronPetWindowModel, session: ChatAPI?, content: Content) {
+    init<Content: View>(model: IronPetWindowModel, session: ChatViewModel?, content: Content) {
         self.model = model
         self.session = session
         // A titled window with a transparent, title-less bar: native resizing from every edge and corner, and the

@@ -4,11 +4,12 @@ import XCTest
 @MainActor
 final class ChatReplyTests: XCTestCase {
     private var session: ChatSession!
+    private var h: ChatHarness!
     private var turns: [ACPTurn] = []
 
     override func setUp() async throws {
         TestMemory.isolate()
-        session = ChatSession(restore: false)
+        h = ChatHarness(); session = h.session
         turns = []
         session.workspace = FileManager.default.temporaryDirectory
         session.turnRunner = { [unowned self] turn, _ in turns.append(turn) }
@@ -27,30 +28,30 @@ final class ChatReplyTests: XCTestCase {
     func testReplyingToAnAssistantMessageSetsTheChipAndOnlyOneAtATime() {
         let first = assistantItem("first answer")
         let second = assistantItem("second answer")
-        session.reply(to: first)
-        XCTAssertEqual(session.replyingTo?.itemID, first.id)
-        XCTAssertEqual(session.replyingTo?.text, "first answer")
-        let tick = session.replyFocusTick
-        session.reply(to: second)
-        XCTAssertEqual(session.replyingTo?.itemID, second.id)
-        XCTAssertGreaterThan(session.replyFocusTick, tick)
-        session.replyingTo = nil
-        XCTAssertNil(session.replyingTo)
+        h.model.reply(to: first)
+        XCTAssertEqual(h.model.replyingTo?.itemID, first.id)
+        XCTAssertEqual(h.model.replyingTo?.text, "first answer")
+        let tick = h.model.replyFocusTick
+        h.model.reply(to: second)
+        XCTAssertEqual(h.model.replyingTo?.itemID, second.id)
+        XCTAssertGreaterThan(h.model.replyFocusTick, tick)
+        h.model.replyingTo = nil
+        XCTAssertNil(h.model.replyingTo)
     }
 
     func testToolStepsAndErrorsCannotBeRepliedTo() {
-        session.reply(to: ChatSession.Item(kind: .tool("Ran `ls`", ok: true)))
-        session.reply(to: ChatSession.Item(kind: .error("boom")))
-        XCTAssertNil(session.replyingTo)
+        h.model.reply(to: ChatSession.Item(kind: .tool("Ran `ls`", ok: true)))
+        h.model.reply(to: ChatSession.Item(kind: .error("boom")))
+        XCTAssertNil(h.model.replyingTo)
     }
 
     func testSendPutsTheFullOriginalAheadOfTheTextAndClearsTheChip() async {
         let original = assistantItem("line one\nline two\nline three")
-        session.reply(to: original)
-        session.input = "what about this?"
-        session.send()
+        h.model.reply(to: original)
+        h.model.input = "what about this?"
+        await h.model.sendNow()
         await settle()
-        XCTAssertNil(session.replyingTo)
+        XCTAssertNil(h.model.replyingTo)
         let prompt = turns.first?.prompt ?? ""
         XCTAssertTrue(prompt.hasPrefix("> Replying to "), prompt)
         XCTAssertTrue(prompt.contains("> line one\n> line two\n> line three"), prompt)
@@ -63,9 +64,9 @@ final class ChatReplyTests: XCTestCase {
 
     func testAnOriginalOverTheLimitIsCutInThePromptButKeptWhole() async {
         let long = String(repeating: "a", count: ChatSession.replyLimit + 500)
-        session.reply(to: assistantItem(long))
-        session.input = "and?"
-        session.send()
+        h.model.reply(to: assistantItem(long))
+        h.model.input = "and?"
+        await h.model.sendNow()
         await settle()
         let prompt = turns.first?.prompt ?? ""
         XCTAssertFalse(prompt.contains(long))
@@ -75,14 +76,14 @@ final class ChatReplyTests: XCTestCase {
     }
 
     func testReplyOnAMessageSentWhileBusySurvivesTheQueue() async {
-        session.input = "start"
-        session.send()
+        h.model.input = "start"
+        await h.model.sendNow()
         await settle()
-        session.reply(to: assistantItem("earlier"))
-        session.input = "queued reply"
-        session.send()
+        h.model.reply(to: assistantItem("earlier"))
+        h.model.input = "queued reply"
+        await h.model.sendNow()
         XCTAssertEqual(session.queue.first?.reply?.text, "earlier")
-        XCTAssertNil(session.replyingTo)
+        XCTAssertNil(h.model.replyingTo)
     }
 
     func testReplySurvivesSavingAndReopeningAThread() throws {
@@ -108,10 +109,10 @@ final class ChatReplyTests: XCTestCase {
 
     func testAskingAboutASelectionSendsOnlyTheSelectedText() async {
         let original = assistantItem("intro line\nthe part I care about\noutro line that must not be sent")
-        session.reply(to: original, selection: "  the part I care about ")
-        XCTAssertEqual(session.replyingTo?.text, "the part I care about")
-        session.input = "why this?"
-        session.send()
+        h.model.reply(to: original, selection: "  the part I care about ")
+        XCTAssertEqual(h.model.replyingTo?.text, "the part I care about")
+        h.model.input = "why this?"
+        await h.model.sendNow()
         await settle()
         let prompt = turns.first?.prompt ?? ""
         XCTAssertTrue(prompt.hasPrefix("> About this part of "), prompt)
@@ -123,8 +124,8 @@ final class ChatReplyTests: XCTestCase {
 
     func testAnEmptySelectionFallsBackToTheWholeMessage() {
         let original = assistantItem("whole message")
-        session.reply(to: original, selection: "   ")
-        XCTAssertEqual(session.replyingTo?.text, "whole message")
-        XCTAssertNil(session.replyingTo?.selection)
+        h.model.reply(to: original, selection: "   ")
+        XCTAssertEqual(h.model.replyingTo?.text, "whole message")
+        XCTAssertNil(h.model.replyingTo?.selection)
     }
 }

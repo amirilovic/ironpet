@@ -86,4 +86,74 @@ final class BoundaryTests: XCTestCase {
         XCTAssertEqual(Self.stores(named: "// the TaskStore is behind the API\nlet x = 1"), [])
         XCTAssertEqual(Self.stores(named: "let x = TaskStoreProxy()"), [], "a longer name is a different type")
     }
+
+    // MARK: ChatAPI is what a remote client will call
+
+    /// Types ChatAPI may name besides the Codable ones it declares in `API/`.
+    private static let plain: Set<String> = ["String", "Int", "Int64", "Bool", "Double", "Date", "Data", "URL", "UUID", "TimeInterval", "Void",
+                                             "Array", "Optional", "Dictionary", "APIError", "Self", "Any"]
+    /// Codable types declared outside `API/` that ChatAPI hands out. The test checks each really is Codable.
+    private static let outsideAPI = ["ChatItem": "struct Item: Identifiable, Codable", "ChatReply": "struct Reply: Codable",
+                                     "ChatTurnEvent": "enum TurnEvent: Equatable, Codable", "ChatApprovalOutcome": "enum ApprovalOutcome: Equatable, Codable",
+                                     "ElicitationForm": "struct ElicitationForm: Equatable, Codable", "ElicitationValue": "enum ElicitationValue: Equatable, Codable"]
+
+    private static func apiFiles() -> [(path: String, text: String)] { swiftFiles().filter { $0.path.hasPrefix("API/") } }
+
+    /// The type names a declaration line mentions.
+    private static func typeNames(in line: String) -> Set<String> {
+        let regex = try! NSRegularExpression(pattern: #"\b[A-Z][A-Za-z0-9]*\b"#)
+        let range = NSRange(line.startIndex..., in: line)
+        return Set(regex.matches(in: line, range: range).compactMap { Range($0.range, in: line).map { String(line[$0]) } })
+    }
+
+    func testChatAPIPublicSurfaceIsCodableOnly() throws {
+        let files = Self.apiFiles()
+        let chat = try XCTUnwrap(files.first { $0.path == "API/ChatAPI.swift" }, "API/ChatAPI.swift moved")
+        // Codable types declared in the API folder.
+        var codable = Self.plain
+        let declaration = try NSRegularExpression(pattern: #"(?:struct|enum)\s+(\w+)[^\n{]*\bCodable\b"#)
+        for file in files {
+            let range = NSRange(file.text.startIndex..., in: file.text)
+            for match in declaration.matches(in: file.text, range: range) {
+                if let r = Range(match.range(at: 1), in: file.text) { codable.insert(String(file.text[r])) }
+            }
+        }
+        // Typealiases of Codable types, and the Codable types outside the folder.
+        let all = Self.swiftFiles().map(\.text).joined(separator: "\n")
+        for (name, declaration) in Self.outsideAPI {
+            XCTAssertTrue(all.contains(declaration), "\(name) must stay Codable: expected `\(declaration)`")
+            codable.insert(name)
+        }
+        var problems: [String] = []
+        var depth = 0
+        var inClass = false
+        for raw in chat.text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(raw)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            defer { depth += line.filter { $0 == "{" }.count - line.filter { $0 == "}" }.count }
+            if trimmed.hasPrefix("final class ChatAPI") { inClass = true; depth = 0 }
+            guard inClass else { continue }
+            // Members of ChatAPI itself: one level inside `final class ChatAPI`.
+            guard depth == 1, !trimmed.hasPrefix("//"), !trimmed.hasPrefix("private"), !trimmed.hasPrefix("fileprivate") else { continue }
+            let isMember = trimmed.hasPrefix("func ") || trimmed.hasPrefix("static func ") || trimmed.hasPrefix("var ") || trimmed.hasPrefix("let ")
+                || trimmed.hasPrefix("init(") || trimmed.hasPrefix("@discardableResult")
+            guard isMember, !trimmed.hasPrefix("@discardableResult") else { continue }
+            // The engine is handed to the initializer by the app; no client ever sees it.
+            if trimmed.hasPrefix("init(") { continue }
+            let signature = trimmed.components(separatedBy: " {").first?.components(separatedBy: " = ").first ?? trimmed
+            for name in Self.typeNames(in: signature) where !codable.contains(name) { problems.append("\(trimmed): \(name) is not a Codable type") }
+            let name = trimmed.replacingOccurrences(of: "static ", with: "").dropFirst(5).prefix { $0 != "(" }
+            if trimmed.contains("func "), !signature.contains("async"), !["snapshot", "onTurn", "cachedModels"].contains(String(name)) {
+                problems.append("\(trimmed): a call must be async")
+            }
+        }
+        XCTAssertTrue(problems.isEmpty, "ChatAPI's public surface must be Codable values and async calls:\n" + problems.joined(separator: "\n"))
+        for forbidden in ["ObservableObject", "@Published", "import Combine", "AnyView", "NSImage", "VoiceController", "SlashPopupState"] {
+            XCTAssertFalse(chat.text.contains(forbidden), "ChatAPI must not mention \(forbidden): that is Mac window state")
+        }
+    }
+
+    func testTheScanForTheCodableSurfaceCatchesALeak() {
+        XCTAssertEqual(Self.typeNames(in: "func start(_ session: ChatSession) async -> SlashPopupState"), ["ChatSession", "SlashPopupState"])
+    }
 }

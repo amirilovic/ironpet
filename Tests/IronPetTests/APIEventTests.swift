@@ -56,6 +56,30 @@ final class APIEventTests: XCTestCase {
         XCTAssertTrue(APIEventBus().replay(after: 10).gap)
     }
 
+    func testStreamedChatEventsKeepOneBufferedEventPerMessageAndLeaveOthersAlone() {
+        let bus = APIEventBus(capacity: 30)
+        bus.publish(.tasksChanged, id: "t1")
+        var live = 0
+        bus.subscribe { _ in live += 1 }
+        for _ in 0..<1_000 { bus.publish(.chatItem, id: "reply") }
+        bus.publish(.chatItem, id: "other")
+        bus.publish(.chatState, id: "status")
+        bus.publish(.chatState, id: "status")
+        XCTAssertEqual(live, 1_003, "a live subscriber hears every event")
+        let buffered = bus.replay(after: 0).events
+        XCTAssertEqual(buffered.map(\.kind), [.tasksChanged, .chatItem, .chatItem, .chatState])
+        XCTAssertEqual(buffered.map(\.id), ["t1", "reply", "other", "status"])
+        XCTAssertEqual(buffered.map(\.seq), buffered.map(\.seq).sorted(), "still in order")
+        XCTAssertFalse(bus.replay(after: 0).gap)
+    }
+
+    func testChatEventsWithoutAnIdAreNeverMerged() {
+        let bus = APIEventBus()
+        bus.publish(.chatItem)
+        bus.publish(.chatItem)
+        XCTAssertEqual(bus.replay(after: 0).events.count, 2)
+    }
+
     func testCancelStopsDelivery() {
         let bus = APIEventBus()
         var count = 0

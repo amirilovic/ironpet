@@ -156,7 +156,7 @@ struct MemorySettingsBody: View {
 
     /// The models the agent reported in the chat, plus the saved id, so a model that is not listed still shows.
     private var modelChoices: [ChatModel] {
-        var list = config.reflectAgent.flatMap { AgentCatalog.agent(id: $0) }.map(ChatAPI.cachedModels(for:)) ?? []
+        var list = config.reflectAgent.map { ChatAPI.cachedModels(forAgent: $0).map { ChatModel(id: $0.id, name: $0.name) } } ?? []
         if let saved = config.reflectModel, !list.contains(where: { $0.id == saved }) { list.append(ChatModel(id: saved, name: saved)) }
         return list
     }

@@ -11,14 +11,14 @@ final class ChatFindFocusTests: XCTestCase {
         while Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
     }
 
-    private func open() -> (ChatSession, IronPetPanel) {
-        let session = ChatSession(restore: false)
-        let panel = IronPetPanel.chat(session)
+    private func open() -> (ChatHarness, IronPetPanel) {
+        let h = ChatHarness()
+        let panel = IronPetPanel.chat(h)
         panel.setContentSize(CGSize(width: 520, height: 640))
         panel.makeKeyAndOrderFront(nil)
         addTeardownBlock { @MainActor in panel.close() }
         spin(1)
-        return (session, panel)
+        return (h, panel)
     }
 
     /// Stands in for Cmd-F. `performKeyEquivalent` calls `revealFind` but needs the key window, and a test
@@ -39,19 +39,19 @@ final class ChatFindFocusTests: XCTestCase {
     }
 
     func testCmdFFromTheInputFocusesTheFindField() {
-        let (session, panel) = open()
+        let (h, panel) = open()
         panel.focusInput()
         spin(0.3)
         XCTAssertFalse(findHasFocus(panel))
         press("f", in: panel)
         spin(1)
-        XCTAssertTrue(session.findOpen)
+        XCTAssertTrue(h.model.findOpen)
         XCTAssertTrue(findHasFocus(panel), "first responder: \(String(describing: panel.firstResponder))")
     }
 
     func testCmdFFromTheInputWithTextFocusesTheFindField() {
-        let (session, panel) = open()
-        session.input = "hello"
+        let (h, panel) = open()
+        h.model.input = "hello"
         panel.focusInput()
         spin(0.3)
         press("f", in: panel)
@@ -74,13 +74,13 @@ final class ChatFindFocusTests: XCTestCase {
     }
 
     func testEscClosesTheFindBarAndFocusesTheInput() {
-        let (session, panel) = open()
+        let (h, panel) = open()
         press("f", in: panel)
         spin(1)
         XCTAssertTrue(findHasFocus(panel))
         panel.cancelOperation(nil)
         spin(1)
-        XCTAssertFalse(session.findOpen)
+        XCTAssertFalse(h.model.findOpen)
         let editor = panel.firstResponder as? NSTextView
         let owner = (editor?.delegate as? NSTextField)?.placeholderString ?? ""
         XCTAssertTrue(owner.hasPrefix("Ask"), "first responder: \(String(describing: panel.firstResponder))")

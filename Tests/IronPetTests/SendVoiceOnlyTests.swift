@@ -5,11 +5,12 @@ import XCTest
 final class SendVoiceOnlyTests: XCTestCase {
     private var sent: [String] = []
     private var session: ChatSession!
+    private var h: ChatHarness!
 
     override func setUp() {
         TestMemory.isolate()
-        session = ChatSession(restore: false)
-        session.sendAfterDictation = true
+        h = ChatHarness(); session = h.session
+        h.model.sendAfterDictation = true
         session.workspace = FileManager.default.temporaryDirectory
         sent = []
         session.turnRunner = { turn, emit in
@@ -25,17 +26,17 @@ final class SendVoiceOnlyTests: XCTestCase {
     }
 
     private func edit(to new: String) {
-        let old = session.input
-        session.input = new
-        session.inputChanged(from: old, to: new)
+        let old = h.model.input
+        h.model.input = new
+        h.model.inputChanged(from: old, to: new)
     }
 
     func testPasteIsNeverSent() async {
         for text in ["word", "a long paragraph of pasted text that goes on", "line one\nline two\nline three"] {
-            session.input = ""
+            h.model.input = ""
             edit(to: text)
             await settle()
-            XCTAssertEqual(session.input, text)
+            XCTAssertEqual(h.model.input, text)
         }
         XCTAssertTrue(sent.isEmpty)
     }
@@ -48,45 +49,46 @@ final class SendVoiceOnlyTests: XCTestCase {
         }
         await settle()
         XCTAssertTrue(sent.isEmpty)
-        XCTAssertEqual(session.input, "hello there")
+        XCTAssertEqual(h.model.input, "hello there")
     }
 
     func testVoiceNoteSendsExactlyOnce() async {
-        session.receiveTranscript("hello from voice")
+        h.model.receiveTranscript("hello from voice")
         await settle()
         XCTAssertEqual(sent.count, 1)
         XCTAssertTrue(sent[0].contains("hello from voice"))
     }
 
     func testVoiceNoteWithToggleOffOnlyFillsInput() async {
-        session.sendAfterDictation = false
-        session.receiveTranscript("hello from voice")
+        h.model.sendAfterDictation = false
+        h.model.receiveTranscript("hello from voice")
         await settle()
         XCTAssertTrue(sent.isEmpty)
-        XCTAssertEqual(session.input, "hello from voice")
+        XCTAssertEqual(h.model.input, "hello from voice")
     }
 
     func testWisprDictationIsInsertedNotSent() async {
-        session.receiveDictation("dictated words here")
+        h.model.receiveDictation("dictated words here")
         await settle()
         XCTAssertTrue(sent.isEmpty)
-        XCTAssertEqual(session.input, "dictated words here")
+        XCTAssertEqual(h.model.input, "dictated words here")
     }
 
     func testPrefillIsNotSent() async {
-        session.prefill("Explain this error in detail")
-        session.inputChanged(from: "", to: session.input)
+        h.model.prefill("Explain this error in detail")
+        h.model.inputChanged(from: "", to: h.model.input)
         await settle()
         XCTAssertTrue(sent.isEmpty)
-        XCTAssertEqual(session.input, "Explain this error in detail")
+        XCTAssertEqual(h.model.input, "Explain this error in detail")
     }
 
     func testSlashCommandPickIsNotSent() async {
         session.receiveCommands([SlashCommand(name: "compact", detail: "Shrink")])
+        await h.model.settle()
         edit(to: "/co")
-        XCTAssertTrue(session.completeSlash())
+        XCTAssertTrue(h.model.completeSlash())
         await settle()
         XCTAssertTrue(sent.isEmpty)
-        XCTAssertEqual(session.input, "/compact ")
+        XCTAssertEqual(h.model.input, "/compact ")
     }
 }

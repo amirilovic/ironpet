@@ -31,6 +31,7 @@ private final class VoiceServer: URLProtocol, @unchecked Sendable {
 final class TelegramMediaTests: XCTestCase {
     private var client: FakeTelegram!
     private var session: ChatSession!
+    private var h: ChatHarness!
     private var chatAPI: ChatAPI!
     private var bridge: TelegramBridge!
     private var directory: URL!
@@ -42,7 +43,7 @@ final class TelegramMediaTests: XCTestCase {
     override func setUp() async throws {
         TestMemory.isolate()
         client = FakeTelegram()
-        session = ChatSession(restore: false)
+        h = ChatHarness(); session = h.session
         chatAPI = ChatAPI(session: session)
         session.use(URL(fileURLWithPath: "/tmp/telegram-media-project"))
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("tg-media-\(UUID().uuidString)")
@@ -117,7 +118,7 @@ final class TelegramMediaTests: XCTestCase {
         guard case .user("what is in these?") = session.items.last(where: { if case .user = $0.kind { return true } else { return false } })?.kind else {
             return XCTFail("caption is not the message text")
         }
-        XCTAssertTrue(session.attachments.isEmpty, "the Mac draft must stay untouched")
+        XCTAssertTrue(h.model.attachments.isEmpty, "the Mac draft must stay untouched")
     }
 
     func testSeparatePhotoMessagesStayTwoMessages() async {

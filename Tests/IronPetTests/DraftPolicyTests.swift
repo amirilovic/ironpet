@@ -43,14 +43,13 @@ final class DraftPolicyTests: XCTestCase {
 
     /// The input is always at or under the limit once its didSet has run, and that value is what gets persisted.
     @MainActor
-    func testSessionMovesLongInputToAttachment() throws {
-        let session = ChatSession(restore: false)
-        session.draftDirectory = dir
+    func testTheDraftMovesLongInputToAnAttachment() throws {
+        let h = ChatHarness(draftDirectory: dir)
         let text = String(repeating: "y", count: 200 * 1024)
-        session.input = text
-        XCTAssertEqual(session.input, "")
-        XCTAssertLessThanOrEqual(session.input.utf8.count, DraftPolicy.limit)
-        let file = try XCTUnwrap(session.attachments.first)
+        h.model.input = text
+        XCTAssertEqual(h.model.input, "")
+        XCTAssertLessThanOrEqual(h.model.input.utf8.count, DraftPolicy.limit)
+        let file = try XCTUnwrap(h.model.attachments.first)
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), text)
     }
 }

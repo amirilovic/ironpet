@@ -47,6 +47,8 @@ final class TestControl {
     }
 
     private let chat: ChatSession
+    /// The Mac chat window's draft and microphone, which these endpoints drive like the user would.
+    var chatModel: ChatViewModel!
     private let actions: Actions
     private(set) var attention: [[String: String]] = []
     /// What the app does with a finished meeting summary (mine action items, suggest them, show the bubble), so
@@ -89,7 +91,7 @@ final class TestControl {
         case ("POST", "/test/show-chat"):
             if body["newChat"] as? Bool == true {
                 chat.newChat()
-                chat.input = ""
+                chatModel.input = ""
             }
             actions.showChat()
         case ("POST", "/test/chat"):
@@ -100,8 +102,8 @@ final class TestControl {
             if body["noProject"] as? Bool == true { chat.useNoProject() }
             if let path = body["workspace"] as? String { chat.use(URL(fileURLWithPath: path)) }
             if let auto = body["auto"] as? Bool { chat.autoMode = auto }
-            chat.input = body["prompt"] as? String ?? ""
-            chat.send()
+            chatModel.input = body["prompt"] as? String ?? ""
+            chatModel.send()
         case ("POST", "/test/build-pet"):
             let description = (body["description"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !description.isEmpty else { return Self.encode(["ok": false, "error": "description is required"]) }
@@ -141,13 +143,13 @@ final class TestControl {
             actions.showChat()
             if body["newChat"] as? Bool == true {
                 chat.newChat()
-                chat.input = ""
+                chatModel.input = ""
             }
-            if let auto = body["autoSend"] as? Bool { chat.sendAfterDictation = auto }
+            if let auto = body["autoSend"] as? Bool { chatModel.sendAfterDictation = auto }
             if let workspace = body["workspace"] as? String { chat.use(URL(fileURLWithPath: workspace)) }
-            chat.voice.start(.file(URL(fileURLWithPath: path)))
+            chatModel.voice.start(.file(URL(fileURLWithPath: path)))
         case ("POST", "/test/voice/stop"):
-            chat.voice.stop()
+            chatModel.voice.stop()
         case ("POST", "/test/speech/speak"):
             // Reads the last reply aloud, like its speaker button.
             guard let reply = chat.items.last(where: { if case .assistant = $0.kind { true } else { false } }) else {
@@ -202,9 +204,9 @@ final class TestControl {
         case ("POST", "/test/retry"):
             chat.retryAfterFix()
         case ("POST", "/test/voice/cancel"):
-            chat.voice.cancel()
+            chatModel.voice.cancel()
         case ("POST", "/test/voice/retry"):
-            chat.retryVoice()
+            chatModel.retryVoice()
         case ("GET", "/test/meeting"):
             return meetingSnapshot()
         case ("POST", "/test/meeting/picker"):
@@ -639,12 +641,12 @@ final class TestControl {
             "pid": chat.processID.map { Int($0) } ?? 0,
             "runtimeOffer": chat.runtimeOffer ?? "",
             "signIn": chat.signInOptions.map(\.name),
-            "attachments": chat.attachments.map(\.path),
-            "input": chat.input,
+            "attachments": chatModel.attachments.map(\.path),
+            "input": chatModel.input,
             "windowId": actions.chatWindowID(),
             "frame": { let f = actions.chatFrame(); return [f.minX, f.minY, f.width, f.height] }(),
-            "voice": chat.voice.phase.rawValue,
-            "voiceRetry": chat.voiceRetryItem != nil,
+            "voice": chatModel.voice.phase.rawValue,
+            "voiceRetry": chatModel.voiceRetryItem != nil,
             "speech": chat.speech.phase.rawValue,
         ])
     }

@@ -6,11 +6,8 @@ import Foundation
 final class ChatSession: ObservableObject {
     enum State { case idle, running, done, failed }
 
-    /// A file drag is over the chat. The window does not auto-hide meanwhile.
-    var fileDragActive = false
-
-    struct Item: Identifiable, Codable {
-        enum Kind: Codable {
+    struct Item: Identifiable, Codable, Equatable {
+        enum Kind: Codable, Equatable {
             case user(String)
             case screenshot(String)
             case assistant(String)
@@ -67,7 +64,7 @@ final class ChatSession: ObservableObject {
     }
 
     /// What happened to a turn that another client started, for `onTurn`.
-    enum TurnEvent: Equatable {
+    enum TurnEvent: Equatable, Codable {
         /// The agent was busy, so the message waits its turn.
         case queued
         case started
@@ -80,7 +77,7 @@ final class ChatSession: ObservableObject {
         case failed(String)
     }
 
-    enum ApprovalOutcome: Equatable { case allowed, denied, ended }
+    enum ApprovalOutcome: Equatable, Codable { case allowed, denied, ended }
 
     nonisolated static let automationOrigin = ChatOrigin.automationClient
     /// A prompt or follow-up that a background job ran (`JobService`).
@@ -109,38 +106,47 @@ final class ChatSession: ObservableObject {
     }
 
     @Published var items: [Item] = [] {
-        didSet { events?.publish(.chatItem, id: items.last?.id.uuidString) }
+        didSet { publishItemChanges(from: oldValue) }
     }
     /// Where `chat.item` and `chat.state` are published for API clients.
     weak var events: APIEventBus?
-    /// The Cmd-F find bar. `findFocusTick` counts presses so a second Cmd-F refocuses the field.
-    @Published var findOpen = false
-    @Published var findFocusTick = 0
-    @Published var input = "" {
-        didSet {
-            if DraftPolicy.exceedsLimit(input) {
-                let result = DraftPolicy.apply(input, into: draftDirectory)
-                if let file = result.attachment { attachments.append(file) }
-                // Assigning inside didSet does not re-run it, so save the shortened draft here.
-                // Otherwise the huge text stays in UserDefaults and is split off again on every launch.
-                input = result.input
-                if persists { UserDefaults.standard.set(input, forKey: Self.draftKey) }
-                return
+
+    /// Publishes `chat.item` with the id of each item that was added or changed. A removal, a reset or a change to many items at once
+    /// publishes it without an id, which tells a client to read the transcript again.
+    private func publishItemChanges(from old: [Item]) {
+        guard let events else { return }
+        guard let changed = Self.changedItems(old: old, new: items) else { return events.publish(.chatItem) }
+        for id in changed { events.publish(.chatItem, id: id.uuidString) }
+    }
+
+    /// The ids of added or edited items, or nil when the change is not that: a removal, a reorder, a reset, or more than a few edits.
+    static func changedItems(old: [Item], new: [Item]) -> [UUID]? {
+        guard new.count >= old.count else { return old.isEmpty && new.isEmpty ? [] : nil }
+        var changed: [UUID] = []
+        for index in old.indices {
+            guard old[index].id == new[index].id else { return nil }
+            if old[index] != new[index] {
+                changed.append(new[index].id)
+                if changed.count > 8 { return nil }
             }
-            if persists { UserDefaults.standard.set(input, forKey: Self.draftKey) }
         }
+        return changed + new[old.count...].map(\.id)
     }
-    /// Where text over `DraftPolicy.limit` is saved. Tests point it at a temporary folder.
-    var draftDirectory = FileIntake.directory
-    @Published var workspace: URL?
+    @Published var workspace: URL? {
+        didSet { events?.publish(.chatState, id: "options") }
+    }
     /// Set when the chat opened outside a coding app; the user picks a folder before sending.
-    @Published private(set) var needsWorkspace = false
-    @Published private(set) var recents: [URL] = []
-    @Published var autoMode = false {
-        didSet { if persists { UserDefaults.standard.set(autoMode, forKey: Self.autoKey) } }
+    @Published private(set) var needsWorkspace = false {
+        didSet { events?.publish(.chatState, id: "options") }
     }
-    @Published var sendAfterDictation = UserDefaults.standard.object(forKey: "sendAfterDictation") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(sendAfterDictation, forKey: "sendAfterDictation") }
+    @Published private(set) var recents: [URL] = [] {
+        didSet { events?.publish(.chatState, id: "options") }
+    }
+    @Published var autoMode = false {
+        didSet {
+            if persists { UserDefaults.standard.set(autoMode, forKey: Self.autoKey) }
+            events?.publish(.chatState, id: "options")
+        }
     }
     @Published private(set) var state: State = .idle {
         didSet { if state != oldValue { events?.publish(.chatState) } }
@@ -152,74 +158,60 @@ final class ChatSession: ObservableObject {
     @Published private(set) var forms: [PendingForm] = [] {
         didSet { events?.publish(.chatState, id: "forms") }
     }
-    @Published private(set) var history: [ChatThread] = ThreadStore.recent()
-    @Published var attachments: [URL] = [] {
-        didSet { if persists { UserDefaults.standard.set(attachments.map(\.path), forKey: Self.attachmentsKey) } }
+    @Published private(set) var history: [ChatThread] = ThreadStore.recent() {
+        didSet { events?.publish(.chatState, id: "threads") }
     }
     /// Messages typed while a turn runs. Each keeps the attachments present when it was queued.
     @Published private(set) var queue: [QueuedMessage] = [] {
         didSet { events?.publish(.chatState, id: "queue") }
     }
-    /// The message the next send answers. One at a time; choosing another replaces it.
-    @Published var replyingTo: Reply?
-    /// Bumps each time Reply is chosen, so the input takes focus even when the same message is chosen again.
-    @Published private(set) var replyFocusTick = 0
     /// What the agent is doing right now, e.g. "Running `npm test`".
-    @Published private(set) var activity: String?
-    @Published private(set) var runStartedAt: Date?
-    @Published private(set) var lastRunDuration: TimeInterval?
+    @Published private(set) var activity: String? {
+        didSet { events?.publish(.chatState, id: "status") }
+    }
+    @Published private(set) var runStartedAt: Date? {
+        didSet { events?.publish(.chatState, id: "status") }
+    }
+    @Published private(set) var lastRunDuration: TimeInterval? {
+        didSet { events?.publish(.chatState, id: "status") }
+    }
     /// Models the agent offered in its last session. Empty hides the picker.
-    @Published private(set) var models: [ChatModel] = []
+    @Published private(set) var models: [ChatModel] = [] {
+        didSet { events?.publish(.chatState, id: "options") }
+    }
     @Published private(set) var agent: ACPAgent =
-        AgentCatalog.agent(id: UserDefaults.standard.string(forKey: "chatAgent")) ?? AgentCatalog.agent(id: "cursor")!
+        AgentCatalog.agent(id: UserDefaults.standard.string(forKey: "chatAgent")) ?? AgentCatalog.agent(id: "cursor")! {
+        didSet { events?.publish(.chatState, id: "options") }
+    }
     /// Installed agents that answer `initialize`. Starts as just the current one until the check finishes.
-    @Published private(set) var agents: [ACPAgent] = []
-    @Published private(set) var commands: [SlashCommand] = []
-    @Published var slash = SlashPopupState()
-
-    /// Commands the popup shows for the current input; empty when it should be closed.
-    var slashMatches: [SlashCommand] { slash.dismissed ? [] : SlashCommand.matches(for: input, in: commands) }
-
-    /// Puts the selected command into the input. Returns false when the popup is closed.
-    @discardableResult
-    func completeSlash() -> Bool {
-        let list = slashMatches
-        guard !list.isEmpty else { return false }
-        completeSlash(list[min(slash.selection, list.count - 1)])
-        return true
+    @Published private(set) var agents: [ACPAgent] = [] {
+        didSet { events?.publish(.chatState, id: "options") }
     }
-
-    func completeSlash(_ command: SlashCommand) {
-        // Not a dictation: the user still has to add arguments, so it must not schedule an auto-send.
-        prefill("/\(command.name) ")
+    @Published private(set) var commands: [SlashCommand] = [] {
+        didSet { events?.publish(.chatState, id: "options") }
     }
-
-    func moveSlashSelection(_ delta: Int) {
-        slash.move(delta, count: slashMatches.count)
-    }
-
-    /// Esc closes the popup. Returns false when it was not open.
-    @discardableResult
-    func dismissSlash() -> Bool {
-        guard !slashMatches.isEmpty else { return false }
-        slash.dismissed = true
-        return true
-    }
-
     func receiveCommands(_ list: [SlashCommand]) {
-        if list != commands { slash.selection = 0 }
         commands = list
         if persists { SlashCommand.store(list, for: agent.id) }
     }
     /// nil uses the agent's default model. Stored per agent.
     @Published var model: String? {
-        didSet { UserDefaults.standard.set(model, forKey: "chatModel.\(agent.id)") }
+        didSet {
+            UserDefaults.standard.set(model, forKey: "chatModel.\(agent.id)")
+            events?.publish(.chatState, id: "options")
+        }
     }
     /// Set when an adapter has no runtime: the chat offers a one-time Bun download.
-    @Published private(set) var runtimeOffer: String?
-    @Published private(set) var installingRuntime = false
+    @Published private(set) var runtimeOffer: String? {
+        didSet { events?.publish(.chatState, id: "options") }
+    }
+    @Published private(set) var installingRuntime = false {
+        didSet { events?.publish(.chatState, id: "options") }
+    }
     /// Set when the agent asks the user to sign in.
-    @Published private(set) var signInOptions: [AuthMethod] = []
+    @Published private(set) var signInOptions: [AuthMethod] = [] {
+        didSet { events?.publish(.chatState, id: "options") }
+    }
 
     var modelName: String {
         guard let model else { return "Default" }
@@ -255,8 +247,6 @@ final class ChatSession: ObservableObject {
     /// False for preview sessions, so rendering screenshots neither reads nor overwrites the real chat.
     private let persists: Bool
     private static let threadKey = "chatThread"
-    private static let draftKey = "chatDraft"
-    private static let attachmentsKey = "chatAttachments"
     private static let autoKey = "chatAutoMode"
     private var acp: ACPBackend?
     /// Ignores events from a turn the user stopped.
@@ -273,8 +263,6 @@ final class ChatSession: ObservableObject {
     private var backgroundReply: UUID?
     /// Decisions made during the current run, so a repeated identical check isn't asked twice.
     private var decided: [String: Bool] = [:]
-    let voice = VoiceController()
-    private var voiceChanges: AnyCancellable?
     let speech = SpeechPlayer()
     private var speechChanges: [AnyCancellable] = []
     /// The running turn was sent from the chat, not by another client or an automation; its reply is read aloud when it ends.
@@ -283,8 +271,6 @@ final class ChatSession: ObservableObject {
     private var turnAskedApproval = false
     /// True during a call or a meeting recording, when a reply is not read aloud on its own. Set by `AppDelegate`.
     var isQuiet: () -> Bool = { false }
-    /// The transcription error that offers Retry, so only that card shows the button.
-    @Published private(set) var voiceRetryItem: UUID?
 
     static let scratchWorkspace = Paths.root.appendingPathComponent("scratch")
 
@@ -303,24 +289,8 @@ final class ChatSession: ObservableObject {
         agents = [agent]
         if restore { Task { await refreshAgents() } }
         if restore { restoreLastChat() }
-        // Phase changes are rare (start, stop, result), so forwarding them re-renders the composer only then.
-        voiceChanges = voice.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
-        voice.onTranscript = { [weak self] in self?.receiveTranscript($0) }
-        voice.onFailure = { [weak self] message, canRetry in self?.voiceFailed(message, canRetry: canRetry) }
-        speechChanges = [
-            speech.objectWillChange.sink { [weak self] in self?.objectWillChange.send() },
-            // Ghost stops talking as soon as the user starts a voice note.
-            voice.$phase.sink { [weak self] phase in if phase == .recording { self?.speech.stop() } },
-        ]
+        speechChanges = [speech.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }]
         speech.onFailure = { [weak self] message in self?.items.append(Item(kind: .error(message))) }
-    }
-
-    /// A voice note's text goes into the input to edit, or is sent straight away when "Send voice notes automatically" is on.
-    /// This is the only path that sends automatically. Pasted, typed and Wispr Flow text never does.
-    func receiveTranscript(_ text: String) {
-        let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        input = existing.isEmpty ? text : existing + " " + text
-        if sendAfterDictation { send() }
     }
 
     /// Reads a reply aloud, or stops it when it is the one being read.
@@ -329,18 +299,15 @@ final class ChatSession: ObservableObject {
         if speech.speakingID == item.id { speech.stop() } else { speech.speak(text, id: item.id) }
     }
 
-    private func voiceFailed(_ message: String, canRetry: Bool) {
+    /// Adds an error line to the transcript, such as a voice note that could not be transcribed. Returns its id.
+    @discardableResult
+    func appendNotice(_ message: String) -> UUID {
         let item = Item(kind: .error(message))
         items.append(item)
-        voiceRetryItem = canRetry ? item.id : nil
+        return item.id
     }
 
-    func retryVoice() {
-        guard let id = voiceRetryItem else { return }
-        items.removeAll { $0.id == id }
-        voiceRetryItem = nil
-        voice.retry()
-    }
+    func removeItem(_ id: UUID) { items.removeAll { $0.id == id } }
 
     private func restoreLastChat() {
         let defaults = UserDefaults.standard
@@ -348,11 +315,6 @@ final class ChatSession: ObservableObject {
         if let id = defaults.string(forKey: Self.threadKey), let thread = ThreadStore.load(id) {
             apply(thread.restoredAfterQuit(), reason: "restore after launch")
         }
-        attachments = (defaults.stringArray(forKey: Self.attachmentsKey) ?? [])
-            .map(URL.init(fileURLWithPath:))
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
-        // A draft saved by an older version may be huge; the input's didSet turns it into an attachment.
-        input = defaults.string(forKey: Self.draftKey) ?? ""
     }
 
     /// Writes the open thread to disk, e.g. when the app quits mid-run.
@@ -542,32 +504,6 @@ final class ChatSession: ObservableObject {
         ] as JSON],
     ]
 
-    func attach(_ screenshot: URL) {
-        attachments.append(screenshot)
-    }
-
-    /// Appends files to the current attachments, skipping ones already there.
-    func attach(_ files: [URL]) {
-        attachments += files.filter { !attachments.contains($0) }
-    }
-
-    /// Starts a reply to a user or assistant message. Tool steps, screenshots and errors cannot be replied to.
-    func reply(to item: Item, selection: String? = nil) {
-        let sender: String
-        let text: String
-        let fromUser: Bool
-        switch item.kind {
-        case .user(let t): sender = "You"; text = t; fromUser = true
-        case .assistant(let t): sender = ConfigStore.shared.config.pet.name; text = t; fromUser = false
-        default: return
-        }
-        let trimmed = selection?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let selected = trimmed?.isEmpty == false ? trimmed : nil
-        replyingTo = Reply(itemID: item.id, sender: sender, text: selected ?? text, date: item.date,
-                           selection: selected == nil ? nil : true, fromUser: fromUser)
-        replyFocusTick += 1
-    }
-
     /// Most characters of the original that reach the agent.
     static let replyLimit = 4000
 
@@ -598,7 +534,6 @@ final class ChatSession: ObservableObject {
         if let threadID { onThreadLeft?(threadID) }
         stop()
         shutdownAgent()
-        replyingTo = nil
         items = []
         threadID = nil
         jobMessages = []
@@ -616,7 +551,6 @@ final class ChatSession: ObservableObject {
     private func apply(_ thread: ChatThread, reason: String) {
         ChatLog.note("thread \(thread.id) loaded (\(thread.items.count) items), replacing thread \(threadID ?? "none"): \(reason)")
         if let saved = AgentCatalog.agent(id: thread.agent), saved != agent { select(saved) }
-        replyingTo = nil
         items = thread.items
         threadID = thread.id
         jobMessages = []
@@ -679,34 +613,29 @@ final class ChatSession: ObservableObject {
     /// job runs there, so the chat sends it itself.
     var jobFollowUp: ((String, String) -> Bool)?
 
-    func send() {
-        let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty || !attachments.isEmpty else { return }
+    /// What happened to a message typed on this Mac.
+    enum LocalSend: String, Codable { case ignored, sent, queued, toJob, needsFolder }
+
+    /// A message typed on this Mac. A running turn queues it, a running background job in this thread takes it, and with no
+    /// folder chosen it is refused so the picker can show. The caller keeps the draft until the answer says it was taken.
+    func submitLocal(_ text: String, files: [URL], reply: Reply?) -> LocalSend {
+        let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty || !files.isEmpty else { return .ignored }
         speech.stop()
         // A second process on the job's session would race it, so everything typed here goes to the job: a reply as its
         // quoted prompt, attachments as their paths.
-        let message = Self.jobMessage(prompt, reply: replyingTo, files: attachments)
+        let message = Self.jobMessage(prompt, reply: reply, files: files)
         if !isRunning, let threadID, jobFollowUp?(threadID, message) == true {
-            let item = Item(kind: .user(prompt.isEmpty ? "Attached files" : prompt), origin: Self.jobOrigin, reply: replyingTo)
-            attachments = []
-            replyingTo = nil
+            let item = Item(kind: .user(prompt.isEmpty ? "Attached files" : prompt), origin: Self.jobOrigin, reply: reply)
             items.append(item)
             jobMessages.append((item, message))
-            input = ""
-            return
+            return .toJob
         }
         if isRunning {
-            queue.append(QueuedMessage(text: prompt, attachments: attachments, reply: replyingTo))
-            input = ""
-            attachments = []
-            replyingTo = nil
-            return
+            queue.append(QueuedMessage(text: prompt, attachments: files, reply: reply))
+            return .queued
         }
-        if start(prompt: prompt, shots: attachments, reply: replyingTo) {
-            input = ""
-            attachments = []
-            replyingTo = nil
-        }
+        return start(prompt: prompt, shots: files, reply: reply) ? .sent : .needsFolder
     }
 
     /// Starts a turn. Returns false, without sending, when no folder is chosen or the hooks are missing.
@@ -768,8 +697,23 @@ final class ChatSession: ObservableObject {
         queue.removeAll { $0.id == id }
     }
 
-    /// Puts queued messages back in the input, after any text already there, so nothing is lost. Messages that came
+    /// Hands queued messages back to the Mac's draft (`takeRestoredDraft`), so nothing is lost. Messages that came
     /// from another client go back to it as a failure instead: they are not the Mac user's draft.
+    /// Queued Mac messages that were cancelled before they started, for the draft to take back.
+    struct RestoredDraft: Equatable {
+        var text: String
+        var attachments: [URL]
+        var reply: Reply?
+    }
+
+    private(set) var restoredDraft: RestoredDraft?
+
+    /// The messages `stop` or a failed start handed back, once.
+    func takeRestoredDraft() -> RestoredDraft? {
+        defer { restoredDraft = nil }
+        return restoredDraft
+    }
+
     private func restoreQueue(reason: String = "Cancelled on the Mac before it started.") {
         for message in queue { if let origin = message.origin { onTurn?(origin, .failed(reason)) } }
         queue.removeAll { $0.origin != nil }
@@ -777,12 +721,12 @@ final class ChatSession: ObservableObject {
         queue.removeAll { $0.automation != nil }
         guard !queue.isEmpty else { return }
         let text = queue.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
-        let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        let combined = existing.isEmpty ? text : existing + "\n\n" + text
-        input = combined
-        attachments += queue.flatMap(\.attachments)
-        if replyingTo == nil { replyingTo = queue.compactMap(\.reply).first }
+        let earlier = restoredDraft
+        restoredDraft = RestoredDraft(text: [earlier?.text, text].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n"),
+                                      attachments: (earlier?.attachments ?? []) + queue.flatMap(\.attachments),
+                                      reply: earlier?.reply ?? queue.compactMap(\.reply).first)
         queue = []
+        events?.publish(.chatState, id: "draft")
     }
 
     /// Sends the oldest queued message through the normal path.
@@ -951,21 +895,6 @@ final class ChatSession: ObservableObject {
     func shutdown() {
         stop()
         shutdownAgent()
-    }
-
-    /// Text delivered by the Wispr Flow bridge. It is inserted but not sent. Skipped if Wispr managed to type it into the field itself.
-    func receiveDictation(_ text: String) {
-        guard !input.trimmingCharacters(in: .whitespaces).hasSuffix(text) else { return }
-        input = input.isEmpty ? text : input + " " + text
-    }
-
-    /// Puts text in the input for the user to review. It is never sent automatically.
-    func prefill(_ text: String) {
-        input = text
-    }
-
-    func inputChanged(from old: String, to new: String) {
-        slash.reset()
     }
 
     func decide(_ approval: Approval, allow: Bool) {

@@ -54,7 +54,7 @@ final class PetController: NSObject {
     /// The Chat section's session and the Transcripts section's meetings. Set before the window first opens.
     var chat: ChatSession?
     /// The chat API the window draws. Set with `chat`.
-    var chatAPI: ChatAPI?
+    var chatModel: ChatViewModel?
     var meetingsAPI: MeetingsAPI?
     /// The Today section's content. Set before the window first opens.
     var brief: BriefModel?
@@ -317,8 +317,8 @@ final class PetController: NSObject {
                 onScreenSettings?()
             },
             onBriefOpen: { [weak self] target in self?.openBrief(target) })
-        let window = IronPetPanel(model: windowModel, session: chatAPI, content: IronPetWindowView(
-            model: windowModel, agents: agentList, alerts: alertList, tasks: taskList, chat: chatAPI, meetings: meetingsAPI,
+        let window = IronPetPanel(model: windowModel, session: chatModel, content: IronPetWindowView(
+            model: windowModel, agents: agentList, alerts: alertList, tasks: taskList, chat: chatModel, meetings: meetingsAPI,
             settings: settings, brief: brief, actions: actions))
         window.onVisibilityChange = { [weak self] visible in
             guard let self else { return }

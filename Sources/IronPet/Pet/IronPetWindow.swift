@@ -185,7 +185,7 @@ struct IronPetWindowView: View {
     @ObservedObject var alerts: AlertsAPI
     @ObservedObject var tasks: TasksAPI
     /// Nil in previews and tests that do not show it; its row is hidden then.
-    var chat: ChatAPI?
+    var chat: ChatViewModel?
     var meetings: MeetingsAPI?
     /// Nil in previews, which cannot build the Automations section; its row is hidden then.
     var settings: SettingsModel?

@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = SessionStore()
     private let signals = SignalStore()
     private let chat = ChatSession()
-    private lazy var recordingKeys = RecordingKeys(voice: chat.voice, heldModifiers: {
+    private lazy var recordingKeys = RecordingKeys(voice: chatModel.voice, heldModifiers: {
         Shortcut(ConfigStore.shared.config.hotkeys.voice)?.modifiers ?? 0
     })
     private let notifier = Notifier()
@@ -33,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var brief: TodayAPI?
     /// The task store, for the meeting suggestions and the test endpoints. Everything else uses `api.tasks`.
     private var taskStore: TaskStore?
+    /// The Mac chat window's state, on top of `ChatAPI`. Built with the API.
+    private var chatModel: ChatViewModel!
     private lazy var logWindow = AutomationLogWindow(api: { [weak self] in self?.api?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
@@ -136,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.show()
         dockIcon.update(sprite: config.config.pet.sprite)
 
-        wispr.onDictation = { [weak self] text in self?.chat.receiveDictation(text) }
+        wispr.onDictation = { [weak self] text in self?.chatModel.receiveDictation(text) }
         pet.onChatShown = { [weak self] shown in self?.chatShown(shown) }
         pet.onWindowClosed = { [weak self] in self?.restorePreviousApp() }
         meeting.onLabelSpeakers = { [weak self] in self?.showSettings(tab: "meetings") }
@@ -267,7 +269,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         api.attach(assistant: assistant)
         api.attach(memory: { [weak self] in self?.memoryServices })
         pet.agents = api.agents
-        pet.chatAPI = api.chat
+        chatModel = ChatViewModel(api: api.chat, voiceAPI: api.voice, events: events)
+        pet.chatModel = chatModel
         pet.meetingsAPI = api.meetings
         pet.events = events
         api.pet.stateProvider = { [weak pet] in pet?.state ?? PetState(mood: PetMood.idle.rawValue, badge: 0) }
@@ -673,7 +676,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if new.hotkeys != old.hotkeys || new.voice.enabled != old.voice.enabled
             || new.meetings.enabled != old.meetings.enabled { registerHotKeys() }
         if new.telegram.enabled != old.telegram.enabled { telegram.setEnabled(new.telegram.enabled) }
-        if !new.voice.enabled { chat.voice.cancel() }
+        if !new.voice.enabled { chatModel.voice.cancel() }
         if old.speech.enabled, !new.speech.enabled { chat.speech.stop() }
         if !new.meetings.enabled { meeting.dismiss() }
         startCallMonitor()
@@ -709,13 +712,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The mode is read on every press, so flipping the switch in Settings applies to the next one.
             let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, id: 4, onRelease: { [weak self] in
                 MainActor.assumeIsolated {
-                    self?.chat.voice.shortcutReleased(holdToTalk: ConfigStore.shared.config.voice.holdToTalk)
+                    self?.chatModel.voice.shortcutReleased(holdToTalk: ConfigStore.shared.config.voice.holdToTalk)
                 }
             }, handler: { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.showChat()
-                    self.chat.voice.shortcutPressed()
+                    self.chatModel.voice.shortcutPressed()
                 }
             })
             if hotKey.isRegistered { hotKeys.append(hotKey) } else { failed.insert(text) }
@@ -925,6 +928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             control.onMeetingSummaryText = { [weak self] text, meeting in self?.suggestTasks(fromSummary: text, meeting: meeting) }
             control.screen = capture
             control.tasks = taskStore
+            control.chatModel = chatModel
             control.welcomeBack = welcomeBack
             control.setIdleSeconds = { [weak self] seconds in self?.testIdleSeconds = seconds }
             control.showInspector = { [weak self] in
@@ -1034,7 +1038,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             defer { pet.isCapturing = false }
             let shot = region ? await ScreenCapture.captureRegion() : await ScreenCapture.captureWindow(of: target)
-            if let shot { chat.attach(shot) }
+            if let shot { chatModel.attach(shot) }
             if shot != nil || chat.isVisible { showChat() }
         }
     }
@@ -1073,10 +1077,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// was typing stays below the prompt, separated by a blank line.
     private func ask(_ prompt: String) {
         showChat()
-        let draft = chat.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let draft = chatModel.input.trimmingCharacters(in: .whitespacesAndNewlines)
         // A second press on the same Ask leaves the input as it is.
         if draft.hasPrefix(prompt) { return }
-        chat.prefill(draft.isEmpty ? prompt : prompt + "\n\n" + draft)
+        chatModel.prefill(draft.isEmpty ? prompt : prompt + "\n\n" + draft)
     }
 
     /// Sends `prompt` in the current session and folder. A draft the user was typing and any attachments come back
@@ -1084,17 +1088,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the draft, and prefill keeps the dictation auto-send from firing on it.
     @discardableResult
     private func sendInCurrentChat(_ prompt: String) -> Bool {
-        let draft = chat.input
-        let staged = chat.attachments
-        chat.attachments = []
-        chat.input = prompt
-        chat.send()
-        chat.attachments = staged
-        if chat.input.isEmpty {
-            chat.input = draft
+        // The prompt goes in as its own message, so the draft and its attachments are never touched when it is taken.
+        switch chat.submitLocal(prompt, files: [], reply: nil) {
+        case .sent, .queued, .toJob:
             return true
-        } else {
-            chat.prefill(draft.isEmpty ? chat.input : draft + "\n\n" + chat.input)
+        case .needsFolder, .ignored:
+            let draft = chatModel.input
+            chatModel.prefill(draft.isEmpty ? prompt : prompt + "\n\n" + draft)
             return false
         }
     }
@@ -1366,7 +1366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Adds the transcript, and the summary if there is one, to the current chat. Never changes the chat's
     /// session or folder.
     private func openMeetingInChat(_ files: [URL]) {
-        chat.attach(files)
+        chatModel.attach(files)
         showChat()
     }
 
