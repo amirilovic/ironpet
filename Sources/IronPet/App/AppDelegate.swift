@@ -364,7 +364,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         desktopApprovals = approvals
         var dependencies = DesktopService.Dependencies(privacy: capture.privacy)
         // An automated run must not read or operate the real screen.
-        if TestControl.isEnabled { dependencies.ax = IdleDesktopAX() }
+        if TestControl.isEnabled {
+            dependencies.ax = IdleDesktopAX()
+            dependencies.opener = IdleDesktopOpener()
+        }
         dependencies.enabled = { ConfigStore.shared.config.desktopControl.enabled }
         dependencies.approve = { request in await approvals.ask(request) }
         dependencies.record = { [weak self] record in

@@ -8,6 +8,10 @@ final class FakeEl {
     var actions: [String]
     var settable: Set<String>
     var gone = false
+    /// Boolean attributes such as AXSelected and AXDisclosing.
+    var bools: [String: Bool] = [:]
+    /// Runs when an action succeeds, so a checkbox can flip its value.
+    var onPerform: ((String) -> Void)?
     init(_ node: AXNode, actions: [String] = [], settable: Set<String> = [], _ children: [FakeEl] = []) {
         self.node = node
         self.actions = actions
@@ -44,8 +48,13 @@ final class FakeAX: DesktopAX {
         [app.bundleId.lowercased(), app.name.lowercased()].contains(query.lowercased()) ? app : nil
     }
 
+    /// When set, another window holds the keyboard focus and the one titled `windowTitle` does not.
+    var keyWindowTitle: String?
+
     func windows(of app: CaptureApp) -> [DesktopWindowInfo] {
-        [DesktopWindowInfo(title: windowTitle, windowID: 77, focused: true, element: window)]
+        var list = [DesktopWindowInfo(title: windowTitle, windowID: 77, focused: keyWindowTitle == nil, element: window)]
+        if let keyWindowTitle { list.append(DesktopWindowInfo(title: keyWindowTitle, windowID: 78, focused: true, element: FakeEl(AXNode(role: "Window")))) }
+        return list
     }
 
     func read(app: CaptureApp, window info: DesktopWindowInfo, budget: CaptureReadBudget) -> DesktopRead? {
@@ -65,6 +74,7 @@ final class FakeAX: DesktopAX {
     func perform(_ action: String, on element: DesktopElement) -> Bool {
         guard let e = el(element), e.actions.contains(action) else { return false }
         performed.append((action, e.node.title ?? e.node.role))
+        e.onPerform?(action)
         return true
     }
 
@@ -83,6 +93,51 @@ final class FakeAX: DesktopAX {
     }
 
     func screenshot(of window: DesktopWindowInfo, app: CaptureApp) -> Data? { picture }
+
+    var frontmost = true
+    var activated: [String] = []
+    var posted: [(DesktopKeyStroke, Int32)] = []
+    var postWorks = true
+    var focusedEl: FakeEl?
+    /// Focus answers handed out one per call before `focusedEl` takes over, to move the focus between two reads.
+    var focusQueue: [FakeEl] = []
+    var boolSets: [(String, Bool)] = []
+
+    func children(of element: DesktopElement) -> [DesktopElement] { el(element)?.children ?? [] }
+    func boolean(_ attribute: String, of element: DesktopElement) -> Bool? { el(element)?.bools[attribute] }
+    func setBoolean(_ attribute: String, to value: Bool, on element: DesktopElement) -> Bool {
+        guard let e = el(element), e.settable.contains(attribute) else { return false }
+        e.bools[attribute] = value
+        boolSets.append((attribute, value))
+        return true
+    }
+
+    func isFrontmost(_ app: CaptureApp) -> Bool { frontmost }
+    func activate(_ app: CaptureApp) { activated.append(app.name); frontmost = true }
+    func focusedElement(of app: CaptureApp) -> DesktopElement? { focusQueue.isEmpty ? focusedEl : focusQueue.removeFirst() }
+    func post(_ stroke: DesktopKeyStroke, to app: CaptureApp) -> Bool {
+        guard postWorks else { return false }
+        posted.append((stroke, app.pid))
+        return true
+    }
+}
+
+final class FakeOpener: DesktopOpener {
+    var front: String?
+    var installed: [(bundleId: String, name: String)] = [("com.google.Chrome", "Google Chrome"), ("com.apple.Safari", "Safari")]
+    var opened: [(URL, String?)] = []
+    var works = true
+
+    func frontmostBrowser() -> String? { front }
+    func browser(matching query: String) -> (bundleId: String, name: String)? {
+        installed.first { $0.bundleId.lowercased() == query.lowercased() || $0.name.lowercased() == query.lowercased() }
+    }
+
+    func open(_ url: URL, inBrowser bundleId: String?) -> Bool {
+        guard works else { return false }
+        opened.append((url, bundleId))
+        return true
+    }
 }
 
 final class DesktopControlTests: XCTestCase {
@@ -448,7 +503,8 @@ final class DesktopControlTests: XCTestCase {
     // MARK: Tools
 
     func testToolsAreListedAndDescribed() async throws {
-        XCTAssertEqual(DesktopMCP.names, ["desktop_snapshot", "desktop_find", "desktop_press", "desktop_set_value", "desktop_type", "desktop_focus", "desktop_screenshot"])
+        XCTAssertEqual(DesktopMCP.names, ["desktop_snapshot", "desktop_find", "desktop_press", "desktop_set_value", "desktop_type", "desktop_focus", "desktop_screenshot",
+                                          "desktop_key", "desktop_open_url", "desktop_select", "desktop_check", "desktop_expand"])
         for tool in DesktopMCP.tools {
             XCTAssertEqual((tool["inputSchema"] as? [String: Any])?["type"] as? String, "object")
             XCTAssertFalse((tool["description"] as? String ?? "").isEmpty)

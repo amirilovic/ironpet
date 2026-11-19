@@ -8,12 +8,14 @@ enum DesktopOutput {
 
 /// The desktop tools: read any Mac app through Accessibility and operate it with AX actions. Reads use the capture code's live tree
 /// reader, so they share its node and time budgets and its rule that a secure field is read for its role only. Actions go through
-/// the same privacy checks as capture and through the approval gate in `DesktopSafety`. No synthetic mouse or keyboard events are sent.
+/// the same privacy checks as capture and through the approval gate in `DesktopSafety`. The only synthetic input is `desktop_key`,
+/// which posts key events to one app's process and never to the system-wide stream. No mouse events are sent.
 final class DesktopService: @unchecked Sendable {
     typealias Failure = ScreenMCP.Failure
 
     struct Dependencies {
         var ax: DesktopAX = LiveDesktopAX()
+        var opener: DesktopOpener = LiveDesktopOpener()
         var privacy: CapturePrivacy
         var enabled: () -> Bool = { false }
         /// Asks the user to approve an action. Nothing runs unless this returns true.
@@ -71,13 +73,26 @@ final class DesktopService: @unchecked Sendable {
             return await onQueue { self.find(app: text("app"), window: text("window"), role: text("role"), name: text("name"), value: text("value")) }
         case "desktop_screenshot":
             return await onQueue { self.screenshot(app: text("app"), window: text("window")) }
-        case "desktop_press", "desktop_focus", "desktop_set_value", "desktop_type":
+        case "desktop_key":
+            guard let app = text("app") else { return .failure(Failure(message: "app is required")) }
+            guard let key = text("key") else { return .failure(Failure(message: "key is required, such as \"return\" or \"cmd+l\".")) }
+            return await pressKey(app: app, window: text("window"), key: key)
+        case "desktop_open_url":
+            return await onQueue { self.openURL(text("url"), browser: text("browser")) }
+        case "desktop_press", "desktop_focus", "desktop_set_value", "desktop_type", "desktop_select", "desktop_check", "desktop_expand":
             guard let ref = text("ref") else { return .failure(Failure(message: "ref is required. Take it from desktop_snapshot or desktop_find.")) }
             let action: Action
             switch name {
             case "desktop_press": action = .press
             case "desktop_focus": action = .focus
             case "desktop_set_value": action = .setValue(args["text"] as? String ?? "")
+            case "desktop_select": action = .select(text("text"))
+            case "desktop_check":
+                guard let checked = args["checked"] as? Bool else { return .failure(Failure(message: "checked is required: true or false")) }
+                action = .check(checked)
+            case "desktop_expand":
+                guard let expand = args["expand"] as? Bool else { return .failure(Failure(message: "expand is required: true or false")) }
+                action = .expand(expand)
             default: action = .type(args["text"] as? String ?? "")
             }
             if case .setValue = action, args["text"] as? String == nil { return .failure(Failure(message: "text is required")) }
@@ -257,6 +272,10 @@ final class DesktopService: @unchecked Sendable {
         case press, focus
         case setValue(String)
         case type(String)
+        /// Pick the option with this text inside the element, or select the element itself when there is no text.
+        case select(String?)
+        case check(Bool)
+        case expand(Bool)
 
         var label: String {
             switch self {
@@ -264,7 +283,16 @@ final class DesktopService: @unchecked Sendable {
             case .focus: return "focus"
             case .setValue: return "set_value"
             case .type: return "type"
+            case .select: return "select"
+            case .check: return "check"
+            case .expand: return "expand"
             }
+        }
+
+        /// Text the agent supplied that decides what the action touches, so it counts for approval like the element's own text.
+        var approvalTexts: [String] {
+            if case .select(let text?) = self { return [text] }
+            return []
         }
     }
 
@@ -309,11 +337,13 @@ final class DesktopService: @unchecked Sendable {
             return result
         }
         let entry: Entry
+        var asked = false
         switch first {
         case .stop(let failure): return .failure(failure)
-        case .go(let found, let reason):
+        case .go(let found, let elementReason):
             entry = found
-            if let reason {
+            if let reason = elementReason ?? DesktopSafety.approvalReason(element: action.approvalTexts, window: nil) {
+                asked = true
                 let approval = DesktopApproval(title: "\(action.label) \(entry.role.lowercased()) \"\(clip(entry.name))\" in \(entry.app.name)",
                                                detail: "\(entry.windowTitle.isEmpty ? "" : "Window: \(clip(entry.windowTitle)). ")Approval needed because \(reason).")
                 guard await deps.approve(approval) else {
@@ -322,10 +352,11 @@ final class DesktopService: @unchecked Sendable {
                 }
             }
         }
-        return await onQueue { self.run(action, ref: ref, expected: entry) }
+        return await onQueue { [asked] in self.run(action, ref: ref, expected: entry, asked: asked) }
     }
 
-    private func run(_ action: Action, ref: String, expected: Entry) -> Result<DesktopOutput, Failure> {
+    /// `asked` is whether the user approved this action, which lets a select pick an option whose own label says send, pay or delete.
+    private func run(_ action: Action, ref: String, expected: Entry, asked: Bool) -> Result<DesktopOutput, Failure> {
         // Time passed while the user decided, so the element is checked again, and it must be the one that was approved.
         let entry: Entry
         switch check(ref) {
@@ -372,6 +403,21 @@ final class DesktopService: @unchecked Sendable {
             } else {
                 return fail("this element does not take text through Accessibility.")
             }
+        case .select(let wanted):
+            switch select(entry, wanted: wanted, asked: asked) {
+            case .success(let note): done = note
+            case .failure(let message): return fail(message.text)
+            }
+        case .check(let wanted):
+            switch setChecked(entry, wanted) {
+            case .success(let note): done = note
+            case .failure(let message): return fail(message.text)
+            }
+        case .expand(let wanted):
+            switch setExpanded(entry, wanted) {
+            case .success(let note): done = note
+            case .failure(let message): return fail(message.text)
+            }
         }
         log(entry, action, .done, note: done)
         return .success(.value(["ok": true, "action": done, "element": "\(entry.role.lowercased())" + (entry.name.isEmpty ? "" : " \"\(clip(entry.name))\""),
@@ -384,6 +430,349 @@ final class DesktopService: @unchecked Sendable {
     }
 
     private func clip(_ text: String) -> String { text.count > 60 ? String(text.prefix(59)) + "…" : text }
+}
+
+// MARK: Select, check and expand
+
+/// A reason an element action could not be done, in words an agent can act on.
+private struct Problem: Error {
+    var text: String
+    init(_ text: String) { self.text = text }
+}
+
+private extension DesktopService {
+    static let popupRoles: Set<String> = ["PopUpButton", "MenuButton", "ComboBox", "MenuBarItem"]
+    /// Roles whose own text, or the text under them, names an option.
+    static let optionRoles: Set<String> = ["MenuItem", "Row", "RadioButton", "Tab", "Cell", "MenuBarItem"]
+
+    /// "1", "true", "on" and the like. A mixed checkbox ("2") counts as not checked, because pressing it checks it.
+    static func truth(_ text: String?) -> Bool? {
+        switch text?.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "1", "true", "yes", "on": return true
+        case "0", "2", "false", "no", "off": return false
+        default: return nil
+        }
+    }
+
+    struct Option {
+        var element: DesktopElement
+        var role: String
+        /// Every text the option shows: its own title, and for a row the texts of its cells.
+        var labels: [String]
+    }
+
+    /// The options under `root`, found live: menu items, rows, radio buttons and tabs, up to a depth and a count.
+    func options(under root: DesktopElement, depth: Int = 6, limit: Int = 500) -> [Option] {
+        var found: [Option] = []
+        var visited = 0
+        // The texts under an option. A nested row is another option, so its texts are not this one's.
+        func texts(_ element: DesktopElement, depth: Int, root: Bool = true) -> [String] {
+            guard let node = deps.ax.attributes(of: element), !node.isSecure, root || node.role != "Row" else { return [] }
+            var out = [node.title, node.description, node.value].compactMap { $0 }.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            if depth > 0 {
+                for child in deps.ax.children(of: element) { out += texts(child, depth: depth - 1, root: false) }
+            }
+            return out
+        }
+        func walk(_ element: DesktopElement, depth: Int) {
+            guard depth >= 0, visited < limit else { return }
+            visited += 1
+            for child in deps.ax.children(of: element) {
+                guard visited < limit, let node = deps.ax.attributes(of: child) else { continue }
+                if Self.optionRoles.contains(node.role) {
+                    let labels = node.role == "MenuItem" ? [node.title, node.description].compactMap { $0 } : texts(child, depth: 3)
+                    if !labels.isEmpty { found.append(Option(element: child, role: node.role, labels: labels.map { deps.clean($0) })) }
+                }
+                walk(child, depth: depth - 1)
+            }
+        }
+        walk(root, depth: depth)
+        return found
+    }
+
+    /// Opens a popup so its options exist. Returns whether it did.
+    func openPopup(_ element: DesktopElement) -> Bool {
+        let available = deps.ax.actions(of: element)
+        guard let name = ["AXPress", "AXShowMenu"].first(where: available.contains) else { return false }
+        return deps.ax.perform(name, on: element)
+    }
+
+    private func select(_ entry: Entry, wanted: String?, asked: Bool) -> Result<String, Problem> {
+        let ax = deps.ax
+        guard let wanted else {
+            return choose(Option(element: entry.element, role: entry.role, labels: [entry.name].filter { !$0.isEmpty }))
+        }
+        let opened = Self.popupRoles.contains(entry.role) && openPopup(entry.element)
+        func close() { if opened, ax.actions(of: entry.element).contains("AXCancel") { _ = ax.perform("AXCancel", on: entry.element) } }
+        // A menu appears a moment after the press.
+        var all = options(under: entry.element)
+        for _ in 0..<5 where all.isEmpty && opened {
+            Thread.sleep(forTimeInterval: 0.05)
+            all = options(under: entry.element)
+        }
+        let needle = wanted.trimmingCharacters(in: .whitespaces).lowercased()
+        var hits = all.filter { $0.labels.contains { $0.trimmingCharacters(in: .whitespaces).lowercased() == needle } }
+        if hits.isEmpty { hits = all.filter { $0.labels.contains { $0.lowercased().contains(needle) } } }
+        guard hits.count == 1, let hit = hits.first else {
+            close()
+            if hits.isEmpty {
+                let names = all.prefix(12).compactMap { $0.labels.first }.map { "\"\($0)\"" }.joined(separator: ", ")
+                return .failure(Problem("no option matches \"\(wanted)\"." + (names.isEmpty ? " The element lists no options. Open it first with desktop_expand." : " Options: \(names).")))
+            }
+            return .failure(Problem("\(hits.count) options match \"\(wanted)\". Give more of the text."))
+        }
+        // The user approved what the agent asked for. An option whose label says more than that still needs an answer.
+        if !asked, let verb = hit.labels.lazy.compactMap({ DesktopSafety.riskyVerb(in: $0) }).first {
+            close()
+            return .failure(Problem("the option \"\(hit.labels[0])\" says \"\(verb)\". Ask again with its full text so the user can approve it."))
+        }
+        let result = choose(hit)
+        if case .failure = result { close() }
+        return result
+    }
+
+    /// Selects one option or row: AXSelected when it can be set, else its press action.
+    func choose(_ option: Option) -> Result<String, Problem> {
+        let ax = deps.ax
+        let label = option.labels.first ?? option.role.lowercased()
+        let isItem = option.role == "MenuItem" || option.role == "RadioButton" || option.role == "Tab"
+        if !isItem {
+            if ax.boolean("AXSelected", of: option.element) == true { return .success("already selected") }
+            if ax.isSettable("AXSelected", on: option.element), ax.setBoolean("AXSelected", to: true, on: option.element) { return .success("select \"\(label)\"") }
+        }
+        let available = ax.actions(of: option.element)
+        if let name = ["AXPress", "AXPick", "AXOpen"].first(where: available.contains), ax.perform(name, on: option.element) { return .success("\(name) \"\(label)\"") }
+        return .failure(Problem("\"\(label)\" cannot be selected through Accessibility."))
+    }
+
+    func checkState(_ element: DesktopElement) -> Bool? {
+        Self.truth(deps.ax.attributes(of: element)?.value)
+    }
+
+    private func setChecked(_ entry: Entry, _ wanted: Bool) -> Result<String, Problem> {
+        let ax = deps.ax
+        guard let current = checkState(entry.element) else {
+            return .failure(Problem("this element has no checked state. desktop_check works on checkboxes, switches and radio buttons."))
+        }
+        if current == wanted { return .success(wanted ? "already checked" : "already unchecked") }
+        if entry.role == "RadioButton" && !wanted { return .failure(Problem("a radio button cannot be unchecked. Check another one in its group.")) }
+        guard ax.actions(of: entry.element).contains("AXPress") else { return .failure(Problem("this element has no press action to change it.")) }
+        guard ax.perform("AXPress", on: entry.element) else { return .failure(Problem("the app refused AXPress.")) }
+        Thread.sleep(forTimeInterval: 0.05)
+        if let after = checkState(entry.element), after != wanted {
+            return .failure(Problem("the app accepted the press but the element is still \(after ? "checked" : "unchecked")."))
+        }
+        return .success(wanted ? "check (AXPress)" : "uncheck (AXPress)")
+    }
+
+    private func setExpanded(_ entry: Entry, _ wanted: Bool) -> Result<String, Problem> {
+        let ax = deps.ax
+        let word = wanted ? "expanded" : "collapsed"
+        var attribute: String?
+        var current: Bool?
+        for name in ["AXDisclosing", "AXExpanded"] {
+            if let value = ax.boolean(name, of: entry.element) { attribute = name; current = value; break }
+        }
+        if current == nil && entry.role == "DisclosureTriangle" { current = checkState(entry.element) }
+        if current == wanted { return .success("already \(word)") }
+        func verified(_ note: String) -> Result<String, Problem> {
+            if let attribute, let after = ax.boolean(attribute, of: entry.element), after != wanted {
+                return .failure(Problem("the app accepted it but the element is still \(after ? "expanded" : "collapsed")."))
+            }
+            return .success(note)
+        }
+        if let attribute, ax.isSettable(attribute, on: entry.element), ax.setBoolean(attribute, to: wanted, on: entry.element) {
+            return verified("set \(attribute)")
+        }
+        let available = ax.actions(of: entry.element)
+        if entry.role == "DisclosureTriangle" || (attribute != nil && !Self.popupRoles.contains(entry.role)) {
+            guard available.contains("AXPress"), ax.perform("AXPress", on: entry.element) else {
+                return .failure(Problem("this element could not be made \(word)."))
+            }
+            return verified("AXPress")
+        }
+        if Self.popupRoles.contains(entry.role) {
+            if wanted {
+                guard let name = ["AXPress", "AXShowMenu"].first(where: available.contains), ax.perform(name, on: entry.element) else {
+                    return .failure(Problem("this element could not be opened."))
+                }
+                return .success(name)
+            }
+            guard available.contains("AXCancel"), ax.perform("AXCancel", on: entry.element) else { return .failure(Problem("this element could not be closed.")) }
+            return .success("AXCancel")
+        }
+        return .failure(Problem("this element cannot be expanded or collapsed. It needs to be a disclosure triangle, an outline row or a popup."))
+    }
+}
+
+// MARK: Keys
+
+private extension DesktopService {
+    struct KeyPlan {
+        var app: CaptureApp
+        var window: DesktopWindowInfo
+        var windowTitle: String
+        var stroke: DesktopKeyStroke
+        var focus: Focus
+        var reason: String?
+    }
+
+    /// The element that has the keyboard focus, as far as approval and the log need it.
+    struct Focus: Equatable {
+        var role = ""
+        var name = ""
+        var shown: [String] = []
+        var secure = false
+    }
+
+    func focus(of app: CaptureApp) -> Focus {
+        guard let element = deps.ax.focusedElement(of: app), let live = deps.ax.attributes(of: element) else { return Focus() }
+        if live.isSecure { return Focus(role: live.role, secure: true) }
+        let node = CaptureTree.prepare(live, clean: deps.clean).tree
+        var shown = [node.title, node.description].compactMap { $0 }
+        if !CaptureTree.isInput(node) { shown += [node.value].compactMap { $0 } }
+        return Focus(role: node.role, name: node.name ?? "", shown: shown)
+    }
+
+    func keyLog(_ app: CaptureApp, _ window: String, _ stroke: DesktopKeyStroke, _ focus: Focus, _ outcome: DesktopActionRecord.Outcome, note: String) {
+        deps.record(DesktopActionRecord(at: deps.now(), app: app.name, window: window, role: focus.role, name: focus.name,
+                                        action: "key \(stroke.label)", outcome: outcome, note: note))
+    }
+
+    /// Everything that must hold before a key is posted: the app and window may be used and the focus is not a password field.
+    func prepareKey(_ query: String, window wanted: String?, _ stroke: DesktopKeyStroke) -> Result<KeyPlan, Failure> {
+        if let failure = ready() { return .failure(failure) }
+        guard let app = deps.ax.runningApp(matching: query) else {
+            return .failure(Failure(message: "no running app matches \(query). Use its name or bundle id."))
+        }
+        func refuse(_ failure: Failure, window: String = "") -> Result<KeyPlan, Failure> {
+            keyLog(app, window, stroke, Focus(), .refused, note: failure.message)
+            return .failure(failure)
+        }
+        // The same read as every other tool, so the app list, private windows and denied addresses apply to keys too.
+        let shot: Snapshot
+        switch capture(app: query, window: wanted) {
+        case .failure(let failure): return refuse(failure)
+        case .success(let value): shot = value
+        }
+        let title = deps.clean(shot.window.title ?? "")
+        // The key goes to the app's key window, so the window that was checked is raised unless it already is that window.
+        if !deps.ax.isFrontmost(app) || !shot.window.focused {
+            deps.ax.activate(app)
+            _ = deps.ax.focus(shot.window.element)
+        }
+        let current = focus(of: app)
+        if current.secure { return refuse(Failure(message: "ironpet never acts on a password field."), window: title) }
+        let reason = DesktopSafety.keyApprovalReason(stroke, element: current.shown, window: title)
+        return .success(KeyPlan(app: app, window: shot.window, windowTitle: title, stroke: stroke, focus: current, reason: reason))
+    }
+
+    func pressKey(app query: String, window: String?, key: String) async -> Result<DesktopOutput, Failure> {
+        let stroke: DesktopKeyStroke
+        switch DesktopKeys.parse(key) {
+        case .failure(let error): return .failure(Failure(message: error.message))
+        case .success(let value): stroke = value
+        }
+        let prepared = await onQueue { self.prepareKey(query, window: window, stroke) }
+        let plan: KeyPlan
+        switch prepared {
+        case .failure(let failure): return .failure(failure)
+        case .success(let value): plan = value
+        }
+        if let reason = plan.reason {
+            let approval = DesktopApproval(title: "press \(stroke.label) in \(plan.app.name)",
+                                           detail: "\(plan.windowTitle.isEmpty ? "" : "Window: \(clip(plan.windowTitle)). ")Approval needed because \(reason).")
+            guard await deps.approve(approval) else {
+                keyLog(plan.app, plan.windowTitle, stroke, plan.focus, .declined, note: reason)
+                return .failure(Failure(message: "the user declined this action."))
+            }
+        }
+        return await onQueue { self.sendKey(plan) }
+    }
+
+    func sendKey(_ plan: KeyPlan) -> Result<DesktopOutput, Failure> {
+        func stop(_ message: String) -> Result<DesktopOutput, Failure> {
+            keyLog(plan.app, plan.windowTitle, plan.stroke, plan.focus, .refused, note: message)
+            return .failure(Failure(message: message))
+        }
+        // Time passed while the user decided, so the app, the window and the focus are checked again.
+        if let failure = ready() ?? checkApp(plan.app) { return stop(failure.message) }
+        if deps.privacy.isPrivateWindow(app: plan.app, title: plan.windowTitle) { return stop("ironpet does not read or act on a private browser window.") }
+        // The key lands in the app's focused window. If that is another window than the one checked, it is checked too.
+        if let keyWindow = deps.ax.windows(of: plan.app).first(where: \.focused),
+           deps.privacy.isPrivateWindow(app: plan.app, title: keyWindow.title) {
+            return stop("ironpet does not read or act on a private browser window.")
+        }
+        let now = focus(of: plan.app)
+        if now.secure { return stop("ironpet never acts on a password field.") }
+        if plan.reason == nil, DesktopSafety.keyApprovalReason(plan.stroke, element: now.shown, window: plan.windowTitle) != nil {
+            return stop("the focus changed while the key was prepared. Try again.")
+        }
+        guard deps.ax.post(plan.stroke, to: plan.app) else {
+            keyLog(plan.app, plan.windowTitle, plan.stroke, plan.focus, .failed, note: "the key could not be posted")
+            return .failure(Failure(message: "the key could not be posted to \(plan.app.name)."))
+        }
+        keyLog(plan.app, plan.windowTitle, plan.stroke, plan.focus, .done, note: "posted to \(plan.app.name)")
+        return .success(.value(["ok": true, "action": "key \(plan.stroke.label)", "app": plan.app.name]))
+    }
+}
+
+// MARK: Open a URL
+
+private extension DesktopService {
+    static let maxURLLength = 8_192
+
+    /// An http(s) address with a host and no user name or password. The host goes through the same deny list as capture.
+    static func validate(_ raw: String) -> Result<URL, Failure> {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count <= maxURLLength, !text.contains(where: { $0.isWhitespace || $0.isNewline }),
+              let components = URLComponents(string: text), let scheme = components.scheme?.lowercased(), let url = components.url else {
+            return .failure(Failure(message: "that is not a web address. Give a full address such as https://example.com/path."))
+        }
+        guard scheme == "http" || scheme == "https" else {
+            return .failure(Failure(message: "ironpet opens only http and https addresses, not \(scheme):."))
+        }
+        guard components.user == nil, components.password == nil else {
+            return .failure(Failure(message: "ironpet does not open addresses that carry a user name or password."))
+        }
+        if let skip = CaptureFloor.checkURL(bundleId: "", raw: text) { return .failure(Failure(message: "ironpet does not open this address: \(skip).")) }
+        return .success(url)
+    }
+
+    func openURL(_ raw: String?, browser query: String?) -> Result<DesktopOutput, Failure> {
+        guard let raw else { return .failure(Failure(message: "url is required")) }
+        let url: URL
+        switch Self.validate(raw) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let value): url = value
+        }
+        let shownURL = deps.clean(CaptureURL.redact(url.absoluteString))
+        var target: (bundleId: String, name: String)?
+        if let query {
+            guard let found = deps.opener.browser(matching: query) else {
+                return .failure(Failure(message: "no browser matches \(query). Use the name or bundle id of an installed browser."))
+            }
+            target = found
+        } else if let front = deps.opener.frontmostBrowser() {
+            target = deps.opener.browser(matching: front) ?? (front, front)
+        }
+        let name = target?.name ?? "default browser"
+        func log(_ outcome: DesktopActionRecord.Outcome, _ note: String) {
+            deps.record(DesktopActionRecord(at: deps.now(), app: name, window: "", role: "Link", name: shownURL, action: "open_url", outcome: outcome, note: note))
+        }
+        // Pause, the screen lock and the app deny list apply to opening a page as to reading one.
+        let probe = CaptureApp(bundleId: target?.bundleId ?? "", name: name, pid: 0)
+        if let skip = deps.privacy.checkApp(probe, now: deps.now()) {
+            log(.refused, "\(skip)")
+            return .failure(Failure(message: "ironpet does not open pages in \(name): \(skip)."))
+        }
+        guard deps.opener.open(url, inBrowser: target?.bundleId) else {
+            log(.failed, "the browser did not open it")
+            return .failure(Failure(message: "\(name) did not open the address."))
+        }
+        log(.done, "new tab")
+        return .success(.value(["ok": true, "action": "open_url", "url": shownURL, "browser": name]))
+    }
 }
 
 /// Searching a tree for the elements an agent asks about.

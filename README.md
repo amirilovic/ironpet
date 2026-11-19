@@ -407,7 +407,7 @@ Pause capture from the pet menu or Settings. The **Screen** section of the ironp
 
 Desktop control lets the agents you run in ironpet read and operate other Mac apps through Accessibility, with nothing to install and no separate permission: it uses the Accessibility access ironpet already has. It is off by default. Turn it on under **Settings → Screen → Desktop control**. macOS asks for Accessibility if ironpet does not have it yet.
 
-Agents get seven MCP tools, described by the bundled `ironpet-desktop` skill:
+Agents get twelve MCP tools, described by the bundled `ironpet-desktop` skill:
 
 | Tool | What it does |
 | --- | --- |
@@ -417,14 +417,21 @@ Agents get seven MCP tools, described by the bundled `ironpet-desktop` skill:
 | `desktop_set_value(ref, text)` | Sets the value of a text field or other settable element. |
 | `desktop_type(ref, text)` | Focuses the element and inserts text at the caret, or appends it when only the whole value can be set. |
 | `desktop_focus(ref)` | Focuses an element, or raises a window. |
+| `desktop_select(ref, text?)` | Picks the option with that text in a popup, combo box, list, table or outline, or selects the element itself without `text`. |
+| `desktop_check(ref, checked)` | Makes a checkbox, switch or radio button checked or unchecked. Does nothing when it is already in that state. |
+| `desktop_expand(ref, expand)` | Expands or collapses a disclosure triangle, outline row or popup. Does nothing when it is already in that state. |
+| `desktop_key(app, key, window?)` | Presses a key or combo such as `return`, `escape`, `shift+tab` or `cmd+l` in one app. Posted to that app's process only. |
+| `desktop_open_url(url, browser?)` | Opens an http or https address in a new tab of the named browser, else the frontmost browser, else the default one. |
 | `desktop_screenshot(app, window?)` | A picture of one window, not the whole screen. Needs Screen Recording access. |
 
-Refs belong to the last read of a window and work only while their element is unchanged. A tool that gets a stale or unknown ref says so and asks for a new snapshot. Two identical elements get refs ending in `~2`, `~3`. Actions use Accessibility only: ironpet sends no mouse or keyboard events and does not move your pointer.
+Refs belong to the last read of a window and work only while their element is unchanged. A tool that gets a stale or unknown ref says so and asks for a new snapshot. Two identical elements get refs ending in `~2`, `~3`. Actions use Accessibility, except `desktop_key`, which posts key events to one app's process, and `desktop_open_url`. ironpet sends no mouse events and does not move your pointer.
 
 Safety rules that no setting overrides:
 
 - Password fields are read for their role only and never operated. Password managers, apps on the screen capture exclusion list, private browser windows and the denied addresses of screen capture are never read or operated. Nothing works while capture is paused or the screen is locked.
 - An action on an element, or in a window, whose text says send, pay, delete, submit or buy (and forms of those words, plus purchase, check out and transfer) waits for you to press **Approve** in a bubble. **Reject**, or no answer in two minutes, fails the action.
+- `desktop_key` always waits for **Approve** for Cmd+Return, Cmd+Q and Cmd+W. It also waits for Return or any Cmd combo when the focused window or element says send, pay, delete, submit or buy. A plain letter, Tab, Escape or an arrow never asks. Keys are never sent to a password field.
+- `desktop_open_url` opens only http and https addresses whose host is not on the screen capture deny list, and refuses addresses with a user name or password.
 - Every action is logged with its time, app, window, element role and name, action and outcome. Settings → Screen → Desktop control lists the latest ones. The log is the `desktop.action` kind of the activity log and is kept for 30 days.
 - The chat's own approval card still applies: in the normal mode a `desktop_*` call asks first, and only Auto mode skips the card. The bubble above applies in both modes.
 

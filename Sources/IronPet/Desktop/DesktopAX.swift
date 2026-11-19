@@ -38,6 +38,18 @@ protocol DesktopAX: AnyObject {
     func focus(_ element: DesktopElement) -> Bool
     /// A PNG of the window, taken without writing a file. Nil when it cannot be captured.
     func screenshot(of window: DesktopWindowInfo, app: CaptureApp) -> Data?
+    /// The element's children as the app lists them (AXChildren, or AXContents for a popup), live. Empty when it has none or is gone.
+    func children(of element: DesktopElement) -> [DesktopElement]
+    /// A boolean attribute such as AXSelected, AXDisclosing or AXExpanded. Nil when the element lacks it.
+    func boolean(_ attribute: String, of element: DesktopElement) -> Bool?
+    func setBoolean(_ attribute: String, to value: Bool, on element: DesktopElement) -> Bool
+    func isFrontmost(_ app: CaptureApp) -> Bool
+    /// Brings the app to the front.
+    func activate(_ app: CaptureApp)
+    /// The element that has the keyboard focus inside the app.
+    func focusedElement(of app: CaptureApp) -> DesktopElement?
+    /// Posts the key down and key up to the app's process only, never to the system-wide event stream. False when it could not post.
+    func post(_ stroke: DesktopKeyStroke, to app: CaptureApp) -> Bool
 }
 
 /// Nothing is reachable. Test mode uses it, so an automated run never touches the real screen.
@@ -54,6 +66,13 @@ final class IdleDesktopAX: DesktopAX {
     func set(_ attribute: String, to text: String, on element: DesktopElement) -> Bool { false }
     func focus(_ element: DesktopElement) -> Bool { false }
     func screenshot(of window: DesktopWindowInfo, app: CaptureApp) -> Data? { nil }
+    func children(of element: DesktopElement) -> [DesktopElement] { [] }
+    func boolean(_ attribute: String, of element: DesktopElement) -> Bool? { nil }
+    func setBoolean(_ attribute: String, to value: Bool, on element: DesktopElement) -> Bool { false }
+    func isFrontmost(_ app: CaptureApp) -> Bool { false }
+    func activate(_ app: CaptureApp) {}
+    func focusedElement(of app: CaptureApp) -> DesktopElement? { nil }
+    func post(_ stroke: DesktopKeyStroke, to app: CaptureApp) -> Bool { false }
 }
 
 /// The macOS implementation. It reads through `AXCaptureSource`, so the live tree has the same node and time budgets, the same
@@ -171,5 +190,103 @@ final class LiveDesktopAX: DesktopAX {
         return context.makeImage() ?? image
     }
 
+    func children(of element: DesktopElement) -> [DesktopElement] {
+        guard let el = ax(element) else { return [] }
+        var list = AXCaptureSource.elements(el, "AXChildren")
+        if list.isEmpty { list = AXCaptureSource.elements(el, "AXContents") }
+        return list.map { Box($0) }
+    }
+
+    func boolean(_ attribute: String, of element: DesktopElement) -> Bool? {
+        guard let el = ax(element) else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, attribute as CFString, &value) == .success, let value else { return nil }
+        if CFGetTypeID(value) == CFBooleanGetTypeID() { return CFBooleanGetValue((value as! CFBoolean)) }
+        return (value as? NSNumber)?.boolValue
+    }
+
+    func setBoolean(_ attribute: String, to value: Bool, on element: DesktopElement) -> Bool {
+        guard let el = ax(element) else { return false }
+        return AXUIElementSetAttributeValue(el, attribute as CFString, (value ? kCFBooleanTrue : kCFBooleanFalse) as CFTypeRef) == .success
+    }
+
+    func isFrontmost(_ app: CaptureApp) -> Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == app.pid }
+
+    func activate(_ app: CaptureApp) {
+        NSRunningApplication(processIdentifier: app.pid)?.activate()
+        // Activation is asynchronous. A short wait lets the app take the keyboard focus before the keys arrive.
+        Thread.sleep(forTimeInterval: 0.2)
+    }
+
+    func focusedElement(of app: CaptureApp) -> DesktopElement? {
+        AXCaptureSource.element(source.appElement(for: app), "AXFocusedUIElement").map { Box($0) }
+    }
+
+    func post(_ stroke: DesktopKeyStroke, to app: CaptureApp) -> Bool {
+        // A private source keeps the key state of the real keyboard out of the event. postToPid sends to this process only.
+        let source = CGEventSource(stateID: .privateState)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: stroke.keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: stroke.keyCode, keyDown: false) else { return false }
+        down.flags = stroke.flags
+        up.flags = stroke.flags
+        down.postToPid(app.pid)
+        Thread.sleep(forTimeInterval: 0.02)
+        up.postToPid(app.pid)
+        return true
+    }
+
     private func ax(_ element: DesktopElement) -> AXUIElement? { (element as? Box)?.element }
+}
+
+/// What opening an address needs from the system, behind a protocol so tests can drive the service without a browser.
+protocol DesktopOpener: AnyObject {
+    /// The bundle id of the frontmost app when it is a browser.
+    func frontmostBrowser() -> String?
+    /// A browser by bundle id or name, running or installed. Nil when none matches.
+    func browser(matching query: String) -> (bundleId: String, name: String)?
+    /// Opens the address in a new tab of the browser, or of the default browser when `bundleId` is nil.
+    func open(_ url: URL, inBrowser bundleId: String?) -> Bool
+}
+
+final class IdleDesktopOpener: DesktopOpener {
+    func frontmostBrowser() -> String? { nil }
+    func browser(matching query: String) -> (bundleId: String, name: String)? { nil }
+    func open(_ url: URL, inBrowser bundleId: String?) -> Bool { false }
+}
+
+final class LiveDesktopOpener: DesktopOpener {
+    func frontmostBrowser() -> String? {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier.flatMap { CaptureFloor.isBrowser($0) ? $0 : nil }
+    }
+
+    func browser(matching query: String) -> (bundleId: String, name: String)? {
+        let wanted = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !wanted.isEmpty else { return nil }
+        func name(_ bundleId: String, _ url: URL?) -> String {
+            url.map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? bundleId
+        }
+        let running = NSWorkspace.shared.runningApplications.compactMap { app -> (String, String)? in
+            guard let id = app.bundleIdentifier, CaptureFloor.isBrowser(id) else { return nil }
+            return (id, app.localizedName ?? id)
+        }
+        if let hit = running.first(where: { $0.0.lowercased() == wanted || $0.1.lowercased() == wanted }) { return hit }
+        // Not running: a known browser id that is installed, or an installed one whose name matches.
+        let installed = CaptureFloor.browsers.compactMap { id -> (String, String)? in
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { (id, name(id, $0)) }
+        }
+        return installed.first(where: { $0.0 == wanted || $0.1.lowercased() == wanted })
+            ?? running.first(where: { $0.1.lowercased().contains(wanted) }) ?? installed.first(where: { $0.1.lowercased().contains(wanted) })
+    }
+
+    func open(_ url: URL, inBrowser bundleId: String?) -> Bool {
+        guard let bundleId else { return NSWorkspace.shared.open(url) }
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else { return false }
+        let done = DispatchSemaphore(value: 0)
+        var opened = false
+        NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { running, error in
+            opened = running != nil && error == nil
+            done.signal()
+        }
+        return done.wait(timeout: .now() + 5) == .success && opened
+    }
 }
