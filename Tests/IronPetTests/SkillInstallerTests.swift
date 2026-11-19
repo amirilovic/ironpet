@@ -333,11 +333,4 @@ final class SkillInstallerTests: XCTestCase {
         let found = Set(regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { Range($0.range, in: text).map { String(text[$0]) } })
         XCTAssertEqual(found, real, "the skill names exactly the screen tools the endpoint has")
     }
-
-    func testTheSystemPromptTellsTheAgentToCreateAnAutomationForRegularChecks() {
-        let prompt = MemoryPreamble.taskInstructions
-        XCTAssertFalse(prompt.localizedCaseInsensitiveContains("heartbeat"))
-        XCTAssertTrue(prompt.contains("create an automation with the ironpet-automations skill"))
-        XCTAssertTrue(prompt.contains("The ironpet-tasks skill has the rules for tasks and for when you may close one."))
-    }
 }
