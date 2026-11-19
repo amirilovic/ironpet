@@ -55,12 +55,10 @@ final class PetController: NSObject {
     var chat: ChatSession?
     /// The chat API the window draws. Set with `chat`.
     var chatAPI: ChatAPI?
-    var meetings: MeetingLibrary?
+    var meetingsAPI: MeetingsAPI?
     /// The Today section's content. Set before the window first opens.
     var brief: BriefModel?
     /// "Ask Ghost" on a meeting: attach these files in the chat.
-    var onAskMeeting: (([URL]) -> Void)?
-    var meetingInProgress: () -> URL? = { nil }
     /// The Chat section came on screen or left it (another section, or the window closed).
     var onChatShown: ((Bool) -> Void)?
     /// The window closed, by Esc, a close button or ⌘W, or because ironpet lost focus off Chat.
@@ -294,8 +292,6 @@ final class PetController: NSObject {
                 if let session = store.sessions[id] { return jump(to: session) }
                 onOpenSession?(id)
             },
-            onAskMeeting: { [weak self] files in self?.onAskMeeting?(files) },
-            meetingInProgress: { [weak self] in self?.meetingInProgress() },
             onSettings: { [weak self] in
                 guard let self else { return }
                 // The Settings window is a normal window, so it would open behind this floating one.
@@ -309,7 +305,7 @@ final class PetController: NSObject {
             },
             onBriefOpen: { [weak self] target in self?.openBrief(target) })
         let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(
-            model: windowModel, agents: agentList, alerts: alertList, tasks: taskList, chat: chatAPI, meetings: meetings,
+            model: windowModel, agents: agentList, alerts: alertList, tasks: taskList, chat: chatAPI, meetings: meetingsAPI,
             settings: settings, brief: brief, actions: actions))
         window.onVisibilityChange = { [weak self] visible in
             guard let self else { return }

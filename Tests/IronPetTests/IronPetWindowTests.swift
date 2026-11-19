@@ -456,7 +456,7 @@ final class IronPetWindowTests: XCTestCase {
         let meetings = MeetingLibrary(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         var seen = PageHeaderFrames()
         let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks()), chat: ChatAPI(session: chat),
-                                     meetings: meetings, settings: nil, actions: .none)
+                                     meetings: MeetingsAPI(controller: MeetingController(), library: meetings), settings: nil, actions: .none)
             .onPreferenceChange(PageHeaderFrames.self) { seen = $0 }
             .frame(width: IronPetPanel.minimumSize.width, height: IronPetPanel.minimumSize.height)
         let host = NSHostingView(rootView: view)

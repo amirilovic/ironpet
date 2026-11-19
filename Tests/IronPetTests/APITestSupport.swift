@@ -8,7 +8,8 @@ enum APITestSupport {
     /// The API over in-memory stores. `now` is the clock the task store uses.
     static func makeAPI(events: APIEventBus? = nil, now: @escaping () -> Date = Date.init,
                         automations: [Automation] = [], clock: AutomationTestClock = AutomationTestClock(),
-                        signals: SignalStore? = nil, bubbles: BubbleStore? = nil, sessions: SessionStore? = nil, chat: ChatSession? = nil) -> IronPetAPI {
+                        signals: SignalStore? = nil, bubbles: BubbleStore? = nil, sessions: SessionStore? = nil, chat: ChatSession? = nil,
+                        meeting: MeetingController? = nil, meetingLibrary: MeetingLibrary? = nil) -> IronPetAPI {
         let tasks = TaskStore(database: memoryDatabase(), now: now, keepDoneDays: { 30 })
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-api-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -16,7 +17,9 @@ enum APITestSupport {
         let store = AutomationStore(paths: paths, defaults: { automations }, watch: false)
         let service = AutomationService(store: store, engine: AutomationEngine(env: clock.environment))
         service.runShell = { _, _ in CommandResult(code: 0, stdout: "ok") }
-        return IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals ?? SignalStore(), bubbles: bubbles ?? BubbleStore(), sessions: sessions ?? SessionStore(), chat: chat ?? ChatSession(restore: false)), events: events)
+        return IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals ?? SignalStore(), bubbles: bubbles ?? BubbleStore(), sessions: sessions ?? SessionStore(), chat: chat ?? ChatSession(restore: false),
+                                 meeting: meeting ?? MeetingController(), meetingLibrary: meetingLibrary ?? MeetingLibrary(root: dir.appendingPathComponent("meetings"))),
+                          events: events)
     }
 
     static func memoryDatabase() -> Database {

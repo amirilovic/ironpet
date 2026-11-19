@@ -58,8 +58,9 @@ enum PreviewRenderer {
         let tasks = sampleTasks()
         let chat = ChatSession(restore: false)
         chat.loadPreview(.done)
-        let meetings = MeetingLibrary(root: sampleMeetings())
-        meetings.reload()
+        let meetingLibrary = MeetingLibrary(root: sampleMeetings())
+        meetingLibrary.reload()
+        let meetings = MeetingsAPI(controller: MeetingController(), library: meetingLibrary)
         func list(_ sessions: SessionStore, tasks: TasksAPI, on section: IronPetSection? = nil) -> some View {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.section = section ?? IronPetSection.needingAttention(agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks)
@@ -70,9 +71,9 @@ enum PreviewRenderer {
         render(list(sessions, tasks: tasks, on: .chat), to: dir, "window-chat")
         render(list(sessions, tasks: tasks, on: .transcripts), to: dir, "transcripts")
         // The same section mid-run: the row and the header show the stage, and Regenerate is disabled for the other meeting.
-        meetings.regenerator.loadPreview(active: "2026-11-16-0930", .transcribing(chunk: 2, of: 5))
+        meetingLibrary.regenerator.loadPreview(active: "2026-11-16-0930", .transcribing(chunk: 2, of: 5))
         render(list(sessions, tasks: tasks, on: .transcripts), to: dir, "transcripts-regenerating")
-        meetings.regenerator.clearPreview()
+        meetingLibrary.regenerator.clearPreview()
         render(list(sessions, tasks: tasks), to: dir, "agents")
         // The window opens on Alerts when no agent needs you or is working.
         render(list(SessionStore(), tasks: tasks), to: dir, "alerts")

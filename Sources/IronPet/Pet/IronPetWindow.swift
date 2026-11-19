@@ -503,7 +503,7 @@ struct IronPetWindowView: View {
     @ObservedObject var tasks: TasksAPI
     /// Nil in previews and tests that do not show it; its row is hidden then.
     var chat: ChatAPI?
-    var meetings: MeetingLibrary?
+    var meetings: MeetingsAPI?
     /// Nil in previews, which cannot build the Automations section; its row is hidden then.
     var settings: SettingsModel?
     /// The Today page's content. Nil in tests that do not show it.
@@ -686,8 +686,7 @@ struct IronPetWindowView: View {
                         .pageHeader(IronPetSection.tasks.title)
                 case .transcripts:
                     if let meetings {
-                        TranscriptsView(library: meetings, activeFolder: actions.meetingInProgress, onAsk: actions.onAskMeeting,
-                                        focus: $model.focusMeeting)
+                        TranscriptsView(meetings: meetings, focus: $model.focusMeeting)
                     }
                 case .screen:
                     if let service = settings?.capture {
@@ -721,9 +720,6 @@ struct SessionActions {
     var onTellGhost: (String) -> Void
     var onOpenThread: (String) -> Void
     var onOpenSession: (String) -> Void
-    var onAskMeeting: ([URL]) -> Void = { _ in }
-    /// The folder of the meeting being recorded or summarized, if any.
-    var meetingInProgress: () -> URL? = { nil }
     var onSettings: () -> Void = {}
     /// Opens Settings on the Screen tab.
     var onScreenSettings: () -> Void = {}

@@ -22,7 +22,11 @@ struct MeetingRecord: Identifiable, Equatable {
 /// when a meeting is opened, off the main thread.
 @MainActor
 final class MeetingLibrary: ObservableObject {
-    @Published private(set) var meetings: [MeetingRecord] = []
+    @Published private(set) var meetings: [MeetingRecord] = [] {
+        didSet { if meetings != oldValue { events?.publish(.meetingsChanged) } }
+    }
+    /// Where `meetings.changed` is published for API clients.
+    weak var events: APIEventBus?
     /// Rebuilds a meeting's transcript and summary. Lives here so the list and the work on it share one place.
     let regenerator = MeetingRegenerator()
     private let root: URL

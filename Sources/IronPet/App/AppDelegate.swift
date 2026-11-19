@@ -121,21 +121,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.onChatToggle = { [weak self] in self?.toggleChat() }
         pet.onCapture = { [weak self] region in self?.captureScreen(region: region) }
         pet.chat = chat
-        pet.meetings = meetings
-        pet.onAskMeeting = { [weak self] files in self?.openMeetingInChat(files) }
-        pet.meetingInProgress = { [weak self] in
-            guard let meeting = self?.meeting, [.recording, .finishing, .summarizing].contains(meeting.phase) else { return nil }
-            return meeting.folder
-        }
         pet.show()
         dockIcon.update(sprite: config.config.pet.sprite)
 
         wispr.onDictation = { [weak self] text in self?.chat.receiveDictation(text) }
         pet.onChatShown = { [weak self] shown in self?.chatShown(shown) }
         pet.onWindowClosed = { [weak self] in self?.restorePreviousApp() }
-        meetingPanel = MeetingPanel(controller: meeting)
-        meeting.onChange = { [weak self] in self?.syncMeetingPanel() }
-        settingsModel.meeting = meeting
         settingsModel.speech = chat.speech
         meeting.onLabelSpeakers = { [weak self] in self?.showSettings(tab: "meetings") }
         announcer.bubbles.onDismissed = { [weak self] id in self?.meetingBubbleClosed(id) }
@@ -253,11 +244,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
         let service = AutomationService(store: store, engine: engine, database: database)
-        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, sessions: self.store, chat: chat), events: events)
+        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, sessions: self.store, chat: chat, meeting: meeting, meetingLibrary: meetings), events: events)
         pet.tasks = api.tasks
         pet.alerts = api.alerts
         pet.agents = api.agents
         pet.chatAPI = api.chat
+        pet.meetingsAPI = api.meetings
+        api.meetings.askHandler = { [weak self] files in self?.openMeetingInChat(files) }
+        meetingPanel = MeetingPanel(controller: api.meetings)
+        meeting.onChange = { [weak self] in self?.syncMeetingPanel() }
+        settingsModel.meeting = api.meetings
         api.agents.focusHandler = { [weak pet] session in pet?.jump(to: session) }
         api.agents.askHandler = { [weak self] prompt in self?.ask(prompt) }
         api.alerts.askHandler = { [weak self] prompt in self?.ask(prompt) }
@@ -1131,7 +1127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             meetingPanel.dismiss()
             if !meetingBubbleHidden, !bubbles.bubbles.contains(where: { $0.id == Self.meetingBubbleID }) {
                 bubbles.show(Bubble(id: Self.meetingBubbleID, symbol: "record.circle", tint: .red, title: "Meeting",
-                                    content: AnyView(MeetingView(controller: meeting, embedded: true))))
+                                    content: AnyView(MeetingView(controller: api.meetings, embedded: true))))
             }
         }
         pet.setRecording(meeting.phase == .recording || meeting.phase == .finishing || meeting.phase == .summarizing

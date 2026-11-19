@@ -7,7 +7,7 @@ final class MeetingPanel: NSPanel {
     private static let width: CGFloat = 340
     private let host: NSHostingController<MeetingView>
 
-    init(controller: MeetingController) {
+    init(controller: MeetingsAPI) {
         host = NSHostingController(rootView: MeetingView(controller: controller, embedded: false))
         super.init(contentRect: CGRect(x: 0, y: 0, width: Self.width, height: 260),
                    styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -68,7 +68,7 @@ final class MeetingPanel: NSPanel {
 }
 
 struct MeetingView: View {
-    @ObservedObject var controller: MeetingController
+    @ObservedObject var controller: MeetingsAPI
     /// In the pet's bubble, which supplies the padding, width and background.
     var embedded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -150,7 +150,7 @@ struct MeetingView: View {
             HStack {
                 Button("Cancel") { controller.confirmDiscard() }
                 Spacer()
-                Button { controller.stop() } label: {
+                Button { try? controller.stopRecording() } label: {
                     Label("Stop", systemImage: "stop.fill")
                 }
                 .buttonStyle(.borderedProminent)
@@ -238,7 +238,7 @@ struct MeetingView: View {
                     Button("Retry") { controller.retryFailed() }.controlSize(.small)
                 }
             }
-            switch controller.summary {
+            switch controller.summaryState {
             case .failed(let message):
                 Text("Summary failed: \(message)").font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             default:
@@ -251,23 +251,19 @@ struct MeetingView: View {
                     Text("New voices have been found in the meeting transcript.")
                         .font(.caption).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
-                    Button("Label speaker voices") { controller.onLabelSpeakers?() }.controlSize(.small)
+                    Button("Label speaker voices") { controller.labelSpeakers() }.controlSize(.small)
                 }
                 .padding(8)
                 .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
             }
             HStack(spacing: 8) {
                 Button("Open transcript") { controller.openTranscript() }
-                if case .ready = controller.summary { Button("Open summary") { controller.openSummary() } }
+                if case .ready = controller.summaryState { Button("Open summary") { controller.openSummary() } }
                 Button("Open in chat") { controller.openInChat() }
             }
             .controlSize(.small)
         }
     }
-}
-
-private extension MeetingController {
-    var folderLabel: String { folder?.lastPathComponent ?? "" }
 }
 
 /// `12:34`, or `1:02:03` after an hour.

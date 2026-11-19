@@ -21,6 +21,8 @@ final class IronPetAPI {
         var bubbles: BubbleStore
         var sessions: SessionStore
         var chat: ChatSession
+        var meeting: MeetingController
+        var meetingLibrary: MeetingLibrary
     }
 
     let events: APIEventBus
@@ -30,6 +32,7 @@ final class IronPetAPI {
     let bubbles: BubblesAPI
     let agents: AgentsAPI
     let chat: ChatAPI
+    let meetings: MeetingsAPI
 
     init(stores: Stores, events: APIEventBus? = nil) {
         let events = events ?? APIEventBus()
@@ -46,5 +49,8 @@ final class IronPetAPI {
         agents = AgentsAPI(store: stores.sessions)
         stores.chat.events = events
         chat = ChatAPI(session: stores.chat)
+        stores.meeting.events = events
+        stores.meetingLibrary.events = events
+        meetings = MeetingsAPI(controller: stores.meeting, library: stores.meetingLibrary)
     }
 }

@@ -16,7 +16,7 @@ final class SettingsModel: ObservableObject {
     /// Set once the app has built it, before the window can open.
     var automations: AutomationsAPI?
     /// The meeting controller, for labelling the voices of the last meeting.
-    var meeting: MeetingController?
+    var meeting: MeetingsAPI?
     /// The chat's reply reader, so Preview and a reply never talk over each other. Nil in preview renders.
     var speech: SpeechPlayer?
     /// Screen capture, built with the database. Nil only before the app has started.
@@ -652,7 +652,7 @@ private struct MeetingSettings: View {
 
     var body: some View {
         Form {
-            if let meeting = model.meeting { SpeakerLabelSection(controller: meeting) }
+            if let meeting = model.meeting { SpeakerLabelSection(meetings: meeting) }
             Section {
                 Toggle("Meeting transcripts", isOn: Binding(get: { meetings.enabled }, set: setEnabled))
                     .disabled(testing)
