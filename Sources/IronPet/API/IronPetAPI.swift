@@ -26,6 +26,7 @@ final class IronPetAPI {
         var config: ConfigStore
         /// Where pet sheets and background images live. The app's own folders unless a test says otherwise.
         var petFolders = PetFolders()
+        var usage: UsageStore?
     }
 
     struct PetFolders {
@@ -43,6 +44,12 @@ final class IronPetAPI {
     let chat: ChatAPI
     let meetings: MeetingsAPI
     let settings: SettingsAPI
+    let today: TodayAPI
+    private(set) var usage: UsageAPI?
+    /// Set once screen capture, desktop control and the assistant tools exist. Until then a client gets `unavailable`.
+    private(set) var screen: ScreenAPI?
+    private(set) var desktop: DesktopAPI?
+    private(set) var assistant: AssistantAPI?
     let pet: PetAPI
 
     init(stores: Stores, events: APIEventBus? = nil) {
@@ -67,9 +74,20 @@ final class IronPetAPI {
         pet = PetAPI(settings: settings, library: stores.petFolders.library, bundled: stores.petFolders.bundled,
                      backgrounds: stores.petFolders.backgrounds)
         pet.events = events
+        today = TodayAPI(tasks: tasks, sessions: stores.sessions, signals: stores.signals)
+        if let usageStore = stores.usage {
+            usage = UsageAPI(store: usageStore)
+            if usageStore === UsageStore.shared { UsageAPI.live = usage }
+        }
         if stores.config === ConfigStore.shared { PetAPI.live = pet }
         // Tests build their own API over a memory-only config and must not replace the app's.
         if stores.config === ConfigStore.shared { SettingsAPI.live = settings }
         meetings = MeetingsAPI(controller: stores.meeting, library: stores.meetingLibrary)
     }
+
+    func attach(capture service: CaptureService) { screen = ScreenAPI(service: service) }
+
+    func attach(desktop service: DesktopService) { desktop = DesktopAPI(service: service, settings: settings) }
+
+    func attach(assistant context: AssistantContext) { assistant = AssistantAPI(context: context) }
 }

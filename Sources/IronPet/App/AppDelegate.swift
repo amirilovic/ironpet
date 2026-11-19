@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var welcomeBack: WelcomeBack?
     /// Replaces the system idle time in test mode (`POST /test/presence`). Nil otherwise.
     private var testIdleSeconds: TimeInterval?
-    private var brief: BriefSource?
+    private var brief: TodayAPI?
     private lazy var logWindow = AutomationLogWindow(api: { [weak self] in self?.api?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
@@ -244,9 +244,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
         let service = AutomationService(store: store, engine: engine, database: database)
-        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, sessions: self.store, chat: chat, meeting: meeting, meetingLibrary: meetings, config: config), events: events)
+        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, sessions: self.store, chat: chat, meeting: meeting, meetingLibrary: meetings, config: config, usage: UsageStore.shared), events: events)
         pet.tasks = api.tasks
         pet.alerts = api.alerts
+        api.attach(assistant: assistant)
         pet.agents = api.agents
         pet.chatAPI = api.chat
         pet.meetingsAPI = api.meetings
@@ -377,7 +378,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         context.sessions = { [weak self] in self?.store.ordered.filter { $0.source != .job } ?? [] }
         context.tasks = { TaskStore.shared }
         context.alerts = { [weak self] in self?.signals.signals ?? [] }
-        context.brief = { [weak self] kind in self?.brief?.build(kind) }
+        context.brief = { [weak self] kind in self?.brief?.brief(BriefRequest(kind: kind)) }
         context.meetings = { [weak self] in
             guard let self else { return [] }
             if meetings.meetings.isEmpty { meetings.reload() }
@@ -420,7 +421,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The morning brief and the recap: built from the stores for `digest` automations and the Today page. The Today row is
     /// listed while one of those automations is on.
     private func setUpBrief(_ service: AutomationService, tasks: TaskStore) {
-        let source = BriefSource(tasks: api.tasks, sessions: store, signals: signals, activity: activity)
+        let source = api.today
+        source.activity = activity
         source.now = { [weak self] in Date().addingTimeInterval(self?.testClockOffset ?? 0) }
         let model = BriefModel(source: source)
         let automations = service.store
@@ -429,7 +431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         brief = source
         pet.brief = model
-        service.digest = { kind, a, slot in source.build(kind, weekdays: kind == .brief ? a.trigger.weekdays : nil, day: slot) }
+        service.digest = { kind, a, slot in source.brief(BriefRequest(kind: kind, weekdays: kind == .brief ? a.trigger.weekdays : nil, day: slot)) }
         service.showDigest = { [weak self] brief, a, _ in
             self?.announcer.brief(brief, automation: a) { [weak self] in
                 self?.announcer.bubbles.dismiss(Announcer.briefID(brief.kind))
@@ -456,7 +458,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let service = CaptureService(store: captureStore, config: { ConfigStore.shared.config.screenCapture }, dependencies: dependencies)
         capture = service
-        settingsModel.capture = service
+        api.attach(capture: service)
+        settingsModel.capture = api.screen
         service.refreshModel()
         service.apply()
     }
@@ -485,6 +488,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let service = DesktopService(dependencies)
         desktop = service
+        api.attach(desktop: service)
         settingsModel.desktopLog = { [weak self] in
             self?.activity?.events(in: DateInterval(start: Date().addingTimeInterval(-ActivityLog.retention), end: Date().addingTimeInterval(60)), kinds: [.desktopAction]).reversed() ?? []
         }
@@ -854,7 +858,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             control.buildBrief = { [weak self] kind in
                 let weekdays = self?.automations.store.automations.first { $0.action.digest == kind.rawValue }?.trigger.weekdays
-                return self?.brief?.build(kind, weekdays: kind == .brief ? weekdays : nil)
+                return self?.brief?.brief(BriefRequest(kind: kind, weekdays: kind == .brief ? weekdays : nil))
             }
             control.windowState = { [weak self] in self?.pet.windowState ?? [:] }
             control.openBrief = { [weak self] target in self?.pet.openBrief(target) }
@@ -876,8 +880,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         }
         server.onAgentAPI = { [weak self] request, respond in
-            MCPEndpoint.route(request, automations: { self?.api?.automations }, tasks: { self?.api?.tasks }, screen: { self?.capture?.store },
-                              desktop: { self?.desktop }, assistant: { self?.assistant }, respond: respond)
+            MCPEndpoint.route(request, automations: { self?.api?.automations }, tasks: { self?.api?.tasks }, screen: { self?.api?.screen },
+                              desktop: { self?.api?.desktop }, assistant: { self?.api?.assistant }, respond: respond)
         }
         try server.start()
         self.server = server

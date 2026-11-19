@@ -25,7 +25,7 @@ final class ScreenMCPTests: XCTestCase {
 
     private func call(_ name: String, _ args: [String: Any]) async throws -> (value: [String: Any], isError: Bool, text: String) {
         let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": name, "arguments": args]])
-        let (status, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, screen: store)
+        let (status, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, screen: store.map { ScreenAPI(service: CaptureService(store: $0, config: { Config().screenCapture })) })
         XCTAssertEqual(status, "200 OK")
         let reply = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         let result = try XCTUnwrap(reply["result"] as? [String: Any], "\(reply)")
@@ -81,7 +81,7 @@ final class ScreenMCPTests: XCTestCase {
 
     func testTheToolsAreListedAndDescribeScreenTextAsData() async throws {
         let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"])
-        let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, screen: store)
+        let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, screen: store.map { ScreenAPI(service: CaptureService(store: $0, config: { Config().screenCapture })) })
         let tools = try XCTUnwrap(((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
         let screen = tools.filter { ($0["name"] as? String)?.hasPrefix("screen_") == true }
         XCTAssertEqual(screen.compactMap { $0["name"] as? String }.sorted(), ["screen_search", "screen_window"])

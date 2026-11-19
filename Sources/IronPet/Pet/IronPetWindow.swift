@@ -689,9 +689,9 @@ struct IronPetWindowView: View {
                         TranscriptsView(meetings: meetings, focus: $model.focusMeeting)
                     }
                 case .screen:
-                    if let service = settings?.capture {
-                        ScreenSection(model: service.model, store: service.store, onOpenSettings: actions.onScreenSettings,
-                                      onAppear: { service.refreshModel() })
+                    if let screen = settings?.capture {
+                        ScreenSection(model: screen.status, screen: screen, onOpenSettings: actions.onScreenSettings,
+                                      onAppear: { screen.refreshStatus() })
                     } else {
                         ScreenSection(model: CaptureStatusModel(), onOpenSettings: actions.onScreenSettings)
                     }

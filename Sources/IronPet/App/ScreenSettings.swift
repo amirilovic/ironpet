@@ -6,8 +6,8 @@ struct ScreenSettings: View {
     @ObservedObject var model: SettingsModel
 
     var body: some View {
-        if let service = model.capture {
-            ScreenSettingsBody(service: service, settings: model, model: service.model).formStyle(.grouped)
+        if let screen = model.capture {
+            ScreenSettingsBody(screen: screen, settings: model, model: screen.status).formStyle(.grouped)
         } else {
             Form { Text("Screen capture is not available.").foregroundStyle(.secondary) }.formStyle(.grouped)
         }
@@ -15,7 +15,7 @@ struct ScreenSettings: View {
 }
 
 private struct ScreenSettingsBody: View {
-    let service: CaptureService
+    let screen: ScreenAPI
     let settings: SettingsModel
     @ObservedObject var model: CaptureStatusModel
     @ObservedObject private var store = SettingsAPI.live
@@ -37,7 +37,7 @@ private struct ScreenSettingsBody: View {
             }
             DesktopControlSections(settings: settings)
         }
-        .onAppear { service.refreshModel(); seen = service.store.seenApps() }
+        .onAppear { screen.refreshStatus(); seen = screen.seenApps() }
     }
 
     // MARK: Master switch
@@ -72,8 +72,8 @@ private struct ScreenSettingsBody: View {
             HStack {
                 Button("Pause 15 min") { pause(15 * 60) }
                 Button("Pause 1 hour") { pause(3600) }
-                Button("Until tomorrow") { service.privacy.pauseUntilTomorrow(); service.refreshModel() }
-                Button("Resume") { service.privacy.resume(); service.refreshModel() }.disabled(!model.paused)
+                Button("Until tomorrow") { screen.pauseUntilTomorrow() }
+                Button("Resume") { screen.resume() }.disabled(!model.paused)
             }
             HStack {
                 Text("Recent captures and search are in the main window under Screen.").font(.caption).foregroundStyle(.secondary)
@@ -87,8 +87,7 @@ private struct ScreenSettingsBody: View {
     }
 
     private func pause(_ seconds: TimeInterval) {
-        service.privacy.pause(for: seconds)
-        service.refreshModel()
+        try? screen.pause(for: seconds)
     }
 
     // MARK: Screenshot fallback
@@ -186,8 +185,7 @@ private struct ScreenSettingsBody: View {
                 Text("\(model.captureCount) \(model.captureCount == 1 ? "capture" : "captures") stored").foregroundStyle(.secondary)
                 Spacer()
                 Button("Delete all captures") {
-                    service.store.clear()
-                    service.refreshModel()
+                    screen.clear()
                     seen = []
                 }
             }

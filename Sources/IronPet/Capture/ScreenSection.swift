@@ -26,8 +26,8 @@ enum ScreenSectionText {
 struct ScreenSection: View {
     @ObservedObject var model: CaptureStatusModel
     @ObservedObject private var config = SettingsAPI.live
-    /// The capture database. Nil before the app has started.
-    var store: CaptureStore?
+    /// The stored captures. Nil before the app has started.
+    var screen: ScreenAPI?
     var onOpenSettings: () -> Void = {}
     var onAppear: () -> Void = {}
 
@@ -110,23 +110,18 @@ struct ScreenSection: View {
 
     /// Reads the database off the main thread. An answer for a search the user has since changed is dropped.
     private func refresh() {
-        guard let store else { return }
+        guard let screen else { return }
         let asked = query
-        Task.detached(priority: .userInitiated) {
-            let found = asked.isEmpty ? store.recent(limit: 50) : []
-            let matched = asked.isEmpty ? [] : store.search(asked, limit: 50)
-            await MainActor.run {
-                guard asked == query else { return }
-                if asked.isEmpty { recent = found } else { hits = matched }
-            }
+        Task {
+            let found = asked.isEmpty ? await screen.recent(limit: 50) : []
+            let matched = asked.isEmpty ? [] : ((try? await screen.search(ScreenSearchRequest(query: asked, limit: 50))) ?? [])
+            guard asked == query else { return }
+            if asked.isEmpty { recent = found } else { hits = matched }
         }
     }
 
     private func loadText(_ id: Int64) {
-        guard let store else { return }
-        Task.detached(priority: .userInitiated) {
-            let text = store.capture(id: id)?.text
-            await MainActor.run { openText[id] = text }
-        }
+        guard let screen else { return }
+        Task { openText[id] = await screen.captureText(id) }
     }
 }

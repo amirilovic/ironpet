@@ -103,13 +103,13 @@ extension BriefActivity {
 @MainActor
 final class BriefModel: ObservableObject {
     @Published private(set) var briefs: [Brief.Kind: Brief] = [:]
-    private let source: BriefSource?
+    private let source: TodayAPI?
     /// The brief automation's weekdays.
     var weekdays: () -> [String]? = { nil }
     private var visible = false
     private var cancellable: AnyCancellable?
 
-    init(source: BriefSource) {
+    init(source: TodayAPI) {
         self.source = source
         cancellable = source.changes
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
@@ -134,7 +134,7 @@ final class BriefModel: ObservableObject {
         guard let source else { return }
         let weekdays = weekdays()
         briefs = Dictionary(uniqueKeysWithValues: Brief.Kind.allCases.map {
-            ($0, source.build($0, weekdays: weekdays, day: $0 == .recap ? recapDay : nil))
+            ($0, source.brief(BriefRequest(kind: $0, weekdays: weekdays, day: $0 == .recap ? recapDay : nil)))
         })
     }
 

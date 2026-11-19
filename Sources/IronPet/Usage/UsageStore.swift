@@ -59,7 +59,7 @@ struct UsageEvent: Equatable {
 
 /// Totals for one feature and model over a range. Nil metrics were never reported in the range. `currency` is the one the
 /// agent named with its cost.
-struct UsageRow: Equatable, Identifiable {
+struct UsageRow: Equatable, Identifiable, Codable {
     var feature: UsageFeature
     var model: String
     var currency: String?
@@ -76,7 +76,7 @@ struct UsageRow: Equatable, Identifiable {
     var id: String { "\(feature.rawValue)|\(model)" }
 }
 
-struct UsageDay: Equatable, Identifiable {
+struct UsageDay: Equatable, Identifiable, Codable {
     var day: Date
     var requests: [UsageFeature: Int]
     /// Tokens the agents or providers reported that day, input plus output (or the reported total when that is all there is).
@@ -86,7 +86,7 @@ struct UsageDay: Equatable, Identifiable {
     var id: Date { day }
 }
 
-struct UsageSummary: Equatable {
+struct UsageSummary: Equatable, Codable {
     var rows: [UsageRow]
     /// One entry per calendar day, or per hour of today when the summary is hourly. The name is kept for the daily case.
     var days: [UsageDay]

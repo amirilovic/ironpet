@@ -20,7 +20,7 @@ final class SettingsModel: ObservableObject {
     /// The chat's reply reader, so Preview and a reply never talk over each other. Nil in preview renders.
     var speech: SpeechPlayer?
     /// Screen capture, built with the database. Nil only before the app has started.
-    var capture: CaptureService?
+    var capture: ScreenAPI?
     /// The desktop actions agents took, newest first.
     var desktopLog: () -> [ActivityEvent] = { [] }
     /// Opens the main window on its Screen section.

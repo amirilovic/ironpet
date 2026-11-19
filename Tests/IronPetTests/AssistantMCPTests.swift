@@ -32,7 +32,7 @@ final class AssistantMCPTests: XCTestCase {
 
     private func rpc(_ method: String, _ params: [String: Any] = [:], jobScope: Bool = false) async throws -> [String: Any] {
         let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": method, "params": params])
-        let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, assistant: context, jobScope: jobScope)
+        let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, assistant: context.map { AssistantAPI(context: $0) }, jobScope: jobScope)
         return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 

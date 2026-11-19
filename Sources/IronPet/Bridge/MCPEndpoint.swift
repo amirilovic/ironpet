@@ -33,8 +33,8 @@ enum MCPEndpoint {
         """
 
     /// Handles one MCP JSON-RPC message. Returns the HTTP status line and body.
-    static func handle(_ body: Data, automations: AutomationsAPI?, tasks: TasksAPI?, screen: CaptureStore? = nil,
-                       desktop: DesktopService? = nil, assistant: AssistantContext? = nil, jobScope: Bool = false) async -> (status: String, body: Data) {
+    static func handle(_ body: Data, automations: AutomationsAPI?, tasks: TasksAPI?, screen: ScreenAPI? = nil,
+                       desktop: DesktopAPI? = nil, assistant: AssistantAPI? = nil, jobScope: Bool = false) async -> (status: String, body: Data) {
         guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let method = message["method"] as? String else {
             return ("400 Bad Request", encode(["jsonrpc": "2.0", "id": NSNull(), "error": ["code": -32700, "message": "parse error"]]))
         }
@@ -64,7 +64,7 @@ enum MCPEndpoint {
             }
             if AssistantMCP.handles(name) {
                 guard let assistant else { return toolResult("ironpet's assistant tools are not available right now", isError: true) }
-                switch AssistantMCP.call(name, arguments, context: assistant) {
+                switch assistant.callTool(name, arguments) {
                 case .success(let value): return toolResult(text(value), isError: false)
                 case .failure(let error): return toolResult(error.message, isError: true)
                 }
@@ -85,14 +85,14 @@ enum MCPEndpoint {
             }
             if ScreenMCP.names.contains(name) {
                 guard let screen else { return toolResult("ironpet's screen captures are not available right now", isError: true) }
-                switch ScreenMCP.call(name, arguments, store: screen) {
+                switch screen.callTool(name, arguments) {
                 case .success(let value): return toolResult(text(value), isError: false)
                 case .failure(let error): return toolResult(error.message, isError: true)
                 }
             }
             if DesktopMCP.names.contains(name) {
                 guard let desktop else { return toolResult("ironpet's desktop control is not available right now", isError: true) }
-                switch await desktop.call(name, arguments) {
+                switch await desktop.callTool(name, arguments) {
                 case .success(.value(let value)): return toolResult(text(value), isError: false)
                 case .success(.image(let data, let caption)): return imageResult(data, caption: caption)
                 case .failure(let error): return toolResult(error.message, isError: true)
@@ -106,9 +106,9 @@ enum MCPEndpoint {
 
     /// Connects `EventServer.onAgentAPI` to the services. Called on the server's queue; the work runs on the main actor.
     nonisolated static func route(_ request: HTTPRequest, automations: @escaping @MainActor () -> AutomationsAPI?,
-                                  tasks: @escaping @MainActor () -> TasksAPI?, screen: @escaping @MainActor () -> CaptureStore? = { nil },
-                                  desktop: @escaping @MainActor () -> DesktopService? = { nil },
-                                  assistant: @escaping @MainActor () -> AssistantContext? = { nil },
+                                  tasks: @escaping @MainActor () -> TasksAPI?, screen: @escaping @MainActor () -> ScreenAPI? = { nil },
+                                  desktop: @escaping @MainActor () -> DesktopAPI? = { nil },
+                                  assistant: @escaping @MainActor () -> AssistantAPI? = { nil },
                                   respond: @escaping (String, Data) -> Void) {
         let path = request.path, body = request.body
         Task { @MainActor in

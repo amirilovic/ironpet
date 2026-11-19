@@ -97,7 +97,7 @@ enum PreviewRenderer {
         captureOn.screenCapture.enabled = true
         ConfigStore.shared.usePreview(captureOn)
         for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
-            render(ScreenSection(model: screenStatus, store: capturesStore).frame(width: 900, height: 560).panel(), to: dir, "screen-captures" + suffix, scheme: scheme)
+            render(ScreenSection(model: screenStatus, screen: ScreenAPI(service: CaptureService(store: capturesStore, config: { ConfigStore.shared.config.screenCapture }))).frame(width: 900, height: 560).panel(), to: dir, "screen-captures" + suffix, scheme: scheme)
         }
         var captureOff = screenConfig
         captureOff.screenCapture.enabled = false
@@ -112,7 +112,7 @@ enum PreviewRenderer {
         // Today, from the same sample stores plus a meeting on the last weekday and a few agent turns from today.
         let briefSource = BriefSource(tasks: tasks, sessions: sessions, signals: signals, meetingsRoot: sampleBriefMeetings(),
                                       activity: FixedBriefActivity(events: sampleActivity))
-        let brief = BriefModel(source: briefSource)
+        let brief = BriefModel(source: TodayAPI(source: briefSource))
         brief.weekdays = { AutomationDefaults.weekdays }
         brief.refresh()
         func today(_ kind: Brief.Kind, _ content: BriefModel) -> some View {
@@ -136,7 +136,7 @@ enum PreviewRenderer {
         // The same pages in a real window, so the screenshots show the title bar, selection and glass as they are.
         // Automations needs the app's settings model; this one is built from sample automations in a temp folder.
         let settingsModel = sampleSettings(chat: chat, config: patterned)
-        settingsModel.capture = CaptureService(store: capturesStore, config: { ConfigStore.shared.config.screenCapture })
+        settingsModel.capture = ScreenAPI(service: CaptureService(store: capturesStore, config: { ConfigStore.shared.config.screenCapture }))
         ConfigStore.shared.usePreview(patterned)
         for section in IronPetSection.allCases {
             for (suffix, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
