@@ -966,17 +966,16 @@ private struct ChatBackgroundSection: View {
 
     private func pick(_ id: String) {
         message = nil
-        guard id == ChatBackground.customID else { store.update { $0.chat.background = id }; return }
+        guard id == ChatBackground.customID else { try? PetAPI.live.selectBackground(SelectBackgroundRequest(id: id)); return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.png, .jpeg]
         panel.allowsMultipleSelection = false
         panel.message = "Choose an image for the chat background"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let name = try ChatBackground.importImage(from: url, replacing: store.config.chat.customImage)
-            store.update { $0.chat.background = ChatBackground.customID; $0.chat.customImage = name }
+            try PetAPI.live.importBackground(url)
         } catch {
-            message = error.localizedDescription
+            message = (error as? APIError)?.message ?? error.localizedDescription
         }
     }
 }

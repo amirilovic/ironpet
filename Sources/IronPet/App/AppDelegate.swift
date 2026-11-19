@@ -250,6 +250,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.agents = api.agents
         pet.chatAPI = api.chat
         pet.meetingsAPI = api.meetings
+        pet.events = events
+        api.pet.stateProvider = { [weak pet] in pet?.state ?? PetState(mood: PetMood.idle.rawValue, badge: 0) }
+        api.pet.trickNames = { PetController.Trick.allCases.map(\.rawValue) }
+        api.pet.trickHandler = { [weak pet] name in
+            guard let trick = PetController.Trick(rawValue: name), let pet else { return false }
+            pet.perform(trick)
+            return true
+        }
+        settingsModel.pets.api = api.pet
         api.meetings.askHandler = { [weak self] files in self?.openMeetingInChat(files) }
         meetingPanel = MeetingPanel(controller: api.meetings)
         meeting.onChange = { [weak self] in self?.syncMeetingPanel() }
@@ -319,7 +328,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         service.start()
         timers.append(Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.automations.engine.tick() }
+            MainActor.assumeIsolated {
+                self?.automations.engine.tick()
+                // Pet sheets and the custom background change on disk: tell clients that cache them.
+                self?.api.pet.checkAssets()
+            }
         })
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.automations.engine.tick() }
         // Update installed skills, and offer the others once the first-run window is out of the way.

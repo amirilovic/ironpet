@@ -213,9 +213,22 @@ final class PetController: NSObject {
         }
     }
 
+    /// What the pet shows now, for `PetAPI.state` and the `pet.mood` event.
+    private(set) var state = PetState(mood: PetMood.idle.rawValue, badge: 0)
+    /// Where `pet.mood` is published for API clients.
+    weak var events: APIEventBus?
+
+    private func shown(_ mood: PetMood, badge: Int) {
+        view.show(mood, badge: badge)
+        let next = PetState(mood: mood.rawValue, badge: badge)
+        guard next != state else { return }
+        state = next
+        events?.publish(.petMood, id: next.mood)
+    }
+
     func refreshMood() {
         if let nudge, nudge.until > Date() {
-            view.show(nudge.mood, badge: 0)
+            shown(nudge.mood, badge: 0)
             onRefresh?(view.mood)
             return
         }
@@ -227,10 +240,10 @@ final class PetController: NSObject {
         if chat != nil { lastActivity = Date() }
         if let mood = [watched, alerts?.mood, chat].compactMap({ $0 }).max(by: { Self.urgency($0) < Self.urgency($1) }) {
             let badge = (mood == watched ? summary.count : 0) + (mood == alerts?.mood ? alerts?.count ?? 0 : 0)
-            view.show(mood, badge: badge)
+            shown(mood, badge: badge)
         } else {
             let sleepy = Date().timeIntervalSince(lastActivity) > Self.sleepAfter
-            view.show(sleepy ? .sleeping : .idle, badge: 0)
+            shown(sleepy ? .sleeping : .idle, badge: 0)
         }
         onRefresh?(view.mood)
     }
@@ -315,7 +328,7 @@ final class PetController: NSObject {
             brief?.setVisible(visible && windowModel.section == .today)
         }
         window.onClose = { [weak self] in self?.onWindowClosed?() }
-        window.autoHideEnabled = { ConfigStore.shared.config.window.autoHide }
+        window.autoHideEnabled = { SettingsAPI.live.config.window.autoHide }
         window.isCapturing = { [weak self] in self?.isCapturing ?? false }
         windowModel.$section
             .receive(on: RunLoop.main)
@@ -342,7 +355,7 @@ final class PetController: NSObject {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        let config = ConfigStore.shared.config
+        let config = SettingsAPI.live.config
         for (title, shortcut, action) in [("Chat with \(config.pet.name)", config.hotkeys.chat, #selector(showChat(_:))),
                                           ("Ask about front window", config.hotkeys.captureWindow, #selector(captureWindow(_:))),
                                           ("Ask about a region", config.hotkeys.captureRegion, #selector(captureRegion(_:)))] {

@@ -24,6 +24,14 @@ final class IronPetAPI {
         var meeting: MeetingController
         var meetingLibrary: MeetingLibrary
         var config: ConfigStore
+        /// Where pet sheets and background images live. The app's own folders unless a test says otherwise.
+        var petFolders = PetFolders()
+    }
+
+    struct PetFolders {
+        var library = PetLibrary.folder
+        var bundled = PetLibrary.bundledFolder
+        var backgrounds = ChatBackground.folder
     }
 
     let events: APIEventBus
@@ -35,6 +43,7 @@ final class IronPetAPI {
     let chat: ChatAPI
     let meetings: MeetingsAPI
     let settings: SettingsAPI
+    let pet: PetAPI
 
     init(stores: Stores, events: APIEventBus? = nil) {
         let events = events ?? APIEventBus()
@@ -55,6 +64,10 @@ final class IronPetAPI {
         stores.meetingLibrary.events = events
         stores.config.events = events
         settings = SettingsAPI(store: stores.config)
+        pet = PetAPI(settings: settings, library: stores.petFolders.library, bundled: stores.petFolders.bundled,
+                     backgrounds: stores.petFolders.backgrounds)
+        pet.events = events
+        if stores.config === ConfigStore.shared { PetAPI.live = pet }
         // Tests build their own API over a memory-only config and must not replace the app's.
         if stores.config === ConfigStore.shared { SettingsAPI.live = settings }
         meetings = MeetingsAPI(controller: stores.meeting, library: stores.meetingLibrary)
