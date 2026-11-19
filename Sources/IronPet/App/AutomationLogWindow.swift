@@ -7,15 +7,15 @@ import SwiftUI
 final class AutomationLogWindow {
     private var window: NSWindow?
     private let model = AutomationLogModel()
-    private let service: () -> AutomationService?
+    private let api: () -> AutomationsAPI?
 
-    init(service: @escaping () -> AutomationService?) {
-        self.service = service
+    init(api: @escaping () -> AutomationsAPI?) {
+        self.api = api
     }
 
     func show(automation: String? = nil) {
-        guard let service = service() else { return }
-        model.service = service
+        guard let api = api() else { return }
+        model.api = api
         model.filter = automation
         model.reload()
         if window == nil {
@@ -35,9 +35,9 @@ final class AutomationLogWindow {
 
 @MainActor
 final class AutomationLogModel: ObservableObject {
-    var service: AutomationService?
+    var api: AutomationsAPI?
     @Published var filter: String? { didSet { reload() } }
-    @Published private(set) var logs: [AutomationState.Log] = []
+    @Published private(set) var logs: [AutomationLogEntry] = []
     @Published var selection: Int64?
     @Published var onlyProblems = false
     private var timer: Timer?
@@ -48,20 +48,19 @@ final class AutomationLogModel: ObservableObject {
         }
     }
 
-    var automations: [Automation] { service?.store.automations ?? [] }
-    var unavailable: String? { service?.engine.state.unavailable }
-    var retentionDays: Int { service?.logRetentionDays() ?? 14 }
+    var automations: [Automation] { api?.automations ?? [] }
+    var unavailable: String? { api?.logsUnavailable }
+    var retentionDays: Int { api?.logRetentionDays ?? 14 }
 
     func name(_ id: String) -> String { automations.first { $0.id == id }?.name ?? id }
 
     func reload() {
-        guard let service else { return }
-        let all = service.engine.state.logs(automation: filter, limit: 500)
-        logs = onlyProblems ? all.filter { $0.outcome == "failed" || $0.outcome == "skipped" || $0.outcome == "waiting" } : all
+        guard let api else { return }
+        logs = api.logs(AutomationLogRequest(automation: filter, onlyProblems: onlyProblems))
     }
 
     func clear() {
-        service?.engine.state.clearLogs(automation: filter)
+        api?.clearLogs(automation: filter)
         selection = nil
         reload()
     }

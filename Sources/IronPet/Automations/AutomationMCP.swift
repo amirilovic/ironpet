@@ -2,7 +2,7 @@ import Foundation
 
 /// The agent-facing side: the automation MCP tools (served by `MCPEndpoint` at `POST /mcp`), a plain endpoint for the
 /// CLI (`POST /automations`), the CLI itself, and a stdio bridge so agents that only speak stdio MCP can use the tools.
-/// All of them call `AutomationService.call`, which validates.
+/// All of them call `AutomationsAPI.callJSON`, which validates.
 @MainActor
 enum AutomationMCP {
     static let guide = """
@@ -52,11 +52,11 @@ enum AutomationMCP {
     }
 
     /// `POST /automations` with `{"op": "list", "args": {...}}`, for the CLI.
-    static func handleCLI(_ body: Data, service: AutomationService) async -> (status: String, body: Data) {
+    static func handleCLI(_ body: Data, api: AutomationsAPI) async -> (status: String, body: Data) {
         guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let op = message["op"] as? String else {
             return ("400 Bad Request", MCPEndpoint.encode(["ok": false, "error": "send {\"op\": ..., \"args\": {...}}"]))
         }
-        switch await service.call(op, message["args"] as? [String: Any] ?? [:], by: "agent:cli") {
+        switch await api.callJSON(op, message["args"] as? [String: Any] ?? [:], by: "agent:cli") {
         case .success(let value): return ("200 OK", MCPEndpoint.encode(["ok": true, "result": value]))
         case .failure(let error): return ("200 OK", MCPEndpoint.encode(["ok": false, "error": error.message]))
         }

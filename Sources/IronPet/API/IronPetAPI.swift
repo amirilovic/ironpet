@@ -16,15 +16,19 @@ final class IronPetAPI {
     /// The stores the API serves. Only `IronPetAPI` and the AppKit owners that create them hold these.
     struct Stores {
         var tasks: TaskStore
+        var automations: AutomationService
     }
 
     let events: APIEventBus
     let tasks: TasksAPI
+    let automations: AutomationsAPI
 
     init(stores: Stores, events: APIEventBus? = nil) {
         let events = events ?? APIEventBus()
         self.events = events
         stores.tasks.events = events
+        stores.automations.store.events = events
         tasks = TasksAPI(store: stores.tasks)
+        automations = AutomationsAPI(service: stores.automations)
     }
 }

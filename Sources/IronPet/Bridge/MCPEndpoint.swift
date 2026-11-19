@@ -1,7 +1,7 @@
 import Foundation
 
 /// The agent-facing endpoints on the loopback server: MCP over HTTP (`POST /mcp`) for every tool ironpet offers, and the
-/// plain CLI endpoints (`POST /automations`, `POST /tasks`). Tools are routed by prefix to `AutomationService.call` and
+/// plain CLI endpoints (`POST /automations`, `POST /tasks`). Tools are routed by prefix to `AutomationsAPI.callJSON` and
 /// `TaskJSON.call`, which validate.
 @MainActor
 enum MCPEndpoint {
@@ -14,7 +14,7 @@ enum MCPEndpoint {
         """
 
     /// Handles one MCP JSON-RPC message. Returns the HTTP status line and body.
-    static func handle(_ body: Data, automations: AutomationService?, tasks: TasksAPI?, screen: CaptureStore? = nil, desktop: DesktopService? = nil) async -> (status: String, body: Data) {
+    static func handle(_ body: Data, automations: AutomationsAPI?, tasks: TasksAPI?, screen: CaptureStore? = nil, desktop: DesktopService? = nil) async -> (status: String, body: Data) {
         guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let method = message["method"] as? String else {
             return ("400 Bad Request", encode(["jsonrpc": "2.0", "id": NSNull(), "error": ["code": -32700, "message": "parse error"]]))
         }
@@ -41,7 +41,7 @@ enum MCPEndpoint {
             let arguments = params["arguments"] as? [String: Any] ?? [:]
             if name.hasPrefix("automations_") {
                 guard let automations else { return toolResult("ironpet's automations are not available right now", isError: true) }
-                switch await automations.call(String(name.dropFirst("automations_".count)), arguments, by: "agent:mcp") {
+                switch await automations.callJSON(String(name.dropFirst("automations_".count)), arguments, by: "agent:mcp") {
                 case .success(let value): return toolResult(text(value), isError: false)
                 case .failure(let error): return toolResult(error.message, isError: true)
                 }
@@ -75,7 +75,7 @@ enum MCPEndpoint {
     }
 
     /// Connects `EventServer.onAgentAPI` to the services. Called on the server's queue; the work runs on the main actor.
-    nonisolated static func route(_ request: HTTPRequest, automations: @escaping @MainActor () -> AutomationService?,
+    nonisolated static func route(_ request: HTTPRequest, automations: @escaping @MainActor () -> AutomationsAPI?,
                                   tasks: @escaping @MainActor () -> TasksAPI?, screen: @escaping @MainActor () -> CaptureStore? = { nil },
                                   desktop: @escaping @MainActor () -> DesktopService? = { nil },
                                   respond: @escaping (String, Data) -> Void) {
@@ -89,8 +89,8 @@ enum MCPEndpoint {
                 guard let tasks = tasks() else { return respond("503 Service Unavailable", Data()) }
                 result = TaskMCP.handleCLI(body, tasks: tasks)
             default:
-                guard let service = automations() else { return respond("503 Service Unavailable", Data()) }
-                result = await AutomationMCP.handleCLI(body, service: service)
+                guard let api = automations() else { return respond("503 Service Unavailable", Data()) }
+                result = await AutomationMCP.handleCLI(body, api: api)
             }
             respond(result.status, result.body)
         }

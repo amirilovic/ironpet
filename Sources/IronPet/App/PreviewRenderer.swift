@@ -335,7 +335,7 @@ enum PreviewRenderer {
             storage: .init(users: { [] }, add: { _ in }, remove: { _ in }, offset: { 0 }, setOffset: { _ in }))
         let model = SettingsModel(actions: .init(suspendHotKeys: { _ in }, buildPet: { _ in }),
                                   announcer: Announcer(notifier: Notifier()), telegram: telegram)
-        model.automations = AutomationService(store: store, engine: AutomationEngine(env: .init()))
+        model.automations = AutomationsAPI(service: AutomationService(store: store, engine: AutomationEngine(env: .init())))
         return model
     }
 

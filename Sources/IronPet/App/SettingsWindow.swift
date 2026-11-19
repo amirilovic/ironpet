@@ -14,7 +14,7 @@ final class SettingsModel: ObservableObject {
 
     let actions: Actions
     /// Set once the app has built it, before the window can open.
-    var automations: AutomationService?
+    var automations: AutomationsAPI?
     /// The meeting controller, for labelling the voices of the last meeting.
     var meeting: MeetingController?
     /// The chat's reply reader, so Preview and a reply never talk over each other. Nil in preview renders.

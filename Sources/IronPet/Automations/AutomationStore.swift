@@ -23,7 +23,11 @@ struct AutomationPaths {
 /// per distinct problem.
 @MainActor
 final class AutomationStore: ObservableObject {
-    @Published private(set) var automations: [Automation] = []
+    @Published private(set) var automations: [Automation] = [] {
+        didSet { if automations != oldValue { events?.publish(.automationsChanged) } }
+    }
+    /// Where `automations.changed` is published for API clients.
+    weak var events: APIEventBus?
     @Published private(set) var error: String?
     let paths: AutomationPaths
     /// Called with the problems when the file on disk is invalid.

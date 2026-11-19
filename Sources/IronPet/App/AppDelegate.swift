@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Replaces the system idle time in test mode (`POST /test/presence`). Nil otherwise.
     private var testIdleSeconds: TimeInterval?
     private var brief: BriefSource?
-    private lazy var logWindow = AutomationLogWindow(service: { [weak self] in self?.automations })
+    private lazy var logWindow = AutomationLogWindow(api: { [weak self] in self?.api?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
     private lazy var announcer = Announcer(notifier: notifier)
@@ -244,7 +244,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activity = log
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
-        api = IronPetAPI(stores: .init(tasks: tasks), events: events)
+        let service = AutomationService(store: store, engine: engine, database: database)
+        api = IronPetAPI(stores: .init(tasks: tasks, automations: service), events: events)
         pet.tasks = api.tasks
         setUpDueReminders(tasks)
         setUpWelcomeBack(log, tasks: tasks)
@@ -254,7 +255,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.showScreenSection = { [weak self] in self?.pet.showWindow(.screen) }
         setUpScreenCapture(database)
         setUpDesktopControl()
-        let service = AutomationService(store: store, engine: engine, database: database)
         service.notice = { [weak self] notice in
             if let event = ActivityEvent.automationNotice(notice) { self?.activity?.record(event) }
             self?.announcer.automation(notice)
@@ -290,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         service.chatRunPending = { [weak self] id in self?.chat.hasAutomationRun(id) ?? false }
         chat.onAutomation = { [weak service] id, event in service?.chatOutcome(id, event) }
         automations = service
-        settingsModel.automations = service
+        settingsModel.automations = api.automations
         settingsModel.showLogs = { [weak self] id in
             // The log is a normal window, so it would open behind the floating ironpet window.
             self?.pet.closeWindow()
@@ -775,7 +775,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         }
         server.onAgentAPI = { [weak self] request, respond in
-            MCPEndpoint.route(request, automations: { self?.automations }, tasks: { self?.api?.tasks }, screen: { self?.capture?.store }, desktop: { self?.desktop }, respond: respond)
+            MCPEndpoint.route(request, automations: { self?.api?.automations }, tasks: { self?.api?.tasks }, screen: { self?.capture?.store }, desktop: { self?.desktop }, respond: respond)
         }
         try server.start()
         self.server = server
