@@ -145,14 +145,21 @@ final class ChatSession: ObservableObject {
     @Published private(set) var state: State = .idle {
         didSet { if state != oldValue { events?.publish(.chatState) } }
     }
-    @Published private(set) var approvals: [Approval] = []
-    @Published private(set) var forms: [PendingForm] = []
+    /// Approvals, forms and the queue change without `state` changing, so each publishes `chat.state` with what changed as the id.
+    @Published private(set) var approvals: [Approval] = [] {
+        didSet { events?.publish(.chatState, id: "approvals") }
+    }
+    @Published private(set) var forms: [PendingForm] = [] {
+        didSet { events?.publish(.chatState, id: "forms") }
+    }
     @Published private(set) var history: [ChatThread] = ThreadStore.recent()
     @Published var attachments: [URL] = [] {
         didSet { if persists { UserDefaults.standard.set(attachments.map(\.path), forKey: Self.attachmentsKey) } }
     }
     /// Messages typed while a turn runs. Each keeps the attachments present when it was queued.
-    @Published private(set) var queue: [QueuedMessage] = []
+    @Published private(set) var queue: [QueuedMessage] = [] {
+        didSet { events?.publish(.chatState, id: "queue") }
+    }
     /// The message the next send answers. One at a time; choosing another replaces it.
     @Published var replyingTo: Reply?
     /// Bumps each time Reply is chosen, so the input takes focus even when the same message is chosen again.

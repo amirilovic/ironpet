@@ -99,8 +99,17 @@ final class AlertsBubblesAPITests: XCTestCase {
         bubbles.show(Bubble(id: "x", symbol: "star", tint: .blue, title: "X"))
         try api.bubbles.dismiss("x")
         XCTAssertThrowsError(try api.bubbles.dismiss("x")) { XCTAssertEqual(($0 as? APIError)?.code, .notFound) }
-        XCTAssertEqual(seen.map(\.kind), [.bubbleShown])
-        XCTAssertEqual(seen.first?.id, "x")
+        XCTAssertEqual(seen.map(\.kind), [.bubbleShown, .bubbleDismissed])
+        XCTAssertEqual(seen.map(\.id), ["x", "x"])
+    }
+
+    func testExpiryAndTheBubbleLimitPublishDismissals() {
+        bubbles.show(Bubble(id: "short", symbol: "star", tint: .blue, title: "S", expires: Date(timeIntervalSince1970: 10)))
+        bubbles.sweep(now: Date(timeIntervalSince1970: 20))
+        XCTAssertEqual(seen.map(\.kind), [.bubbleShown, .bubbleDismissed])
+        seen = []
+        for i in 0...BubbleStore.limit { bubbles.show(Bubble(id: "b\(i)", symbol: "star", tint: .blue, title: "B")) }
+        XCTAssertEqual(seen.filter { $0.kind == .bubbleDismissed }.count, 1, "the bubble pushed out by the limit is reported")
     }
 
     func testBubbleInfoRoundTripsAsJSON() throws {

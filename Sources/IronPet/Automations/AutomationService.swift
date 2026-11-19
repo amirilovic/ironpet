@@ -238,6 +238,7 @@ final class AutomationService {
         engine.state.setApproved(id, AutomationState.hash(risk))
         engine.state.setRejected(id, nil)
         dismissNotice(Self.approvalID(id))
+        store.events?.publish(.automationsChanged, id: id)
         engine.syncStreams()
         if let fire = pending.removeValue(forKey: id) { handle(fire) }
     }
@@ -248,6 +249,7 @@ final class AutomationService {
         pending[id] = nil
         dismissNotice(Self.approvalID(id))
         try? store.update(id) { $0.enabled = false }
+        store.events?.publish(.automationsChanged, id: id)
         record(id, "skipped", "rejected by the user, turned off")
     }
 

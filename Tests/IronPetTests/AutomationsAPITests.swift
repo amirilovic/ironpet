@@ -92,6 +92,21 @@ final class AutomationsAPITests: XCTestCase {
         XCTAssertThrowsError(try api.automations.approve("nope")) { XCTAssertEqual(($0 as? APIError)?.code, .notFound) }
     }
 
+    func testApproveAndRejectPublishAutomationsChanged() throws {
+        let events = APIEventBus()
+        var seen: [APIEvent] = []
+        events.subscribe { seen.append($0) }
+        let api = APITestSupport.makeAPI(events: events, automations: [shell("a", by: "agent:mcp"), shell("b", by: "agent:mcp")])
+        seen = []
+        try api.automations.approve("a")
+        XCTAssertEqual(seen.map(\.kind), [.automationsChanged])
+        XCTAssertEqual(seen.first?.id, "a")
+        seen = []
+        try api.automations.reject("b")
+        XCTAssertTrue(seen.allSatisfy { $0.kind == .automationsChanged })
+        XCTAssertTrue(seen.contains { $0.id == "b" })
+    }
+
     func testReplaceWithAHandEditedDefinition() throws {
         let api = APITestSupport.makeAPI(automations: [reminder("water")])
         var text = try api.automations.definition("water")

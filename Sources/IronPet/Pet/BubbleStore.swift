@@ -2,7 +2,13 @@ import Foundation
 
 @MainActor
 final class BubbleStore: ObservableObject {
-    @Published private(set) var bubbles: [Bubble] = []
+    @Published private(set) var bubbles: [Bubble] = [] {
+        didSet {
+            // Dismissal, expiry and the limit all remove bubbles; a client that saw `bubble.shown` needs to hear about each.
+            let kept = Set(bubbles.map(\.id))
+            for gone in oldValue.map(\.id) where !kept.contains(gone) { events?.publish(.bubbleDismissed, id: gone) }
+        }
+    }
     /// Which side of the bubbles the pet is on, so the tail points at him.
     @Published var petOnLeft = false
     private var hovering = false
@@ -12,7 +18,7 @@ final class BubbleStore: ObservableObject {
     /// When each id was last shown, for the past hour, so a summary can tell what came up while the user was away.
     private(set) var shownAt: [String: Date] = [:]
     var now: () -> Date = Date.init
-    /// Where `bubble.shown` is published for API clients, with the bubble's id.
+    /// Where `bubble.shown` and `bubble.dismissed` are published for API clients, with the bubble's id.
     weak var events: APIEventBus?
 
     func show(_ bubble: Bubble) {

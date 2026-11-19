@@ -10,6 +10,7 @@ enum APIEventKind: String, Codable, CaseIterable {
     case agentsChanged = "agents.changed"
     case alertsChanged = "alerts.changed"
     case bubbleShown = "bubble.shown"
+    case bubbleDismissed = "bubble.dismissed"
     case automationsChanged = "automations.changed"
     case meetingsChanged = "meetings.changed"
     case settingsChanged = "settings.changed"

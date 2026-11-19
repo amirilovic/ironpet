@@ -71,6 +71,27 @@ final class ChatAPITests: XCTestCase {
         XCTAssertEqual(seen.map(\.seq), Array(1...seen.count))
     }
 
+    func testApprovalsFormsAndTheQueuePublishChatState() async throws {
+        func chatStateIDs() -> [String] { seen.filter { $0.kind == .chatState }.compactMap(\.id) }
+        session.handlePermission(ACPToolCall(id: "p1", title: "Run rm -rf x", kind: "execute", rawInput: nil)) { _ in }
+        XCTAssertEqual(chatStateIDs(), ["approvals"])
+        session.decide(try XCTUnwrap(session.approvals.first), allow: true)
+        XCTAssertEqual(chatStateIDs(), ["approvals", "approvals"], "answering the approval is reported too")
+
+        let params: JSON = ["mode": "form", "sessionId": "s1", "message": "Which?",
+                            "requestedSchema": ["type": "object", "properties": ["q": ["type": "string", "title": "Q"]]]]
+        session.handleElicitation(try XCTUnwrap(ElicitationForm.parse(params))) { _ in }
+        XCTAssertEqual(chatStateIDs().last, "forms")
+        session.skipForm(try XCTUnwrap(session.forms.first).id)
+        XCTAssertEqual(chatStateIDs().suffix(2), ["forms", "forms"])
+
+        try api.chat.send(SendChatRequest(text: "first", origin: phone))
+        try api.chat.send(SendChatRequest(text: "second", origin: phone))
+        await settle()
+        XCTAssertEqual(chatStateIDs().last, "queue")
+        XCTAssertEqual(seen.map(\.seq), Array(1...seen.count))
+    }
+
     func testABusyAgentQueuesTheNextMessageAndCancelDropsIt() async throws {
         try api.chat.send(SendChatRequest(text: "first", origin: phone))
         try api.chat.send(SendChatRequest(text: "second", origin: phone))
