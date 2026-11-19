@@ -204,6 +204,14 @@ enum PreviewRenderer {
         for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
             render(VoiceSettings(model: settingsModel).frame(width: 560, height: 1500).panel(), to: dir, "settings-voice" + suffix, scheme: scheme)
         }
+        // The whole Settings window over the chat background.
+        ConfigStore.shared.usePreview(patterned)
+        for tab in ["general", "screen"] {
+            settingsModel.tab = tab
+            for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
+                render(SettingsView(model: settingsModel).frame(height: 600), to: dir, "settings-window-\(tab)" + suffix, scheme: scheme)
+            }
+        }
         // Voice mode's pill in each state, with what was heard.
         let pills: [(VoiceConversation.State, VoiceConversation.Mode, String?, String)] = [
             (.listening, .microphone, nil, "listening"), (.thinking, .microphone, "What's going on with my jobs?", "thinking"),

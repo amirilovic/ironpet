@@ -158,26 +158,34 @@ struct SettingsView: View {
     @ObservedObject private var store = ConfigStore.shared
 
     var body: some View {
-        HStack(spacing: 0) {
-            List(selection: Binding(get: { model.tab }, set: { if let tag = $0 { model.tab = tag } })) {
-                ForEach(Self.pages, id: \.tag) { page in
-                    Label(page.title, systemImage: page.symbol)
-                        .labelStyle(.ironPetSidebar)
-                        .tag(page.tag)
+        // The chat background, as in the main window: the sidebar is glass over it and the pages' forms let it show.
+        ZStack {
+            ChatBackdrop()
+            HStack(spacing: 0) {
+                List(selection: Binding(get: { model.tab }, set: { if let tag = $0 { model.tab = tag } })) {
+                    ForEach(Self.pages, id: \.tag) { page in
+                        Label(page.title, systemImage: page.symbol)
+                            .labelStyle(.ironPetSidebar)
+                            .tag(page.tag)
+                    }
                 }
-            }
-            .listStyle(.sidebar)
-            .frame(width: Self.sidebarWidth)
-            .padding(.top, SettingsHeader.height - 12)
-            .background(.regularMaterial)
-            Divider()
-            VStack(spacing: 0) {
-                content
-                    .padding(.horizontal, 10)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .safeAreaInset(edge: .top, spacing: 0) { SettingsHeader(title: Self.page(model.tab)?.title ?? "Settings") }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+                .frame(width: Self.sidebarWidth)
+                .padding(.top, SettingsHeader.height - 12)
+                .background { Rectangle().fill(.ultraThinMaterial).opacity(IronPetGlass.strength).ignoresSafeArea() }
                 Divider()
-                footer
+                VStack(spacing: 0) {
+                    content
+                        .scrollContentBackground(.hidden)
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .safeAreaInset(edge: .top, spacing: 0) { SettingsHeader(title: Self.page(model.tab)?.title ?? "Settings") }
+                    Divider()
+                    footer
+                }
+                // A photo behind unfilled rows would hide their text; the built-in patterns are faint enough without it.
+                .background { if store.config.chat.background == ChatBackground.customID { Rectangle().fill(.thinMaterial) } }
             }
         }
         .frame(width: Self.width)
