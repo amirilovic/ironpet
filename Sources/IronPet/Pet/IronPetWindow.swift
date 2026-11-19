@@ -393,7 +393,7 @@ struct IronPetWindowView: View {
                 case .agents: AgentsSection(agents: agents)
                 case .alerts: AlertsSection(alerts: alerts, onAsk: actions.onAsk)
                 case .notifications:
-                    NotificationsSection(model: notifications, store: notifications.store, focus: $model.focusNotification)
+                    NotificationsSection(model: notifications, focus: $model.focusNotification)
                 case .tasks:
                     TaskListView(tasks: tasks, onTellGhost: actions.onTellGhost, onOpenThread: actions.onOpenThread,
                                  onOpenSession: actions.onOpenSession, focus: $model.focusTask)

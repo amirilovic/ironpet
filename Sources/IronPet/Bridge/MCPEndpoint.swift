@@ -58,7 +58,7 @@ enum MCPEndpoint {
     static func handle(_ body: Data, automations: AutomationsAPI?, tasks: TasksAPI?, screen: ScreenAPI? = nil,
                        desktop: DesktopAPI? = nil, memory: MemoryAPI? = nil, assistant: AssistantAPI? = nil,
                        caller: String? = nil, jobScope: Bool = false, voiceScope: Bool = false,
-                       notifications: NotificationStore? = nil) async -> (status: String, body: Data) {
+                       notifications: NotificationsAPI? = nil) async -> (status: String, body: Data) {
         guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let method = message["method"] as? String else {
             return ("400 Bad Request", encode(["jsonrpc": "2.0", "id": NSNull(), "error": ["code": -32700, "message": "parse error"]]))
         }
@@ -109,7 +109,7 @@ enum MCPEndpoint {
             }
             if NotificationMCP.names.contains(name) {
                 guard let notifications else { return toolResult("ironpet's notifications are not available right now", isError: true) }
-                switch NotificationMCP.call(name, arguments, store: notifications) {
+                switch NotificationMCP.call(name, arguments, api: notifications) {
                 case .success(let value): return toolResult(text(value), isError: false)
                 case .failure(let error): return toolResult(error.message, isError: true)
                 }
@@ -148,7 +148,7 @@ enum MCPEndpoint {
                                   desktop: @escaping @MainActor () -> DesktopAPI? = { nil },
                                   memory: @escaping @MainActor () -> MemoryAPI? = { nil },
                                   assistant: @escaping @MainActor () -> AssistantAPI? = { nil },
-                                  notifications: @escaping @MainActor () -> NotificationStore? = { nil },
+                                  notifications: @escaping @MainActor () -> NotificationsAPI? = { nil },
                                   respond: @escaping (String, Data) -> Void) {
         let path = request.path, body = request.body, caller = request.header(callerHeader)
         Task { @MainActor in
@@ -159,8 +159,8 @@ enum MCPEndpoint {
                                       memory: memory(), assistant: assistant(), caller: caller, jobScope: path == jobPath,
                                       voiceScope: path == voicePath, notifications: notifications())
             case "/notifications":
-                guard let store = notifications() else { return respond("503 Service Unavailable", Data()) }
-                result = NotificationMCP.handleCLI(body, store: store)
+                guard let api = notifications() else { return respond("503 Service Unavailable", Data()) }
+                result = NotificationMCP.handleCLI(body, api: api)
             case "/tasks":
                 guard let tasks = tasks() else { return respond("503 Service Unavailable", Data()) }
                 result = TaskMCP.handleCLI(body, tasks: tasks)

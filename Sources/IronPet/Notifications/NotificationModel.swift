@@ -131,7 +131,7 @@ struct NotificationDraft: Equatable {
 }
 
 /// One stored notification.
-struct NotificationItem: Identifiable, Equatable {
+struct NotificationItem: Identifiable, Equatable, Codable {
     static let systemSource = "system"
 
     let id: String

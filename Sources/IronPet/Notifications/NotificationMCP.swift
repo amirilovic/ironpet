@@ -1,7 +1,7 @@
 import Foundation
 
 /// The notification tools agents see (served by `MCPEndpoint` at `POST /mcp`) and the plain endpoint for the CLI
-/// (`POST /notifications`). Both read `NotificationStore`; neither changes it.
+/// (`POST /notifications`). Both only read, through `NotificationsAPI`.
 @MainActor
 enum NotificationMCP {
     static let names: Set<String> = ["notifications_list", "notifications_get"]
@@ -32,10 +32,10 @@ enum NotificationMCP {
     }
 
     /// Runs a tool. `name` is the tool name, such as `notifications_list`; the CLI passes the same.
-    static func call(_ name: String, _ arguments: [String: Any], store: NotificationStore, now: Date = Date()) -> Result<Any, AutomationError> {
+    static func call(_ name: String, _ arguments: [String: Any], api: NotificationsAPI, now: Date = Date()) -> Result<Any, AutomationError> {
         switch name {
         case "notifications_list":
-            var filter = NotificationStore.Filter(limit: 50)
+            var filter = ListNotificationsRequest(limit: 50)
             for (key, set) in [("since", { (d: Date) in filter.since = d }), ("until", { (d: Date) in filter.until = d })] as [(String, (Date) -> Void)] {
                 guard let raw = arguments[key] as? String else { continue }
                 guard let date = ScreenMCP.parse(raw, now: now) else {
@@ -52,23 +52,24 @@ enum NotificationMCP {
             }
             filter.unreadOnly = arguments["unread_only"] as? Bool ?? false
             if let limit = (arguments["limit"] as? NSNumber)?.intValue { filter.limit = min(max(limit, 1), 200) }
-            let items = store.list(filter)
-            return .success(["notifications": items.map { $0.json(full: false) }, "unread": store.unreadCount])
+            let list = api.list(filter)
+            return .success(["notifications": list.notifications.map { $0.json(full: false) }, "unread": list.unread])
         case "notifications_get":
             guard let id = arguments["id"] as? String, !id.isEmpty else { return .failure(.init(message: "id is required")) }
-            guard let item = store.get(id) else { return .failure(.init(message: "no notification with id \(id)")) }
-            return .success(item.json(full: true))
+            do { return .success(try api.get(id).json(full: true)) } catch {
+                return .failure(.init(message: (error as? APIError)?.message ?? error.localizedDescription))
+            }
         default:
             return .failure(.init(message: "unknown notification tool \(name)"))
         }
     }
 
     /// `POST /notifications` with `{"op": "list", "args": {...}}`, for the CLI.
-    static func handleCLI(_ body: Data, store: NotificationStore) -> (status: String, body: Data) {
+    static func handleCLI(_ body: Data, api: NotificationsAPI) -> (status: String, body: Data) {
         guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let op = message["op"] as? String else {
             return ("400 Bad Request", MCPEndpoint.encode(["ok": false, "error": "send {\"op\": ..., \"args\": {...}}"]))
         }
-        switch call("notifications_" + op, message["args"] as? [String: Any] ?? [:], store: store) {
+        switch call("notifications_" + op, message["args"] as? [String: Any] ?? [:], api: api) {
         case .success(let value): return ("200 OK", MCPEndpoint.encode(["ok": true, "result": value]))
         case .failure(let error): return ("200 OK", MCPEndpoint.encode(["ok": false, "error": error.message]))
         }

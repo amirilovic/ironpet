@@ -89,7 +89,7 @@ enum PreviewRenderer {
         _ = notificationStore.add(NotificationDraft(source: NotificationItem.systemSource, type: .approval, title: "Ghost wants to: run swift test",
                                                     description: "swift test --filter DemoTests"))
         if let readEntry { notificationStore.markRead(readEntry.id) }
-        let notificationsModel = NotificationsModel(store: notificationStore)
+        let notificationsModel = NotificationsModel(api: NotificationsAPI(store: notificationStore))
         notificationsModel.select(notificationStore.list().last { $0.type == .backgroundResult }?.id ?? "")
         func notificationsWindow(scheme: ColorScheme) -> some View {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)

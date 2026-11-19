@@ -8,13 +8,14 @@ final class BoundaryTests: XCTestCase {
     static let stores = [
         "TaskStore", "SignalStore", "BubbleStore", "SessionStore", "AutomationStore", "AutomationService", "ConfigStore",
         "MeetingController", "MeetingLibrary", "MeetingRegenerator", "VoiceStore", "UsageStore", "CaptureStore", "CaptureService",
-        "DesktopService", "ChatSession", "ThreadStore", "SpeechPlayer", "CapturePrivacy",
+        "DesktopService", "ChatSession", "ThreadStore", "SpeechPlayer", "CapturePrivacy", "NotificationStore",
     ]
 
     /// Files that are clients by name, whatever they define. Each is an adapter that turns another protocol into API calls.
     static let adapters: Set<String> = [
         "Bridge/MCPEndpoint.swift", "Tasks/TaskMCP.swift", "Tasks/TaskJSON.swift", "Automations/AutomationMCP.swift",
         "Capture/ScreenMCP.swift", "Desktop/DesktopMCP.swift", "Jobs/AssistantMCP.swift", "Telegram/TelegramBridge.swift",
+        "Notifications/NotificationMCP.swift",
     ]
 
     /// Files that build every store from sample data to render screenshots. They are a test harness, not a client.

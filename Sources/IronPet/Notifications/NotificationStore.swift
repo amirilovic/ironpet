@@ -6,9 +6,6 @@ import Foundation
 /// deleted by the user; rows older than `retention` are pruned at launch and once a day.
 @MainActor
 final class NotificationStore: ObservableObject {
-    /// The running app's store, for the MCP tools and the CLI endpoint.
-    static var shared: NotificationStore?
-
     nonisolated static let retention: TimeInterval = 90 * 86_400
 
     nonisolated static let migrations: [Database.Migration] = [
@@ -25,6 +22,9 @@ final class NotificationStore: ObservableObject {
     @Published private(set) var unreadCount = 0
     /// Changes whenever a row is added or marked read, so a view knows to read the list again.
     @Published private(set) var revision = 0
+
+    /// Where changes are published. `IronPetAPI` sets it.
+    var events: APIEventBus?
 
     private let database: Database
     private let now: () -> Date
@@ -72,6 +72,7 @@ final class NotificationStore: ObservableObject {
         }
         unreadCount += 1
         revision += 1
+        events?.publish(.notificationsChanged, id: item.id)
         return item
     }
 
@@ -111,7 +112,7 @@ final class NotificationStore: ObservableObject {
             try db.execute("UPDATE notification_items SET read = ? WHERE id = ?", [self.now().timeIntervalSince1970, id])
             return true
         }) ?? false
-        if changed { refresh() }
+        if changed { refresh(id: id) }
     }
 
     func markAllRead() {
@@ -125,17 +126,19 @@ final class NotificationStore: ObservableObject {
     func prune() {
         lastPrune = now()
         let cutoff = now().addingTimeInterval(-Self.retention).timeIntervalSince1970
+        let expired = ((try? database.read { try $0.rows("SELECT COUNT(*) FROM notification_items WHERE created < ?", [cutoff]) })?.first?.first as? Int64) ?? 0
         _ = try? database.write { db in
             try db.execute("DELETE FROM notification_links WHERE notification IN (SELECT id FROM notification_items WHERE created < ?)", [cutoff])
             try db.execute("DELETE FROM notification_items WHERE created < ?", [cutoff])
         }
-        // A pruned row may have been unread.
-        if unreadCount != countUnread() { refresh() }
+        if expired > 0 { refresh() }
     }
 
-    private func refresh() {
+    /// Reads the count again and tells views and the event bus. `id` is the one notification that changed, when it is one.
+    private func refresh(id: String? = nil) {
         unreadCount = countUnread()
         revision += 1
+        events?.publish(.notificationsChanged, id: id)
     }
 
     private func countUnread() -> Int {

@@ -8,7 +8,7 @@ enum APITestSupport {
     /// The API over in-memory stores. `now` is the clock the task store uses.
     static func makeAPI(events: APIEventBus? = nil, now: @escaping () -> Date = Date.init,
                         automations: [Automation] = [], clock: AutomationTestClock = AutomationTestClock(),
-                        signals: SignalStore? = nil, bubbles: BubbleStore? = nil, sessions: SessionStore? = nil, chat: ChatSession? = nil,
+                        signals: SignalStore? = nil, bubbles: BubbleStore? = nil, notifications: NotificationStore? = nil, sessions: SessionStore? = nil, chat: ChatSession? = nil,
                         meeting: MeetingController? = nil, meetingLibrary: MeetingLibrary? = nil, config: ConfigStore? = nil, petFolders: IronPetAPI.PetFolders? = nil, usage: UsageStore? = nil) -> IronPetAPI {
         TestMemory.isolate()
         let tasks = TaskStore(database: memoryDatabase(), now: now, keepDoneDays: { 30 })
@@ -18,7 +18,7 @@ enum APITestSupport {
         let store = AutomationStore(paths: paths, defaults: { automations }, watch: false)
         let service = AutomationService(store: store, engine: AutomationEngine(env: clock.environment))
         service.runShell = { _, _ in CommandResult(code: 0, stdout: "ok") }
-        return IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals ?? SignalStore(), bubbles: bubbles ?? BubbleStore(), sessions: sessions ?? SessionStore(), chat: chat ?? ChatSession(restore: false),
+        return IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals ?? SignalStore(), bubbles: bubbles ?? BubbleStore(), notifications: notifications ?? NotificationStore(database: memoryDatabase()), sessions: sessions ?? SessionStore(), chat: chat ?? ChatSession(restore: false),
                                  meeting: meeting ?? MeetingController(), meetingLibrary: meetingLibrary ?? MeetingLibrary(root: dir.appendingPathComponent("meetings")),
                                  config: config ?? ConfigStore(memory: Config()),
                                  petFolders: petFolders ?? .init(library: dir.appendingPathComponent("pets"), bundled: nil,

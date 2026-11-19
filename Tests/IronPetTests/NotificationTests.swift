@@ -156,7 +156,7 @@ final class NotificationStoreTests: XCTestCase {
     func testABubbleClickSelectsTheEntryAndMarksItRead() throws {
         let store = try memoryStore()
         let item = try XCTUnwrap(store.add(draft("Report", description: "Full text")))
-        let model = NotificationsModel(store: store)
+        let model = NotificationsModel(api: NotificationsAPI(store: store))
         XCTAssertEqual(model.unread, 1)
         let window = IronPetWindowModel(defaults: UserDefaults(suiteName: "notif-\(UUID().uuidString)")!)
         window.openNotification(item.id)
@@ -334,13 +334,15 @@ final class NotificationDraftTests: XCTestCase {
 final class NotificationMCPTests: XCTestCase {
     private var clock = Date(timeIntervalSince1970: 1_774_008_000)
     private var store: NotificationStore!
+    private var api: NotificationsAPI!
 
     override func setUpWithError() throws {
         store = NotificationStore(database: try Database(path: nil, migrations: AppMigrations.all), now: { [unowned self] in clock })
+        api = NotificationsAPI(store: store)
     }
 
     private func result(_ name: String, _ args: [String: Any]) throws -> [String: Any] {
-        switch NotificationMCP.call(name, args, store: store, now: clock) {
+        switch NotificationMCP.call(name, args, api: api, now: clock) {
         case .success(let value): return try XCTUnwrap(value as? [String: Any])
         case .failure(let error): throw error
         }
@@ -386,7 +388,7 @@ final class NotificationMCPTests: XCTestCase {
     func testBadArgumentsAnswerWithAMessage() {
         for (name, args) in [("notifications_list", ["type": "nope"]), ("notifications_list", ["since": "last tuesday-ish"]),
                              ("notifications_get", [:]), ("notifications_get", ["id": "missing"])] as [(String, [String: Any])] {
-            if case .success = NotificationMCP.call(name, args, store: store) { XCTFail("\(name) \(args) should fail") }
+            if case .success = NotificationMCP.call(name, args, api: api) { XCTFail("\(name) \(args) should fail") }
         }
     }
 
@@ -399,7 +401,7 @@ final class NotificationMCPTests: XCTestCase {
         _ = store.add(NotificationDraft(source: "mail", type: .reminder, title: "Hello"))
         let call: [String: Any] = ["jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "notifications_list", "arguments": [:]]]
         let body = try JSONSerialization.data(withJSONObject: call)
-        let answer = await MCPEndpoint.handle(body, automations: nil, tasks: nil, notifications: store)
+        let answer = await MCPEndpoint.handle(body, automations: nil, tasks: nil, notifications: api)
         XCTAssertTrue(String(decoding: answer.body, as: UTF8.self).contains("Hello"))
         let without = await MCPEndpoint.handle(body, automations: nil, tasks: nil)
         XCTAssertTrue(String(decoding: without.body, as: UTF8.self).contains("not available"))
@@ -419,7 +421,94 @@ final class NotificationMCPTests: XCTestCase {
         XCTAssertThrowsError(try NotificationCLI.request(["show"]))
         XCTAssertThrowsError(try NotificationCLI.request(["list", "--bogus", "x"]))
         XCTAssertThrowsError(try NotificationCLI.request(["list", "--limit", "many"]))
-        let reply = NotificationMCP.handleCLI(Data(#"{"op":"list","args":{}}"#.utf8), store: store)
+        let reply = NotificationMCP.handleCLI(Data(#"{"op":"list","args":{}}"#.utf8), api: api)
         XCTAssertEqual(reply.status, "200 OK")
+    }
+}
+
+/// `api.notifications`: Codable calls, and the events the store publishes.
+@MainActor
+final class NotificationsAPITests: XCTestCase {
+    private var clock = Date(timeIntervalSince1970: 1_774_008_000)
+    private var store: NotificationStore!
+    private var events: APIEventBus!
+    private var api: IronPetAPI!
+    private var seen: [APIEvent] = []
+
+    override func setUpWithError() throws {
+        store = NotificationStore(database: try Database(path: nil, migrations: AppMigrations.all), now: { [unowned self] in clock })
+        events = APIEventBus()
+        api = APITestSupport.makeAPI(events: events, notifications: store)
+        events.subscribe { [unowned self] in if $0.kind == .notificationsChanged { seen.append($0) } }
+    }
+
+    private func add(_ title: String, source: String = "mail", type: NotificationType = .reminder) throws -> NotificationItem {
+        clock = clock.addingTimeInterval(60)
+        return try XCTUnwrap(store.add(NotificationDraft(source: source, type: type, title: title, description: "Full " + title,
+                                                  links: [NotificationLink(.task, "t1", label: "Task")])))
+    }
+
+    func testListFiltersAndCountsUnreadAcrossAllRows() throws {
+        _ = try add("A")
+        let b = try add("B", source: "ci", type: .digest)
+        _ = try add("C", source: "ci", type: .reminder)
+        try api.notifications.markRead(b.id)
+        XCTAssertEqual(api.notifications.list().notifications.map(\.title), ["C", "B", "A"])
+        XCTAssertEqual(api.notifications.list(.init(source: "ci")).notifications.map(\.title), ["C", "B"])
+        XCTAssertEqual(api.notifications.list(.init(type: .digest)).notifications.map(\.title), ["B"])
+        let unread = api.notifications.list(.init(source: "ci", unreadOnly: true))
+        XCTAssertEqual(unread.notifications.map(\.title), ["C"])
+        XCTAssertEqual(unread.unread, 2, "the count covers every notification, not the filtered ones")
+        XCTAssertEqual(api.notifications.list(.init(limit: 1)).notifications.count, 1)
+        XCTAssertEqual(api.notifications.sources(), ["ci", "mail"])
+    }
+
+    func testGetReturnsTheFullEntryAndItRoundTripsAsJSON() throws {
+        let item = try add("Report")
+        let got = try api.notifications.get(item.id)
+        XCTAssertEqual(got.description, "Full Report")
+        XCTAssertEqual(got.links, [NotificationLink(.task, "t1", label: "Task")])
+        let data = try JSONEncoder().encode(api.notifications.list())
+        XCTAssertEqual(try JSONDecoder().decode(NotificationList.self, from: data).notifications, [got])
+        XCTAssertThrowsError(try api.notifications.get("missing")) { XCTAssertEqual(($0 as? APIError)?.code, .notFound) }
+        XCTAssertThrowsError(try api.notifications.markRead("missing")) { XCTAssertEqual(($0 as? APIError)?.code, .notFound) }
+    }
+
+    func testAddingAndReadingPublishEvents() throws {
+        let a = try add("A")
+        XCTAssertEqual(seen.map(\.id), [a.id])
+        XCTAssertEqual(api.notifications.unreadCount, 1)
+        try api.notifications.markRead(a.id)
+        XCTAssertEqual(seen.map(\.id), [a.id, a.id])
+        XCTAssertEqual(api.notifications.unreadCount, 0)
+        try api.notifications.markRead(a.id)
+        XCTAssertEqual(seen.count, 2, "reading a read entry changes nothing")
+        _ = try add("B")
+        api.notifications.markAllRead()
+        XCTAssertEqual(seen.count, 4)
+        XCTAssertNil(seen.last?.id)
+        XCTAssertEqual(api.notifications.unreadCount, 0)
+    }
+
+    func testPruningPublishesAnEvent() throws {
+        _ = try add("Old")
+        seen = []
+        clock = clock.addingTimeInterval(NotificationStore.retention + 1)
+        store.prune()
+        XCTAssertEqual(seen.count, 1)
+        XCTAssertTrue(api.notifications.list().notifications.isEmpty)
+    }
+
+    func testTheModelFollowsTheEventsAndSetsReadStateThroughTheAPI() throws {
+        let model = NotificationsModel(api: api.notifications, events: events)
+        let a = try add("A")
+        _ = try add("B")
+        XCTAssertEqual(model.items.count, 2, "an event reloads the list")
+        XCTAssertEqual(model.unread, 2)
+        model.select(a.id)
+        XCTAssertEqual(model.unread, 1)
+        model.markAllRead()
+        XCTAssertEqual(model.unread, 0)
+        XCTAssertTrue(model.items.allSatisfy { !$0.isUnread })
     }
 }

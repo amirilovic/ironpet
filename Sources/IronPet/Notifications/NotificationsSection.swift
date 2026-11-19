@@ -31,30 +31,34 @@ struct NotificationLinkOpener {
 /// The state of the Notifications section: the list, the filters and which entry is open.
 @MainActor
 final class NotificationsModel: ObservableObject {
-    let store: NotificationStore
+    let api: NotificationsAPI
     @Published var items: [NotificationItem] = []
     @Published var expanded: String?
     @Published var type: NotificationType?
     @Published var source: String?
     @Published private(set) var sources: [String] = []
-    /// The unread count, mirrored from the store so the sidebar badge redraws.
+    /// The unread count, read from the API so the sidebar badge redraws.
     @Published private(set) var unread = 0
     var opener = NotificationLinkOpener()
-    private var cancellable: AnyCancellable?
+    private var subscription: APIEventBus.Subscription?
 
     /// Stands in where the page is not shown.
-    static let empty = NotificationsModel(store: NotificationStore(database: Database.open(path: nil, migrations: NotificationStore.migrations).database))
+    static let empty = NotificationsModel(api: .empty())
 
-    init(store: NotificationStore) {
-        self.store = store
-        unread = store.unreadCount
-        cancellable = store.$unreadCount.sink { [weak self] count in self?.unread = count }
+    /// With `events`, the list and the count read again whenever a notification is added, read or pruned.
+    init(api: NotificationsAPI, events: APIEventBus? = nil) {
+        self.api = api
+        subscription = events?.subscribe { [weak self] event in
+            guard event.kind == .notificationsChanged else { return }
+            MainActor.assumeIsolated { self?.reload() }
+        }
         reload()
     }
 
     func reload() {
-        items = store.list(.init(source: source, type: type))
-        sources = store.sources()
+        items = api.list(.init(source: source, type: type)).notifications
+        sources = api.sources()
+        unread = api.unreadCount
     }
 
     /// Opens or closes a row. Opening it marks it read.
@@ -69,12 +73,12 @@ final class NotificationsModel: ObservableObject {
     /// Opens a row and marks it read. A bubble's click and a row's click both end here.
     func select(_ id: String) {
         expanded = id
-        store.markRead(id)
+        try? api.markRead(id)
         reload()
     }
 
     func markAllRead() {
-        store.markAllRead()
+        api.markAllRead()
         reload()
     }
 
@@ -87,7 +91,6 @@ final class NotificationsModel: ObservableObject {
 /// The Notifications section: everything ironpet showed in a bubble, newest first.
 struct NotificationsSection: View {
     @ObservedObject var model: NotificationsModel
-    @ObservedObject var store: NotificationStore
     /// A notification a bubble asked to open. Opened, then cleared.
     @Binding var focus: String?
 
@@ -100,12 +103,11 @@ struct NotificationsSection: View {
                     Button("Mark all read") { model.markAllRead() }
                         .buttonStyle(.borderless)
                         .font(.caption)
-                        .disabled(store.unreadCount == 0)
+                        .disabled(model.unread == 0)
                 }
             }
             .onAppear { model.reload(); openFocus() }
             .onChange(of: focus) { _ in openFocus() }
-            .onChange(of: store.revision) { _ in model.reload() }
     }
 
     private func openFocus() {

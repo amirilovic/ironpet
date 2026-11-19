@@ -265,11 +265,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tasks = TaskStore(database: database)
         taskStore = tasks
         let service = AutomationService(store: store, engine: engine, database: database)
-        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, sessions: self.store, chat: chat, meeting: meeting, meetingLibrary: meetings, config: config, usage: UsageStore.shared), events: events)
-        pet.tasks = api.tasks
         let notificationStore = NotificationStore(database: database)
-        NotificationStore.shared = notificationStore
-        pet.notifications = NotificationsModel(store: notificationStore)
+        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, notifications: notificationStore, sessions: self.store, chat: chat, meeting: meeting, meetingLibrary: meetings, config: config, usage: UsageStore.shared), events: events)
+        pet.tasks = api.tasks
+        pet.notifications = NotificationsModel(api: api.notifications, events: events)
         announcer.notifications = notificationStore
         announcer.openNotification = { [weak self] id in self?.pet.openNotification(id) }
         pet.alerts = api.alerts
@@ -1032,7 +1031,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         server.onAgentAPI = { [weak self] request, respond in
             MCPEndpoint.route(request, automations: { self?.api?.automations }, tasks: { self?.api?.tasks }, screen: { self?.api?.screen },
                               desktop: { self?.api?.desktop }, memory: { self?.api?.memory }, assistant: { self?.api?.assistant },
-                              notifications: { NotificationStore.shared }, respond: respond)
+                              notifications: { self?.api?.notifications }, respond: respond)
         }
         try server.start()
         self.server = server
