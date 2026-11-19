@@ -86,4 +86,11 @@ final class MemoryPreambleTests: XCTestCase {
         XCTAssertTrue(preamble?.contains("What you remember") == true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: FileMemoryStore.directory.appendingPathComponent("projects").path))
     }
+
+    func testTheSystemPromptTellsTheAgentToCreateAnAutomationForRegularChecks() {
+        let prompt = MemoryPreamble.taskInstructions
+        XCTAssertFalse(prompt.localizedCaseInsensitiveContains("heartbeat"))
+        XCTAssertTrue(prompt.contains("create an automation with the ironpet-automations skill"))
+        XCTAssertTrue(prompt.contains("The ironpet-tasks skill has the rules for tasks and for when you may close one."))
+    }
 }

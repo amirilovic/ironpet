@@ -6,19 +6,6 @@ enum AutomationDefaults {
     static let githubID = "github-alerts"
     static let sentryID = "sentry-alerts"
 
-    static let heartbeatID = "heartbeat"
-    static let heartbeatPrompt = "/heartbeat"
-    /// The reply that means the checklist found nothing for the user. The chat hides such a turn.
-    static let heartbeatQuiet = "HEARTBEAT_OK"
-
-    /// The built-in heartbeat. Every 15 minutes it asks the chat to run the `heartbeat` skill over `~/.ironpet/HEARTBEAT.md`.
-    static func heartbeat(enabled: Bool = true) -> Automation {
-        Automation(id: heartbeatID, name: "Heartbeat", enabled: enabled,
-                   trigger: .init(type: "interval", minutes: 15, clock: "wall"),
-                   action: .init(type: "prompt", prompt: heartbeatPrompt, quiet: heartbeatQuiet), createdBy: "user",
-                   note: "Works through ~/.ironpet/HEARTBEAT.md. Skipped when the checklist has no entries, and hidden when nothing needs you.")
-    }
-
     static let morningBriefID = "morning-brief"
     static let dayRecapID = "day-recap"
     static let weekdays = ["mon", "tue", "wed", "thu", "fri"]
@@ -41,7 +28,7 @@ enum AutomationDefaults {
     }
 
     /// Every built-in, added to the file when its id is missing.
-    static var builtIns: [Automation] { [heartbeat(), morningBrief(), dayRecap()] }
+    static var builtIns: [Automation] { [morningBrief(), dayRecap()] }
 
     /// The `gh` binary, which the GitHub script runs.
     static var ghExecutable: URL? {

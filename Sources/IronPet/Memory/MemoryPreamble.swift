@@ -7,7 +7,7 @@ enum MemoryPreamble {
     /// How much of each file reaches the prompt. Whole notes only, newest first.
     static let budget: [MemoryScope: Int] = [.me: 4_000, .project: 6_000, .people: 2_000]
 
-    /// What the system prompt says about tasks and the heartbeat checklist.
+    /// What the system prompt says about tasks and regular checks.
     static let taskInstructions = """
     You keep the user's task list with the tasks_* tools (statuses: backlog, in_progress, needs_you, done). \
     Every task needs an origin and every close needs a note, as the skill says. Add a task when the user asks for something to be done later or hands you work that will not finish in this turn. \
@@ -16,7 +16,7 @@ enum MemoryPreamble {
     When the user is waiting on someone else, set waiting_on to that person instead. \
     Link tasks to the thread, URL or file they belong to. Never start work on a task unless the user asks. \
     The ironpet-tasks skill has the rules for tasks and for when you may close one. \
-    When the user asks you to check or watch something regularly, add it to ~/.ironpet/HEARTBEAT.md. The heartbeat skill explains the format.
+    When the user asks you to check or watch something regularly, create an automation with the ironpet-automations skill, and put its prompt in a skill when it needs one.
     """
 
     static let memoryInstructions = """

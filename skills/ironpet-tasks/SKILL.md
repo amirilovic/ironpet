@@ -1,6 +1,6 @@
 ---
 name: ironpet-tasks
-description: Keep ironpet's task list for the user, the list shown in Ghost's Tasks tab. Use when you start work or find a follow-up that should be tracked, when the user tells you they did something, and when the heartbeat checklist asks you to review tasks, suggestions or screen activity.
+description: Keep ironpet's task list for the user, the list shown in Ghost's Tasks tab. Use when you start work or find a follow-up that should be tracked, when the user tells you they did something, and when an automation or the user asks you to review tasks, suggestions or screen activity.
 ---
 
 # ironpet tasks
