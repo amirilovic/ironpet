@@ -1,5 +1,5 @@
 enum PetMood: String, CaseIterable {
-    case idle, working, needsInput, done, failed, listening, sleeping, drinking, stretching
+    case idle, working, needsInput, done, failed, listening, sleeping, drinking, stretching, attentive
 
     var row: AtlasRow {
         switch self {
@@ -11,6 +11,7 @@ enum PetMood: String, CaseIterable {
         case .listening: return .waving
         case .drinking: return .drinking
         case .stretching: return .stretching
+        case .attentive: return .review
         }
     }
 

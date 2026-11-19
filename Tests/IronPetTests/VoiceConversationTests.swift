@@ -128,7 +128,7 @@ final class VoiceConversationTests: XCTestCase {
         XCTAssertTrue(mic.started)
         XCTAssertEqual(desk.prepared, 1)
         XCTAssertEqual(events, ["started microphone"])
-        XCTAssertEqual(conversation.mood, .listening)
+        XCTAssertEqual(conversation.mood, .attentive)
 
         mic.say("what's going on")
         await until { conversation.state == .listening && !speaker.said.isEmpty }

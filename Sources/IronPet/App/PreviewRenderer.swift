@@ -136,7 +136,10 @@ enum PreviewRenderer {
         // Automations needs the app's settings model; this one is built from sample automations in a temp folder.
         let settingsModel = sampleSettings(chat: chat, config: patterned)
         settingsModel.capture = CaptureService(store: capturesStore, config: { ConfigStore.shared.config.screenCapture })
+        patterned.voiceMode.enabled = true
         ConfigStore.shared.usePreview(patterned)
+        let idleVoice = VoiceConversation(frontDesk: FrontDesk())
+        let voiceThreads = Self.sampleVoiceThreads
         for section in IronPetSection.allCases {
             for (suffix, scheme) in [("dark", ColorScheme.dark), ("light", .light)] {
                 for collapsed in [false, true] {
@@ -146,12 +149,13 @@ enum PreviewRenderer {
                     model.todayShown = true
                     model.section = section
                     let view = IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: chat,
-                                                 meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
+                                                 meetings: meetings, settings: settingsModel, brief: brief, voice: idleVoice,
+                                                 voiceThreads: { voiceThreads }, actions: .none)
                     renderWindow(model: model, session: chat, content: view, to: dir,
                                  "real-\(section.rawValue)-\(suffix)\(collapsed ? "-collapsed" : "")", scheme: scheme)
                     if collapsed, section == .agents {
-                        // The rail label for Tasks, the fourth icon: 56 pt below the top, then 42 pt per icon.
-                        model.hoverRail(RailTip(name: "Tasks", shortcut: "⌘4", frame: CGRect(x: 36, y: 182, width: 40, height: 38)),
+                        // The rail label for Tasks, the fifth icon: 56 pt below the top, then 42 pt per icon.
+                        model.hoverRail(RailTip(name: "Tasks", shortcut: "⌘5", frame: CGRect(x: 36, y: 224, width: 40, height: 38)),
                                         hovering: true)
                         renderWindow(model: model, session: chat, content: view, to: dir,
                                      "real-\(section.rawValue)-\(suffix)-collapsed-tip", scheme: scheme)
@@ -201,6 +205,23 @@ enum PreviewRenderer {
                 render(VoicePillView(conversation: conversation, petName: "Ghost", onEnd: {}).padding(16),
                        to: dir, "voice-pill-\(name)" + suffix, scheme: scheme)
             }
+        }
+        // The Voice page: off, ready with past conversations, and mid-conversation.
+        let talking = VoiceConversation(frontDesk: FrontDesk())
+        talking.loadPreview(state: .speaking, mode: .microphone, heard: "What's going on with my jobs?",
+                            reply: "Two jobs are running. The login fix is almost done, and lint is waiting for your OK.")
+        func voicePage(_ conversation: VoiceConversation) -> some View {
+            VoiceSection(conversation: conversation, onToggle: {}, onOpenThread: { _ in }, onOpenSettings: {},
+                         loadThreads: { voiceThreads }).frame(width: 600, height: 620).panel()
+        }
+        var voiceOff = speechOn
+        voiceOff.voiceMode.enabled = false
+        ConfigStore.shared.usePreview(voiceOff)
+        render(voicePage(idleVoice), to: dir, "voice-page-off")
+        ConfigStore.shared.usePreview(speechOn)
+        for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
+            render(voicePage(idleVoice), to: dir, "voice-page" + suffix, scheme: scheme)
+            render(voicePage(talking), to: dir, "voice-page-talking" + suffix, scheme: scheme)
         }
         let speaking = ChatSession(restore: false)
         speaking.loadPreview(.done)
@@ -634,4 +655,21 @@ private struct PetScene: View {
             }
         }
     }
+}
+
+extension PreviewRenderer {
+    /// Voice conversations for the Voice page's list; never the user's own threads.
+    static let sampleVoiceThreads: [ChatThread] = {
+        let now = Date()
+        func thread(_ id: String, _ said: [String], hoursAgo: Double) -> ChatThread {
+            ChatThread(id: id, title: said[0], workspace: "/tmp", updatedAt: now.addingTimeInterval(-hoursAgo * 3600),
+                       items: said.flatMap { [ChatSession.Item(kind: .user($0)), ChatSession.Item(kind: .assistant("Okay."))] },
+                       agent: "claude", voice: true)
+        }
+        return [
+            thread("v1", ["What's going on with my jobs?", "Start the lint fix in ironpet", "Cancel that"], hoursAgo: 1),
+            thread("v2", ["Anything need me?"], hoursAgo: 5),
+            thread("v3", ["What's on my calendar today?", "Remind me to send the invoice"], hoursAgo: 26),
+        ]
+    }()
 }

@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// What voice mode shows by the pet: the state, a level meter while it listens, the last thing heard, and a button
-/// to end. With Wispr Flow it holds a text field that keeps ironpet focused, so Wispr's dictation is addressed to ironpet.
+/// What voice mode shows by the pet: the state, the last thing heard, and a button to end. The pet itself shows that it
+/// is listening (`VoiceConversation.mood`). With Wispr Flow it holds a text field that keeps ironpet focused, so Wispr's dictation is addressed to ironpet.
 struct VoicePillView: View {
     @ObservedObject var conversation: VoiceConversation
     var petName: String
@@ -14,23 +14,8 @@ struct VoicePillView: View {
     private var state: VoiceConversation.State { conversation.state }
     private var wispr: Bool { conversation.mode == .wispr }
 
-    var title: String {
-        switch state {
-        case .idle: return "Voice mode"
-        case .listening: return wispr ? "Dictate with Wispr Flow" : "Listening…"
-        case .transcribing: return "Got it…"
-        case .thinking: return "Thinking…"
-        case .speaking: return "\(petName) is speaking"
-        }
-    }
-
-    private var symbol: String {
-        switch state {
-        case .idle, .listening: return "mic.fill"
-        case .transcribing, .thinking: return "ellipsis"
-        case .speaking: return "speaker.wave.2.fill"
-        }
-    }
+    var title: String { state.title(wispr: wispr, petName: petName) }
+    private var symbol: String { state.symbol }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -60,9 +45,6 @@ struct VoicePillView: View {
                     .focused($fieldFocused)
                     .onChange(of: typed) { if !typed.isEmpty { typed = "" } }
                     .accessibilityHidden(true)
-            } else if state == .listening {
-                LevelMeter(levels: conversation.levels)
-                    .frame(width: 44, height: 18)
             }
             Button(action: onEnd) {
                 Image(systemName: "xmark")
@@ -87,19 +69,42 @@ struct VoicePillView: View {
     }
 }
 
-/// Five bars that follow the microphone's level. With Reduce Motion on they show one steady level.
-private struct LevelMeter: View {
+extension VoiceConversation.State {
+    /// The state in a few words, for the pill and the Voice page.
+    func title(wispr: Bool, petName: String) -> String {
+        switch self {
+        case .idle: return "Voice mode"
+        case .listening: return wispr ? "Dictate with Wispr Flow" : "Listening…"
+        case .transcribing: return "Got it…"
+        case .thinking: return "Thinking…"
+        case .speaking: return "\(petName) is speaking"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .idle, .listening: return "mic.fill"
+        case .transcribing, .thinking: return "ellipsis"
+        case .speaking: return "speaker.wave.2.fill"
+        }
+    }
+}
+
+/// Bars that follow the microphone's level, as tall as the frame. With Reduce Motion on they show one steady level.
+struct VoiceLevelMeter: View {
     let levels: LevelBuffer
+    var count = 5
+    var barWidth: CGFloat = 4
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
             if reduceMotion {
-                bars(Array(repeating: 0.5, count: 5))
+                bars(Array(repeating: 0.5, count: count))
             } else {
                 TimelineView(.animation) { timeline in
                     let _ = timeline.date
-                    bars(levels.recent(5).bars)
+                    bars(levels.recent(count).bars)
                 }
             }
         }
@@ -107,14 +112,16 @@ private struct LevelMeter: View {
     }
 
     private func bars(_ values: [Float]) -> some View {
-        HStack(alignment: .center, spacing: 3) {
-            ForEach(values.indices, id: \.self) { index in
-                Capsule()
-                    .fill(Color.accentColor)
-                    .frame(width: 4, height: max(4, CGFloat(values[index]) * 18))
+        GeometryReader { proxy in
+            HStack(alignment: .center, spacing: barWidth * 0.75) {
+                ForEach(values.indices, id: \.self) { index in
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: barWidth, height: max(barWidth, CGFloat(values[index]) * proxy.size.height))
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxHeight: .infinity)
     }
 }
 

@@ -83,6 +83,11 @@ enum ThreadStore {
             .map { $0 }
     }
 
+    /// Voice-mode conversations, most recent first.
+    static func voice(limit: Int = 20) -> [ChatThread] {
+        Array(all().filter { $0.voice == true }.prefix(limit))
+    }
+
     private static func all() -> [ChatThread] {
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
         return files

@@ -246,7 +246,7 @@ enum AutomationSchema {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "mood": { "enum": ["idle", "working", "needsInput", "done", "failed", "listening", "sleeping", "drinking", "stretching"] },
+            "mood": { "enum": ["idle", "working", "needsInput", "done", "failed", "listening", "sleeping", "drinking", "stretching", "attentive"] },
             "symbol": { "type": "string" },
             "buttons": { "type": "array", "items": { "enum": ["done", "snooze"] } },
             "notification": { "type": "boolean" },

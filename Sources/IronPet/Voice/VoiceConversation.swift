@@ -85,8 +85,9 @@ final class VoiceConversation: ObservableObject {
     var mood: PetMood? {
         switch state {
         case .idle: return nil
-        case .listening, .speaking: return .listening
+        case .listening: return .attentive
         case .transcribing, .thinking: return .working
+        case .speaking: return .idle
         }
     }
 
@@ -181,10 +182,11 @@ final class VoiceConversation: ObservableObject {
     }
 
     /// Shows a state for preview renders. Nothing listens or runs.
-    func loadPreview(state: State, mode: Mode, heard: String?) {
+    func loadPreview(state: State, mode: Mode, heard: String?, reply: String? = nil) {
         self.state = state
         self.mode = mode
         self.heard = heard
+        self.reply = reply
     }
 
     /// `--test-mode`: an utterance as if the microphone had just cut it.

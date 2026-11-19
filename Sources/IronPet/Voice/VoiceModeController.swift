@@ -49,6 +49,29 @@ final class VoiceModeController {
             .store(in: &cancellables)
     }
 
+    enum Enabling: Equatable { case on, cancelled, failed(String) }
+
+    /// Turns voice mode on once the server has transcribed the test clip and spoken one line through `player`, so a
+    /// server that can't do either shows up now rather than in the first conversation.
+    static func enable(using player: SpeechPlayer) async -> Enabling {
+        let voice = ConfigStore.shared.config.voice
+        let transcriber = Transcriber(baseURL: voice.baseUrl, model: voice.model, apiKey: VoiceKey.load(), timeout: 30)
+        do {
+            _ = try await transcriber.transcribe(wav: VoiceSettings.testClip)
+        } catch {
+            return .failed("Not turned on. Transcription failed: \(error.localizedDescription)")
+        }
+        do {
+            try await player.preview("Voice mode is on. Press the voice mode shortcut to talk to me.", using: SpeechPlayer.synthesizer())
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failed("Not turned on. Speech failed: \(error.localizedDescription)")
+        }
+        ConfigStore.shared.update { $0.voiceMode.enabled = true }
+        return .on
+    }
+
     /// The voice-mode shortcut to register: nil when voice mode is off or the shortcut is cleared.
     nonisolated static func hotkey(in config: Config) -> String? {
         guard config.voiceMode.enabled, !config.hotkeys.voiceMode.isEmpty else { return nil }

@@ -34,6 +34,7 @@ final class ConversationMic: ConversationListening {
 
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
+    private let voiceMixer = AVAudioMixerNode()
     private let cutting = CuttingState()
     private var observer: NSObjectProtocol?
     private var levelTimer: Timer?
@@ -46,8 +47,14 @@ final class ConversationMic: ConversationListening {
             try input.setVoiceProcessingEnabled(true)
             // Voice processing ducks other apps' audio by default, which would make music drop whenever the mic opens.
             input.voiceProcessingOtherAudioDuckingConfiguration = .init(enableAdvancedDucking: false, duckingLevel: .min)
-            if playerNode.engine == nil { engine.attach(playerNode) }
-            engine.connect(playerNode, to: engine.mainMixerNode, format: EngineClipPlayer.format)
+            // Not through `mainMixerNode`: with voice processing on, the engine then fails to start (-10875). A mixer of
+            // its own straight to the output node works.
+            if playerNode.engine == nil {
+                engine.attach(playerNode)
+                engine.attach(voiceMixer)
+            }
+            engine.connect(playerNode, to: voiceMixer, format: EngineClipPlayer.format)
+            engine.connect(voiceMixer, to: engine.outputNode, format: engine.outputNode.outputFormat(forBus: 0))
         }
         try installTapAndStart()
         running = true
@@ -68,10 +75,12 @@ final class ConversationMic: ConversationListening {
         let converter = AdaptiveConverter()
         try catchingObjCException {
             let input = engine.inputNode
-            let format = input.inputFormat(forBus: 0)
+            // With voice processing on, the input side reads 0 Hz once the graph is built; the node's output is what the
+            // tap gets: the processed microphone on channel 0, then reference channels (9 in all on a MacBook).
+            let format = input.outputFormat(forBus: 0)
             guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceError.noInput }
             input.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
-                let floats = converter.convert(buffer)
+                let floats = converter.convert(Self.firstChannel(of: buffer))
                 guard !floats.isEmpty else { return }
                 let level = PCMConverter.level(of: floats[...])
                 levels.record(level)
@@ -82,6 +91,19 @@ final class ConversationMic: ConversationListening {
             engine.prepare()
             try engine.start()
         }
+    }
+
+    /// Channel 0 alone, so the reference channels are not mixed in and do not dilute the level.
+    nonisolated static func firstChannel(of buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
+        let format = buffer.format
+        guard format.channelCount > 1, format.commonFormat == .pcmFormatFloat32, !format.isInterleaved,
+              let source = buffer.floatChannelData?[0],
+              let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false),
+              let copy = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: buffer.frameLength),
+              let target = copy.floatChannelData?[0] else { return buffer }
+        target.update(from: source, count: Int(buffer.frameLength))
+        copy.frameLength = buffer.frameLength
+        return copy
     }
 
     /// A device change (headphones plugged in, a Bluetooth headset switching profile) stops the engine. Starts it again on

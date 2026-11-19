@@ -109,7 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.onOpenJob = { [weak self] id in self?.openJob(id) }
         bubblePanel = BubblePanel(store: announcer.bubbles)
         pet.extraMenuItems = { [weak self] in self?.hookMenuItems() ?? [] }
-        pet.chatMood = { [weak self] in self?.voiceMode.conversation.mood ?? self?.chat.mood }
+        pet.chatMood = { [weak self] in self?.chat.mood }
+        pet.voiceMood = { [weak self] in self?.voiceMode.conversation.mood }
         pet.onChatToggle = { [weak self] in self?.toggleChat() }
         pet.onCapture = { [weak self] region in self?.captureScreen(region: region) }
         pet.chat = chat
@@ -250,6 +251,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.settings = settingsModel
         pet.onSettings = { [weak self] in self?.showSettings(tab: nil) }
         pet.onScreenSettings = { [weak self] in self?.showSettings(tab: "screen") }
+        pet.voiceConversation = voiceMode.conversation
+        pet.onVoiceToggle = { [weak self] in self?.voiceMode.toggle() }
+        pet.onVoiceSettings = { [weak self] in self?.showSettings(tab: "voice") }
         settingsModel.showScreenSection = { [weak self] in self?.pet.showWindow(.screen) }
         setUpScreenCapture(database)
         setUpDesktopControl()

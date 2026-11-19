@@ -69,6 +69,13 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertNil(IronPetSection.forShortcut(nil, in: all))
     }
 
+    func testVoiceComesRightAfterChat() {
+        let all = IronPetSection.shown(chat: true, voice: true, transcripts: true, automations: true)
+        XCTAssertEqual(IronPetSection.forShortcut("2", in: all), .voice)
+        XCTAssertEqual(IronPetSection.forShortcut("3", in: all), .agents)
+        XCTAssertEqual(IronPetSection.forShortcut("9", in: all), .automations)
+    }
+
     func testHiddenRowsDoNotTakeANumber() {
         let noChat = IronPetSection.shown(chat: false, transcripts: true, automations: true)
         XCTAssertEqual(IronPetSection.forShortcut("1", in: noChat), .agents)

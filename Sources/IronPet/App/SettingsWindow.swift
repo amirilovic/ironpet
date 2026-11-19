@@ -695,26 +695,13 @@ private struct VoiceModeSettings: View {
         result = nil
         guard on else { return store.update { $0.voiceMode.enabled = false } }
         checking = true
-        let voice = store.config.voice
-        let transcriber = Transcriber(baseURL: voice.baseUrl, model: voice.model, apiKey: VoiceKey.load(), timeout: 30)
         Task {
             defer { checking = false }
-            do {
-                _ = try await transcriber.transcribe(wav: VoiceSettings.testClip)
-            } catch {
-                result = (false, "Not turned on. Transcription failed: \(error.localizedDescription)")
-                return
+            switch await VoiceModeController.enable(using: player) {
+            case .on: result = (true, "Voice mode is on.")
+            case .cancelled: break
+            case .failed(let message): result = (false, message)
             }
-            do {
-                try await player.preview("Voice mode is on. Press the voice mode shortcut to talk to me.", using: SpeechPlayer.synthesizer())
-            } catch is CancellationError {
-                return
-            } catch {
-                result = (false, "Not turned on. Speech failed: \(error.localizedDescription)")
-                return
-            }
-            store.update { $0.voiceMode.enabled = true }
-            result = (true, "Voice mode is on.")
         }
     }
 }
