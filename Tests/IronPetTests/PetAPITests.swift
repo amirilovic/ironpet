@@ -138,3 +138,26 @@ final class PetAPITests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(AssetManifest.self, from: JSONEncoder().encode(manifest)), manifest)
     }
 }
+
+/// The pet window is where the mood changes, so `pet.mood` is checked through `PetController`.
+@MainActor
+final class PetMoodEventTests: XCTestCase {
+    func testAMoodChangePublishesPetMoodOnceAndFeedsTheState() {
+        let bus = APIEventBus()
+        var seen: [APIEvent] = []
+        bus.subscribe { seen.append($0) }
+        let signals = SignalStore()
+        let pet = PetController(store: SessionStore(), signals: signals)
+        pet.events = bus
+        pet.refreshMood()
+        let before = seen.count
+        signals.add(Signal(id: "ci", title: "CI failed", subtitle: "", url: nil, label: "CI", symbol: "x", mood: .failed, ask: nil), notify: false)
+        pet.refreshMood()
+        XCTAssertEqual(seen.count, before + 1)
+        XCTAssertEqual(seen.last?.kind, .petMood)
+        XCTAssertEqual(seen.last?.id, "failed")
+        XCTAssertEqual(pet.state, PetState(mood: "failed", badge: 1))
+        pet.refreshMood()
+        XCTAssertEqual(seen.count, before + 1, "the same mood publishes nothing")
+    }
+}
