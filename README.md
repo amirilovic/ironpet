@@ -200,6 +200,17 @@ The task list belongs to the agent, not to you, so nothing is lost by moving car
 - **CLI.** Agents outside ironpet (Cursor, Claude Code in a terminal) can use `IronPet tasks list [--all] [--status S]`, `show <id>`, `add <title> [--notes N] [--due D] [--status S] [--url U] [--waiting-on NAME]`, `update <id> --json '{...}'`, `status <id> <status>`, `done <id> [--note N]` and `delete <id>`. The app must be running.
 - **State.** Tasks, their links and history, suggestions (plus the ids each automation has suggested, kept for a year), and which due dates were announced or snoozed are in `~/.ironpet/ironpet.db` (`task_*` tables). Done tasks are deleted after `tasks.keepDoneDays` (default 30, from 1 to 365).
 
+## Background jobs
+
+Ask Ghost to do something that takes a while ("fix the flaky login test in ironpet", "write up last week's PRs") and the chat agent can hand it to a **background job** with `jobs_start` instead of doing it in the chat. A job is its own agent session, with the chat's agent and model, in one folder. It shows in the Agents section as "Background job" with its last step, and Ghost tells you when it finishes or fails. A task in progress tracks it; the job closes the task when it's done, and marks it needs you when it fails.
+
+- **Which folder.** `projects_resolve` matches what you called the project to the folders ironpet knows: the front Cursor window, the chat's folder, folders open in Cursor, the folders of agent sessions ironpet watches (so a Claude Code in iTerm counts), and recent chat folders. With no name it uses the project you're in, it asks when two match, and work that is not about code runs in `~/.ironpet/scratch`. A job never runs in a folder outside that list.
+- **Approvals.** A job runs as if the chat's **Auto** switch were on: commands and edits go ahead, but destructive commands (`rm -rf`, `git push --force`, `git reset --hard` and the like) wait for you to click **Allow** in a bubble. Nobody can approve one by voice or by asking the chat agent. A closed bubble comes back when you open the job.
+- **Talking to it.** Ask Ghost how it's going (`jobs_list`, `jobs_get`), add to it (`jobs_followup`), or stop it (`jobs_stop`). Starting, adding to and stopping a job asks first in a chat without Auto. Click the job's row to read its transcript in the chat; a message typed there goes to the job while it runs. At most `jobs.maxRunning` (3, from 1 to 5) run at once, the rest wait in line. A turn that runs longer than an hour fails. A job that was running when ironpet quit shows as interrupted, and its task goes back to the backlog.
+- **What's going on.** `status_overview` gathers the agent sessions that need you or are running, jobs, tasks that need you, open alerts and recent meetings in one call, so "anything need me?" has one answer. `status_sessions`, `status_alerts`, `status_today` (the brief or the recap) and `status_meetings` (with your open action items) give the details.
+- **Memory.** `memory_remember` keeps one short line about you (`me.md`), a person (`people.md`), a conversation (`conversations.md`, the last 50) or a project, and `memory_forget` removes lines when you correct Ghost. Lines that look like a secret are refused. `memory_recall` reads it all back. The status and memory tools run without an approval card.
+- **State.** Jobs are in `~/.ironpet/ironpet.db` (`jobs` table) for 30 days after they end, and each job's transcript is a thread in `~/.ironpet/threads` like a chat.
+
 ## Configuration
 
 Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rename the pet, pick another from the pet gallery, change or turn off shortcuts, tune reminders, and turn integrations on. Everything is stored in `~/.ironpet/config.json`, which you can also edit by hand or keep in your dotfiles. Changes apply within a couple of seconds. List only the keys you want to change; anything missing uses the default:
@@ -211,6 +222,7 @@ Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rena
   "reminders": { "paused": false, "idleResetMinutes": 5, "snoozeMinutes": 10 },
   "automations": { "logRetentionDays": 14 },
   "tasks": { "meetingSuggestions": true, "dueReminders": true, "keepDoneDays": 30 },
+  "jobs": { "maxRunning": 3 },
   "welcomeBack": { "enabled": true },
   "window": { "autoHide": false },
   "integrations": { "shareMCPSignIns": false },
@@ -228,6 +240,7 @@ Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rena
 - **Open sessions in** (`openIn`) is `"auto"`, which opens the app that started the agent (found by walking the agent's parent processes), or the bundle id of a fixed app such as `"dev.zed.Zed"`. The picker offers Cursor, VS Code, Zed, Band, Windsurf, Xcode and Finder when installed, plus your `editors` entries. In `urlTemplate`, `{cwd}` becomes the percent-encoded session folder; without a template the folder is opened with the app.
 - **Reminders and alerts** moved to `automations.json` (see [Automations](#automations)). Older `reminders.water`, `stretch`, `eyes` and `integrations.githubAlerts` keys still load. They are only read once, on the first launch with automations.
 - **Tasks** (`tasks`): `meetingSuggestions` offers a meeting's action items, `dueReminders` says when a task is due, and `keepDoneDays` is how long done tasks are kept. See [Tasks](#tasks).
+- **Background jobs** (`jobs.maxRunning`, 1 to 5) is how many run at once. See [Background jobs](#background-jobs).
 - **Welcome back** (`welcomeBack.enabled`) shows the summary bubble when you return. How long counts as away is `reminders.idleResetMinutes`.
 - **Window auto-hide** (`window.autoHide`, off by default) hides the ironpet window on every section when another app becomes active, and shows it again, on the same section and at the same place, when ironpet is activated (pet click, shortcut, menu bar item). A window you closed with Esc or the close button stays closed. It does not hide while an ironpet sheet, alert or open panel is up, a file drag is over the chat, a screen capture is running, or a voice note is being recorded or transcribed. The voice shortcut shows a hidden window as before. A running chat turn carries on while the window is hidden. Settings → General → "Hide the window when another app is in front" sets it, and a change applies at once.
 - **Telegram** (`telegram`) is covered in [Telegram](#telegram). The bot token is not in this file; it is stored in the Keychain.
@@ -282,11 +295,11 @@ To record, click the microphone button in the chat input (click again to stop) o
 
 ### Spoken replies
 
-Ghost can answer out loud. Spoken replies are off by default. Turn them on under **Settings → Voice → Ghost talks back**: pick a voice and press **Preview**, and the switch turns on once the preview plays. They use the server, base URL and key above, with their own model (**Speech model** in the Server section) and voice (`POST {baseUrl}/audio/speech`). Voice notes don't have to be on.
+Ghost can answer out loud. Every reply has a speaker button below it (shown on hover) and a Read Aloud menu item, whatever the switch says; they use the speech model and voice below. Reading each reply automatically is off by default. Turn it on under **Settings → Voice → Ghost talks back**: pick a voice and press **Preview**, and the switch turns on once the preview plays. They use the server, base URL and key above, with their own model (**Speech model** in the Server section) and voice (`POST {baseUrl}/audio/speech`). Voice notes don't have to be on.
 
 | Setting | `config.json` key | Notes |
 | --- | --- | --- |
-| Spoken replies | `speech.enabled` | Default off |
+| Read replies aloud automatically | `speech.enabled` | Default off. The speaker button works either way |
 | Speech model | `speech.model` | Default `mlx-community/Kokoro-82M-bf16` |
 | Voice | `speech.voice` | Default `am_puck`. Settings lists the model's voices when the server offers `/audio/voices` (mlx-audio does), and a text field otherwise |
 
@@ -313,7 +326,7 @@ All in `~/.ironpet/`:
 
 | Path | Contents |
 | --- | --- |
-| `memory/` | `me.md` and one file per project; edit freely |
+| `memory/` | `me.md`, `people.md`, `conversations.md` and one file per project; edit freely |
 | `threads/` | Saved chats |
 | `screenshots/` | Last 30 captures |
 | `config.json` | Your settings |
@@ -452,6 +465,7 @@ Turn it on under **Settings → Meetings**. The switch only turns on after the v
 | Summary model | `meetings.summaryModel` | A model id the agent reported in the chat. Unset uses the agent's default. Settings offers the models the agent listed the last time it ran in the chat |
 | Summarize automatically | `meetings.autoSummary` | Default on. Off means no agent runs |
 | Offer to record calls | `meetings.offerToRecordCalls` | Default on, and only applies with meetings on. When another app holds the microphone for about 10 seconds, Ghost asks whether to record it. Nothing records until you click Record |
+| Never treat as a call | `meetings.ignoredMicApps` | Default empty. Bundle id prefixes (at least two dot-separated parts, such as `com.example.dictate`) of apps whose microphone use is not a call, for example dictation apps. They get no call offer and do not hold back spoken replies. Siri, Apple dictation and Wispr Flow are always ignored. Works with meetings off |
 | Recognise speakers in meetings | `meetings.recogniseSpeakers` | Default off. See [Recognising speakers](#recognising-speakers) |
 | Start or stop shortcut | `hotkeys.meeting` | No default. Registered only while meetings are on |
 | Last recorded app | `meetings.lastApp` | Written by ironpet: a bundle id, or `"all"` |

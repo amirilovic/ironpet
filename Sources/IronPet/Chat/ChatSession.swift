@@ -84,6 +84,8 @@ final class ChatSession: ObservableObject {
 
     static let telegramOrigin = "telegram"
     static let automationOrigin = "automation"
+    /// A prompt or follow-up that a background job ran (`JobService`).
+    static let jobOrigin = "job"
 
     struct Approval: Identifiable {
         let id = UUID()
@@ -259,6 +261,8 @@ final class ChatSession: ObservableObject {
     private var speechChanges: [AnyCancellable] = []
     /// The running turn was sent from the chat, not from Telegram or an automation; its reply is read aloud when it ends.
     private var turnSpoken = false
+    /// True once an approval card was shown during the running turn. The user took part, so a quiet reply stays visible.
+    private var turnAskedApproval = false
     /// True during a call or a meeting recording, when a reply is not read aloud on its own. Set by `AppDelegate`.
     var isQuiet: () -> Bool = { false }
     /// The transcription error that offers Retry, so only that card shows the button.
@@ -578,6 +582,7 @@ final class ChatSession: ObservableObject {
         replyingTo = nil
         items = []
         threadID = nil
+        jobMessages = []
         state = .idle
         lastRunDuration = nil
     }
@@ -594,6 +599,7 @@ final class ChatSession: ObservableObject {
         replyingTo = nil
         items = thread.items
         threadID = thread.id
+        jobMessages = []
         state = .idle
         let url = URL(fileURLWithPath: thread.workspace)
         workspace = url
@@ -615,6 +621,10 @@ final class ChatSession: ObservableObject {
             thread.automationName = earlier.automationName
             thread.runs = earlier.runs
         }
+        if let earlier = ThreadStore.load(threadID), earlier.job != nil {
+            thread.title = earlier.title
+            thread.job = earlier.job
+        }
         ThreadStore.save(thread)
         history = ThreadStore.recent()
     }
@@ -622,10 +632,49 @@ final class ChatSession: ObservableObject {
     /// Reloads the thread list after something else saved a thread, such as an automation run.
     func refreshHistory() { history = ThreadStore.recent() }
 
+    /// A background job saved `thread`. When it is the one on screen and no turn of the chat's own is running, the
+    /// transcript shows the job's new steps.
+    func threadSaved(_ thread: ChatThread) {
+        refreshHistory()
+        guard thread.id == threadID, !isRunning else { return }
+        let sent = Set(thread.items.compactMap { item -> String? in
+            if case .user(let text) = item.kind { return text } else { return nil }
+        })
+        // Messages typed here that the job has not started on yet are not in its transcript.
+        jobMessages.removeAll { sent.contains($0.sent) }
+        items = thread.items + jobMessages.map(\.item)
+    }
+
+    /// What a message typed in a job's thread sends to the job.
+    static func jobMessage(_ text: String, reply: Reply?, files: [URL]) -> String {
+        var message = reply.map { replyPrompt($0, text: text) } ?? text
+        if !files.isEmpty { message += (message.isEmpty ? "" : "\n\n") + "Attached files:\n" + files.map { "- \($0.path)" }.joined(separator: "\n") }
+        return message
+    }
+
+    /// Messages typed into the open job thread that are waiting for the job's current turn to end.
+    private var jobMessages: [(item: Item, sent: String)] = []
+
+    /// Takes a message typed in a thread whose background job is still running (thread id, text). Returns false when no
+    /// job runs there, so the chat sends it itself.
+    var jobFollowUp: ((String, String) -> Bool)?
+
     func send() {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !attachments.isEmpty else { return }
         speech.stop()
+        // A second process on the job's session would race it, so everything typed here goes to the job: a reply as its
+        // quoted prompt, attachments as their paths.
+        let message = Self.jobMessage(prompt, reply: replyingTo, files: attachments)
+        if !isRunning, let threadID, jobFollowUp?(threadID, message) == true {
+            let item = Item(kind: .user(prompt.isEmpty ? "Attached files" : prompt), origin: Self.jobOrigin, reply: replyingTo)
+            attachments = []
+            replyingTo = nil
+            items.append(item)
+            jobMessages.append((item, message))
+            input = ""
+            return
+        }
         if isRunning {
             queue.append(QueuedMessage(text: prompt, attachments: attachments, reply: replyingTo))
             input = ""
@@ -663,6 +712,7 @@ final class ChatSession: ObservableObject {
         let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
         telegramChat = telegram
         turnSpoken = telegram == nil && automation == nil
+        turnAskedApproval = false
         if let telegram { onTelegram?(telegram, .started) }
         automationRun = automation
         if let automation { onAutomation?(automation, .started) }
@@ -766,23 +816,26 @@ final class ChatSession: ObservableObject {
         onAutomation?(id, error.map { .failed($0) } ?? (noChange ? .noChange : .finished))
     }
 
-    /// Removes an automation's prompt and reply from the transcript when the reply is exactly its `quiet` text.
-    /// Returns true when it did. Any other reply stays as a normal automation turn.
+    /// Removes an automation's whole turn from the transcript when its final reply is exactly its `quiet` text. Tool
+    /// calls do not matter, since a check runs tools before it finds nothing to report. The turn stays when the agent
+    /// wrote any other text, asked for an approval or a form. A message the user typed waits in the queue, so it is never in the removed range. Returns true when it removed the turn.
     private func hideQuietTurn() -> Bool {
         guard let id = automationRun, let quiet = quietReply(id)?.trimmingCharacters(in: .whitespacesAndNewlines), !quiet.isEmpty,
+              !turnAskedApproval,
               let start = items.lastIndex(where: { if case .user = $0.kind { return true } else { return false } }),
               items[start].origin == Self.automationOrigin,
               lastAnswer()?.trimmingCharacters(in: .whitespacesAndNewlines) == quiet else { return false }
-        // The reply is the whole turn. Tool calls or other text before the line mean the agent did something.
         let rest = items[(start + 1)...]
-        let onlyTheLine = rest.allSatisfy { item in
-            if case .assistant(let text) = item.kind {
+        let onlyQuiet = rest.allSatisfy { item in
+            switch item.kind {
+            case .tool: return true
+            case .assistant(let text):
                 let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 return t.isEmpty || t == quiet
+            default: return false
             }
-            return false
         }
-        guard onlyTheLine else { return false }
+        guard onlyQuiet else { return false }
         items.removeSubrange(start...)
         return true
     }
@@ -1019,6 +1072,7 @@ final class ChatSession: ObservableObject {
             return
         }
         approvals.append(approval)
+        turnAskedApproval = true
         if let chat = telegramChat { onTelegram?(chat, .approval(id: approval.id, title: approval.title, detail: approval.detail)) }
         if !isVisible { onApprovalNeeded?(approval) }
     }

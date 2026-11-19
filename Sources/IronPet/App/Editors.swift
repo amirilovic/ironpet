@@ -94,6 +94,6 @@ enum Editors {
     }
 
     @MainActor static func label(for session: AgentSession) -> String {
-        "Open in \(target(for: session).name)"
+        session.source == .job ? "Open the job's thread" : "Open in \(target(for: session).name)"
     }
 }

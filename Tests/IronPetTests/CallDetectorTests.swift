@@ -233,3 +233,168 @@ private final class LockedCounter: @unchecked Sendable {
     func increment() { lock.lock(); n += 1; lock.unlock() }
     var value: Int { lock.lock(); defer { lock.unlock() }; return n }
 }
+
+final class MicIgnoreListTests: XCTestCase {
+    private let dictate = MicClient(pid: 200, bundleID: "com.example.dictate")
+    private let helper = MicClient(pid: 201, bundleID: "com.example.dictate.helper.Renderer")
+    private let zoom = MicClient(pid: 202, bundleID: "us.zoom.xos")
+
+    private func app(_ c: MicClient, ignored: [String]) -> String? {
+        CallApps.app(for: c, ownPID: 1, ownBundleID: "dev.ironpet", ignored: ignored)
+    }
+
+    func testUserEntryIgnoresTheAppAndItsHelpers() {
+        XCTAssertEqual(app(dictate, ignored: []), "com.example.dictate")
+        XCTAssertNil(app(dictate, ignored: ["com.example.dictate"]))
+        XCTAssertNil(app(helper, ignored: ["com.example.dictate"]))
+        XCTAssertNil(app(dictate, ignored: ["COM.Example.Dictate"]))
+        XCTAssertEqual(app(zoom, ignored: ["com.example.dictate"]), "us.zoom.xos")
+    }
+
+    func testBuiltInsStayIgnoredWithAnEmptyList() {
+        for id in ["com.apple.Siri", "com.apple.dictation", "com.electron.wispr-flow"] {
+            XCTAssertNil(app(MicClient(pid: 5, bundleID: id), ignored: []), id)
+        }
+    }
+
+    func testOldConfigWithoutTheKeyLoadsEmpty() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("cfg-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data(#"{"meetings":{"enabled":true}}"#.utf8).write(to: file)
+        let loaded = Config.load(from: file)
+        XCTAssertNil(loaded.error)
+        XCTAssertEqual(loaded.config.meetings.ignoredMicApps, [])
+        XCTAssertTrue(loaded.config.meetings.enabled)
+    }
+
+    func testConfigKeyRoundTripsAndDropsBadEntries() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("cfg-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data(#"{"meetings":{"ignoredMicApps":["com.example.dictate"," ","com.","com.Example.Dictate","x"]}}"#.utf8).write(to: file)
+        XCTAssertEqual(Config.load(from: file).config.meetings.ignoredMicApps, ["com.example.dictate"])
+    }
+
+    func testDetectorReadsTheCurrentListOnEveryTick() {
+        var list: [String] = []
+        var time = Date(timeIntervalSince1970: 1000)
+        let d = CallDetector(source: { [self.dictate] }, now: { time }, debounce: 0, ownPID: 1, ownBundleID: "dev.ironpet",
+                             ignored: { list })
+        d.tick()
+        XCTAssertEqual(d.activeApps, ["com.example.dictate"])
+        list = ["com.example.dictate"]
+        time += 1
+        d.tick()
+        XCTAssertEqual(d.activeApps, [])
+    }
+
+    @MainActor func testMicWatchHonoursTheList() {
+        var list = ["com.example.dictate"]
+        let clients = [dictate]
+        let monitor = CallMonitor(detector: CallDetector(source: { [] }, debounce: 0, ownPID: 1, ownBundleID: "dev.ironpet",
+                                                         ignored: { list }), query: { clients })
+        let watch = MicWatch(monitor: monitor)
+        let done = expectation(description: "polled")
+        monitor.onPolled = { done.fulfill() }
+        _ = watch.calls()
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(watch.calls(), [])
+        list = []
+        monitor.detector.tick()
+        XCTAssertEqual(watch.calls(), ["com.example.dictate"])
+        watch.stop()
+    }
+
+    func testValidation() {
+        let own = "dev.ironpet"
+        func result(_ s: String, _ existing: [String] = []) -> MicIgnoreList.Rejection? {
+            if case .failure(let r) = MicIgnoreList.validate(s, existing: existing, ownBundleID: own) { return r }
+            return nil
+        }
+        XCTAssertEqual(result(""), .empty)
+        XCTAssertEqual(result("   "), .empty)
+        XCTAssertEqual(result("com"), .tooShort)
+        XCTAssertEqual(result("com."), .tooShort)
+        XCTAssertEqual(result(".app"), .tooShort)
+        XCTAssertEqual(result("com.exa mple"), .hasSpaces)
+        XCTAssertEqual(result("dev.IronPet"), .ironpet)
+        XCTAssertEqual(result("com.example.a", ["com.Example.A"]), .duplicate)
+        XCTAssertEqual(result("com.apple.dictation"), .alreadyBuiltIn)
+        XCTAssertNil(result("  com.example.a  "))
+        XCTAssertEqual(try? MicIgnoreList.validate(" com.example.a ").get(), "com.example.a")
+    }
+}
+
+@MainActor
+final class MicIgnoreModelTests: XCTestCase {
+    private var saved: [String] = []
+
+    private func model(recent: [String] = [], entries: [String] = []) -> MicIgnoreModel {
+        saved = entries
+        return MicIgnoreModel(entries: { [unowned self] in saved }, save: { [unowned self] in saved = $0 }, recent: recent,
+                              reader: { [] }, nameFor: { $0 == "com.example.dictate" ? "Dictate" : nil }, ownBundleID: "dev.ironpet")
+    }
+
+    func testAddAndRemove() {
+        let m = model()
+        XCTAssertNil(m.add("com.example.dictate"))
+        XCTAssertEqual(saved, ["com.example.dictate"])
+        XCTAssertEqual(m.rows, [.init(bundleID: "com.example.dictate", name: "Dictate")])
+        XCTAssertEqual(m.rows.first?.title, "Dictate (com.example.dictate)")
+        XCTAssertEqual(m.add("com.example.dictate"), .duplicate)
+        XCTAssertEqual(m.add("com."), .tooShort)
+        XCTAssertEqual(m.add("dev.ironpet"), .ironpet)
+        XCTAssertEqual(m.add(" "), .empty)
+        XCTAssertEqual(saved, ["com.example.dictate"])
+        m.remove("com.example.dictate")
+        XCTAssertEqual(saved, [])
+    }
+
+    func testSuggestionsSkipIgnoredAndSystemApps() {
+        let m = model(recent: ["com.example.dictate", "com.example.dictate.helper", "us.zoom.xos", "com.apple.Siri",
+                               "com.apple.coreaudiod", "dev.ironpet", "com.example.other"],
+                      entries: ["com.example.other"])
+        XCTAssertEqual(m.suggestions.map(\.bundleID), ["com.example.dictate", "us.zoom.xos"])
+    }
+
+    func testLoadRecentUsesTheReader() async {
+        saved = []
+        let m = MicIgnoreModel(entries: { [] }, save: { _ in },
+                               reader: { [MicClient(pid: 9, bundleID: "com.example.dictate.helper")] }, nameFor: { _ in nil },
+                               ownBundleID: "dev.ironpet")
+        await m.loadRecent()
+        XCTAssertEqual(m.suggestions.map(\.bundleID).first, "com.example.dictate")
+    }
+}
+
+@MainActor
+final class CallOfferTests: XCTestCase {
+    func testAlwaysIgnoreAddsTheParentIdAndClosesWithoutRecording() {
+        var saved: [String] = []
+        var recorded = false, snoozed = false, closed = false
+        let model = MicIgnoreModel(entries: { saved }, save: { saved = $0 }, ownBundleID: "dev.ironpet")
+        let actions = CallOffer.recordActions(
+            bundleID: "com.example.dictate.helper.Renderer", name: "Dictate", ignore: model,
+            record: { recorded = true }, notNow: { snoozed = true }, close: { closed = true })
+        XCTAssertEqual(actions.map(\.title), ["Record", "Not now", "Always ignore Dictate"])
+        actions[2].run()
+        XCTAssertEqual(saved, ["com.example.dictate"])
+        XCTAssertTrue(closed)
+        XCTAssertFalse(recorded)
+        XCTAssertFalse(snoozed)
+        // Pressing it again, or for a built-in, still closes and adds nothing.
+        closed = false
+        actions[2].run()
+        XCTAssertEqual(saved, ["com.example.dictate"])
+        XCTAssertTrue(closed)
+    }
+
+    func testRecordAndNotNowStillWork() {
+        var log: [String] = []
+        let model = MicIgnoreModel(entries: { [] }, save: { _ in }, ownBundleID: nil)
+        let actions = CallOffer.recordActions(bundleID: "us.zoom.xos", name: "zoom", ignore: model,
+                                              record: { log.append("record") }, notNow: { log.append("notNow") }, close: { log.append("close") })
+        actions[0].run()
+        actions[1].run()
+        XCTAssertEqual(log, ["close", "record", "notNow", "close"])
+    }
+}

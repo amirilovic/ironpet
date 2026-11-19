@@ -49,23 +49,13 @@ enum AutomationSession {
 
         let state = AutomationPrompt.Box()
         var sessionID: String?
-        var items: [ChatSession.Item] = []
-        var toolRows: [String: Int] = [:]
+        var transcript = TranscriptRecorder()
         let task = Task { @MainActor in
             await run?(turn) { event in
+                transcript.record(event)
                 switch event {
                 case .session(let id): sessionID = id
-                case .assistant(let chunk):
-                    state.answer += chunk
-                    if let last = items.last, case .assistant(let text) = last.kind { items[items.count - 1].kind = .assistant(text + chunk) }
-                    else { items.append(.init(kind: .assistant(chunk))) }
-                case .toolStarted(let id, let summary):
-                    toolRows[id] = items.count
-                    items.append(.init(kind: .tool(summary, ok: nil)))
-                case .toolUpdated(let id, let summary):
-                    if let row = toolRows[id], case .tool(_, let ok) = items[row].kind { items[row].kind = .tool(summary, ok: ok) }
-                case .toolFinished(let id, let ok):
-                    if let row = toolRows[id], case .tool(let summary, _) = items[row].kind { items[row].kind = .tool(summary, ok: ok) }
+                case .assistant(let chunk): state.answer += chunk
                 case .finished(let error): state.finish(error.map { .failure(.init(message: $0)) } ?? .success(state.answer))
                 case .needsSignIn: state.finish(.failure(.init(message: "\(agent.name) needs you to sign in. Open it in the chat once, then try again.")))
                 case .needsRuntime: state.finish(.failure(.init(message: "\(agent.name) needs Node 22 or Bun. Open it in the chat once to set that up.")))
@@ -84,7 +74,8 @@ enum AutomationSession {
         backend?.cancel()
         backend?.shutdown()
 
-        if case .failure(let error) = result { items.append(.init(kind: .error(error.message))) }
+        if case .failure(let error) = result { transcript.append(.init(kind: .error(error.message))) }
+        let items = transcript.items
         if let sessionID {
             let resumed = earlier.flatMap { $0.id == sessionID ? $0 : nil }
             let first = ChatSession.Item(kind: .user(prompt), origin: ChatSession.automationOrigin)

@@ -40,13 +40,18 @@ struct Config: Codable, Equatable {
     /// Spoken replies: Ghost reads chat replies aloud with a voice from an OpenAI-compatible speech server. Uses the
     /// server in `voice` (base URL, Keychain key).
     struct Speech: Codable, Equatable {
-        /// Off by default: turning it on sends reply text to the voice server.
+        /// Off by default: turning it on reads each reply to a chat message aloud, which sends its text to the voice
+        /// server. With it off, text is sent only when the user presses a reply's speaker button.
         var enabled = false
         var model = Speech.defaultModel
         /// One of the model's voices, such as Kokoro's `am_puck` or OpenAI's `nova`.
         var voice = Speech.defaultVoice
         /// Playback speed sent with each request; 1 is the model's normal pace.
         var speed = Speech.defaultSpeed
+
+        /// Whether a speech model is set, which is all the speaker button needs. `enabled` only governs reading
+        /// replies aloud automatically.
+        var canSpeak: Bool { !model.trimmingCharacters(in: .whitespaces).isEmpty }
 
         static let defaultModel = "mlx-community/Kokoro-82M-bf16"
         static let defaultVoice = "am_puck"
@@ -69,6 +74,9 @@ struct Config: Codable, Equatable {
         var autoSummary = true
         /// Ghost offers to record when another app holds the microphone for a call. Only applies with `enabled` on.
         var offerToRecordCalls = true
+        /// Bundle id prefixes of apps that never count as a call, on top of the built-in list in `CallApps`. Dictation
+        /// and voice assistants go here. Applies to call offers and to holding back spoken replies.
+        var ignoredMicApps: [String] = []
         /// Splits "Them" into individual speakers and recognises voices the user has named. Off by default because
         /// voiceprints are biometric data. Turning it on downloads the models once.
         var recogniseSpeakers = false
@@ -129,6 +137,14 @@ struct Config: Codable, Equatable {
         var dueReminders = true
         /// Done tasks older than this many days are deleted, with their history.
         var keepDoneDays = 30
+    }
+
+    /// Background jobs: work an agent hands off to its own agent session (`jobs_start`), each with a task in the Tasks section.
+    struct Jobs: Codable, Equatable {
+        /// Jobs running at once. A job started past this waits in line.
+        var maxRunning = 3
+
+        static let maxRunningRange = 1...5
     }
 
     /// After the user has been away for `reminders.idleResetMinutes`, one bubble sums up what happened meanwhile. Built from
@@ -224,6 +240,7 @@ struct Config: Codable, Equatable {
     var automations = Automations()
     var skills = Skills()
     var tasks = Tasks()
+    var jobs = Jobs()
     var welcomeBack = WelcomeBack()
     var voice = Voice()
     var speech = Speech()
@@ -283,6 +300,7 @@ struct Config: Codable, Equatable {
         c.reminders.snoozeMinutes = max(1, c.reminders.snoozeMinutes)
         c.automations.logRetentionDays = min(365, max(1, c.automations.logRetentionDays))
         c.tasks.keepDoneDays = min(365, max(1, c.tasks.keepDoneDays))
+        c.jobs.maxRunning = min(Jobs.maxRunningRange.upperBound, max(Jobs.maxRunningRange.lowerBound, c.jobs.maxRunning))
         c.voice.baseUrl = c.voice.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         c.voice.model = c.voice.model.trimmingCharacters(in: .whitespacesAndNewlines)
         c.speech.model = c.speech.model.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -292,6 +310,7 @@ struct Config: Codable, Equatable {
         c.speech.speed = c.speech.speed.isFinite
             ? min(Speech.speedRange.upperBound, max(Speech.speedRange.lowerBound, c.speech.speed)) : Speech.defaultSpeed
         if c.meetings.summaryModel?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.meetings.summaryModel = nil }
+        c.meetings.ignoredMicApps = MicIgnoreList.normalized(c.meetings.ignoredMicApps)
         c.screenCapture.retentionDays = min(365, max(1, c.screenCapture.retentionDays))
         return c
     }
