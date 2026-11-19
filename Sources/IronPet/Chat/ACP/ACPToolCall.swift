@@ -121,14 +121,16 @@ enum ApprovalRules {
     }
 
     /// ironpet's own task tools only read and write rows in `ironpet.db` and run nothing, like memory-note edits. Delete still asks. The
-    /// `screen_*` tools only read the stored, redacted captures.
-    static let ownTaskTools: Set<String> = ["tasks_list", "tasks_get", "tasks_create", "tasks_update", "tasks_close", "tasks_suggest",
+    /// `screen_*` tools only read the stored, redacted captures. Of the assistant tools, those that start, steer or stop a job still ask.
+    static let ownTaskTools: Set<String> = Set(["tasks_list", "tasks_get", "tasks_create", "tasks_update", "tasks_close", "tasks_suggest",
                                          "tasks_suggestions_list", "tasks_suggestion_accept", "tasks_suggestion_reject",
-                                         "screen_search", "screen_window"]
+                                         "screen_search", "screen_window"]).union(AssistantMCP.ownTools)
 
     /// Agents that name MCP tools `mcp__<server>__<tool>` must name the ironpet server; others report the bare tool name.
     static func isOwnTaskTool(server: String?, tool: String) -> Bool {
         guard ownTaskTools.contains(tool) else { return false }
+        // Names as plain as memory_forget could belong to another server, so those need ironpet named.
+        if AssistantMCP.ownTools.contains(tool) { return server == "ironpet" }
         return server == nil || server == "ironpet"
     }
 

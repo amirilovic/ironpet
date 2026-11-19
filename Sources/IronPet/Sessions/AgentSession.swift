@@ -2,6 +2,8 @@ import Foundation
 
 enum AgentSource: String {
     case cursor, claude, codex, gemini, copilot, pi
+    /// A background job ironpet runs itself (`JobService`), not a session a hook reported.
+    case job
 
     var displayName: String {
         switch self {
@@ -11,6 +13,7 @@ enum AgentSource: String {
         case .gemini: return "Gemini CLI"
         case .copilot: return "GitHub Copilot"
         case .pi: return "Pi"
+        case .job: return "Background job"
         }
     }
 }

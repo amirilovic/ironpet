@@ -84,6 +84,8 @@ final class ChatSession: ObservableObject {
 
     static let telegramOrigin = "telegram"
     static let automationOrigin = "automation"
+    /// A prompt or follow-up that a background job ran (`JobService`).
+    static let jobOrigin = "job"
 
     struct Approval: Identifiable {
         let id = UUID()
@@ -578,6 +580,7 @@ final class ChatSession: ObservableObject {
         replyingTo = nil
         items = []
         threadID = nil
+        jobMessages = []
         state = .idle
         lastRunDuration = nil
     }
@@ -594,6 +597,7 @@ final class ChatSession: ObservableObject {
         replyingTo = nil
         items = thread.items
         threadID = thread.id
+        jobMessages = []
         state = .idle
         let url = URL(fileURLWithPath: thread.workspace)
         workspace = url
@@ -615,6 +619,10 @@ final class ChatSession: ObservableObject {
             thread.automationName = earlier.automationName
             thread.runs = earlier.runs
         }
+        if let earlier = ThreadStore.load(threadID), earlier.job != nil {
+            thread.title = earlier.title
+            thread.job = earlier.job
+        }
         ThreadStore.save(thread)
         history = ThreadStore.recent()
     }
@@ -622,10 +630,49 @@ final class ChatSession: ObservableObject {
     /// Reloads the thread list after something else saved a thread, such as an automation run.
     func refreshHistory() { history = ThreadStore.recent() }
 
+    /// A background job saved `thread`. When it is the one on screen and no turn of the chat's own is running, the
+    /// transcript shows the job's new steps.
+    func threadSaved(_ thread: ChatThread) {
+        refreshHistory()
+        guard thread.id == threadID, !isRunning else { return }
+        let sent = Set(thread.items.compactMap { item -> String? in
+            if case .user(let text) = item.kind { return text } else { return nil }
+        })
+        // Messages typed here that the job has not started on yet are not in its transcript.
+        jobMessages.removeAll { sent.contains($0.sent) }
+        items = thread.items + jobMessages.map(\.item)
+    }
+
+    /// What a message typed in a job's thread sends to the job.
+    static func jobMessage(_ text: String, reply: Reply?, files: [URL]) -> String {
+        var message = reply.map { replyPrompt($0, text: text) } ?? text
+        if !files.isEmpty { message += (message.isEmpty ? "" : "\n\n") + "Attached files:\n" + files.map { "- \($0.path)" }.joined(separator: "\n") }
+        return message
+    }
+
+    /// Messages typed into the open job thread that are waiting for the job's current turn to end.
+    private var jobMessages: [(item: Item, sent: String)] = []
+
+    /// Takes a message typed in a thread whose background job is still running (thread id, text). Returns false when no
+    /// job runs there, so the chat sends it itself.
+    var jobFollowUp: ((String, String) -> Bool)?
+
     func send() {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !attachments.isEmpty else { return }
         speech.stop()
+        // A second process on the job's session would race it, so everything typed here goes to the job: a reply as its
+        // quoted prompt, attachments as their paths.
+        let message = Self.jobMessage(prompt, reply: replyingTo, files: attachments)
+        if !isRunning, let threadID, jobFollowUp?(threadID, message) == true {
+            let item = Item(kind: .user(prompt.isEmpty ? "Attached files" : prompt), origin: Self.jobOrigin, reply: replyingTo)
+            attachments = []
+            replyingTo = nil
+            items.append(item)
+            jobMessages.append((item, message))
+            input = ""
+            return
+        }
         if isRunning {
             queue.append(QueuedMessage(text: prompt, attachments: attachments, reply: replyingTo))
             input = ""

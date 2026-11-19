@@ -10,6 +10,7 @@ The design is `SPEC.md`. Swift 5.10 tools (Swift 5 language mode), macOS 14 mini
 | `App/` | App glue: `AppDelegate` (menus, status, wiring), Settings and welcome windows, hotkeys (Carbon), login item, notifications (`Notifier`), speech-bubble announcements (`Announcer`), jumping to a session's terminal or editor (`SourceJumper`, `Editors`), `TestControl` (`/test/*`, test mode only), `PreviewRenderer` (README screenshots) |
 | `Pet/` | The pet window and sprite atlas (`PetController`, `PetView`, `Atlas`, `PetMood`), speech bubbles, the ironpet window (`IronPetPanel`: chat, agents, alerts, tasks, transcripts, actions, automations and Today in one sidebar window) |
 | `Brief/` | The morning brief and recap: `BriefBuilder` (pure, local data only), `BriefSource` and `BriefModel` (gather from the stores, feed the Today page) |
+| `Jobs/` | Background jobs (`JobService`, `Job`, migration 500), folder matching (`ProjectResolver`), and the `jobs_*`, `status_*`, `memory_*` and `projects_resolve` tools (`AssistantMCP`, `AssistantContext`) |
 | `Sessions/` | Watched agent sessions: hook event mapping to status (`SessionStore`, `AgentSession`), process ancestry (`ProcessTree`) |
 | `Hooks/` | The hook shell script (`HookScript`) and merging it into each agent's config, with backups and uninstall (`HookInstaller`) |
 | `Bridge/` | Local HTTP server on `127.0.0.1` with the token (`EventServer`), the status snapshot it serves |
