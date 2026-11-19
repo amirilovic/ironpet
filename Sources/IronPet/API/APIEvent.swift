@@ -70,7 +70,8 @@ final class APIEventBus {
     func replay(after seq: Int) -> (events: [APIEvent], gap: Bool) {
         let missed = buffer.filter { $0.seq > seq }
         let oldest = buffer.first?.seq ?? (lastSeq + 1)
-        return (missed, seq + 1 < oldest)
+        // A `seq` above `lastSeq` comes from an earlier launch, whose numbers restarted: the client must re-read everything.
+        return (missed, seq + 1 < oldest || seq > lastSeq)
     }
 
     /// Calls `handler` with every later event. With `after`, it first gets the buffered events above that `seq`, in order, before

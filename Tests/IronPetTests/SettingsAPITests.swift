@@ -59,6 +59,12 @@ final class SettingsAPITests: XCTestCase {
         XCTAssertEqual(api.settings.config.pet.name, Config.Pet().name)
     }
 
+    func testMemoryReflectAgentAndModelCanBeSetOnADefaultConfig() throws {
+        let result = try api.settings.patch(PatchSettingsRequest(patch: #"{"memory": {"reflectAgent": "claude", "reflectModel": "fast"}}"#))
+        XCTAssertEqual(result.memory.reflectAgent, "claude")
+        XCTAssertEqual(result.memory.reflectModel, "fast")
+    }
+
     func testChangesPublishSettingsChangedOncePerChange() throws {
         _ = try api.settings.patch(PatchSettingsRequest(patch: #"{"pet": {"name": "Pip"}}"#))
         _ = try api.settings.patch(PatchSettingsRequest(patch: #"{"pet": {"name": "Pip"}}"#))

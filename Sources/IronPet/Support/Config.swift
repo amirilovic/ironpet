@@ -287,7 +287,7 @@ struct Config: Codable, Equatable {
     static let file = Paths.root.appendingPathComponent("config.json")
 
     /// Settings that have no value until set, so the encoded defaults leave them out. `SettingsAPI.patch` accepts these.
-    static let optionalKeys: Set<String> = ["pet.sprite", "meetings.summaryModel", "chat.customImage"]
+    static let optionalKeys: Set<String> = ["pet.sprite", "meetings.summaryModel", "chat.customImage", "memory.reflectAgent", "memory.reflectModel"]
 
     /// Reads the file, laying it over the defaults. An unreadable or invalid file gives the defaults plus an error.
     static func load(from file: URL = Config.file) -> (config: Config, error: String?) {

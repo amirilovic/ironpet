@@ -48,6 +48,14 @@ final class APIEventTests: XCTestCase {
         XCTAssertEqual(seen, [3, 4, 5])
     }
 
+    func testSeqFromAnEarlierLaunchReportsAGap() {
+        let bus = APIEventBus()
+        bus.publish(.agentsChanged)
+        XCTAssertTrue(bus.replay(after: 900).gap)
+        XCTAssertFalse(bus.replay(after: 1).gap)
+        XCTAssertTrue(APIEventBus().replay(after: 10).gap)
+    }
+
     func testCancelStopsDelivery() {
         let bus = APIEventBus()
         var count = 0

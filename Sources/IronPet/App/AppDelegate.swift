@@ -139,7 +139,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wispr.onDictation = { [weak self] text in self?.chat.receiveDictation(text) }
         pet.onChatShown = { [weak self] shown in self?.chatShown(shown) }
         pet.onWindowClosed = { [weak self] in self?.restorePreviousApp() }
-        settingsModel.voice = api.voice
         meeting.onLabelSpeakers = { [weak self] in self?.showSettings(tab: "meetings") }
         announcer.bubbles.onDismissed = { [weak self] id in self?.meetingBubbleClosed(id) }
         pet.onRecordingClick = { [weak self] in self?.showMeetingBubble() }
@@ -180,12 +179,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.activity?.record(.chatFinished(title))
             self?.announcer.chat(title)
         }
-        telegram.onPairingRequest = { [weak self] request in
-            self?.announcer.telegramPairing(request, allow: { self?.telegram.allow(request.id) },
-                                            deny: { self?.telegram.deny(request.id) })
-        }
-        telegram.onPairingResolved = { [weak self] id in self?.announcer.clearTelegramPairing(id: id) }
-        if config.config.telegram.enabled { telegram.setEnabled(true) }
         chat.onApprovalNeeded = { [weak self] approval in
             self?.announcer.approval(id: approval.id, title: approval.title, detail: approval.detail)
         }
@@ -205,6 +198,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         setUpAutomations()
+        // These read `api`, which `setUpAutomations()` builds.
+        settingsModel.voice = api.voice
+        telegram.onPairingRequest = { [weak self] request in
+            self?.announcer.telegramPairing(request, allow: { self?.telegram.allow(request.id) },
+                                            deny: { self?.telegram.deny(request.id) })
+        }
+        telegram.onPairingResolved = { [weak self] id in self?.announcer.clearTelegramPairing(id: id) }
+        if config.config.telegram.enabled { telegram.setEnabled(true) }
         do {
             try startServer()
         } catch {
