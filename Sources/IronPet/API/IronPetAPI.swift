@@ -44,6 +44,7 @@ final class IronPetAPI {
     let chat: ChatAPI
     let meetings: MeetingsAPI
     let settings: SettingsAPI
+    let voice: VoiceAPI
     let today: TodayAPI
     private(set) var usage: UsageAPI?
     /// Set once screen capture, desktop control and the assistant tools exist. Until then a client gets `unavailable`.
@@ -73,6 +74,7 @@ final class IronPetAPI {
         settings = SettingsAPI(store: stores.config)
         pet = PetAPI(settings: settings, library: stores.petFolders.library, bundled: stores.petFolders.bundled,
                      backgrounds: stores.petFolders.backgrounds)
+        voice = VoiceAPI(speech: stores.chat.speech, settings: settings)
         pet.events = events
         today = TodayAPI(tasks: tasks, sessions: stores.sessions, signals: stores.signals)
         if let usageStore = stores.usage {

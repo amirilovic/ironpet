@@ -779,7 +779,7 @@ struct ChatView: View {
                 AssistantBubble(text: text, date: item.date, highlighted: highlightedID == item.id,
                                 onReply: { session.reply(to: item) }, onAsk: { askAbout(item) }, onCopy: { copyText(item, text) },
                                 onHoverChange: { hoverChanged(item.id, $0) }, find: highlights[item.id],
-                                speech: config.config.speech.enabled ? SpeakButton.State(speaking: session.speech.speakingID == item.id,
+                                speech: config.config.speech.enabled ? SpeakButton.State(speaking: session.speakingID == item.id,
                                                                                          toggle: { session.toggleSpeech(item) }) : nil)
             case .tool:
                 EmptyView()

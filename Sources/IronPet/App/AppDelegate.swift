@@ -68,6 +68,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             remove: { id in ConfigStore.shared.update { $0.telegram.allowedUsers.removeAll { $0.id == id } } },
             offset: { UserDefaults.standard.integer(forKey: "telegramOffset") },
             setOffset: { UserDefaults.standard.set($0, forKey: "telegramOffset") }),
+        voiceEnabled: { ConfigStore.shared.config.voice.enabled },
+        transcribe: { [weak self] audio, name in
+            guard let self else { throw APIError.unavailable("ironpet is not ready") }
+            return try await self.api.voice.transcribe(TranscribeRequest(audio: audio, fileName: name, mime: TelegramVoice.mime(for: name)))
+        },
         petName: { ConfigStore.shared.config.pet.name })
     private lazy var settingsWindow = SettingsWindow(model: settingsModel)
     private lazy var settingsModel = SettingsModel(actions: .init(

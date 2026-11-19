@@ -212,6 +212,8 @@ final class ChatAPI: ObservableObject {
     // Voice, until the voice API replaces it.
     var voice: VoiceController { session.voice }
     var speech: SpeechPlayer { session.speech }
+    /// The chat message being read aloud, so its speaker button shows Stop.
+    var speakingID: UUID? { session.speech.speakingID }
     var voiceRetryItem: UUID? { session.voiceRetryItem }
     func toggleSpeech(_ item: ChatItem) { session.toggleSpeech(item) }
     func retryVoice() { session.retryVoice() }
