@@ -636,7 +636,12 @@ struct ChatView: View {
     }
 
     /// Which message the pointer is over. A plain object, not state, so moving the pointer does not re-render the transcript.
-    final class HoverTracker { var current: UUID?; var buttonFrame: CGRect = .zero }
+    final class HoverTracker {
+        var current: UUID?
+        /// The message the pointer was over at mouse-down. A drag that ends outside the row still selected text there.
+        var pressed: UUID?
+        var buttonFrame: CGRect = .zero
+    }
 
     private func hoverChanged(_ id: UUID, _ hovering: Bool) {
         if hovering { hoverTracker.current = id } else if hoverTracker.current == id { hoverTracker.current = nil }
@@ -659,7 +664,9 @@ struct ChatView: View {
     /// After a mouse-up, checks whether text is selected in the message under the pointer and shows the Ask button there.
     private func selectionMayHaveChanged(_ event: NSEvent) {
         if selectionAsk != nil, hoverTracker.buttonFrame.contains(CGPoint(x: event.locationInWindow.x, y: event.locationInWindow.y)) { return }
-        guard let id = hoverTracker.current, let item = session.items.first(where: { $0.id == id }),
+        let pressed = hoverTracker.pressed
+        hoverTracker.pressed = nil
+        guard let id = pressed ?? hoverTracker.current, let item = session.items.first(where: { $0.id == id }),
               let window = event.window, window == NSApp.keyWindow else { selectionAsk = nil; return }
         let point = CGPoint(x: event.locationInWindow.x, y: (window.contentView?.bounds.height ?? 0) - event.locationInWindow.y)
         DispatchQueue.main.async {
@@ -669,7 +676,8 @@ struct ChatView: View {
 
     private func installSelectionMonitor() {
         guard selectionMonitor == nil else { return }
-        selectionMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .scrollWheel]) { event in
+        selectionMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .scrollWheel]) { event in
+            if event.type == .leftMouseDown { hoverTracker.pressed = hoverTracker.current; return event }
             if event.type == .scrollWheel { if selectionAsk != nil { selectionAsk = nil } } else { selectionMayHaveChanged(event) }
             return event
         }

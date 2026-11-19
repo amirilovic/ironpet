@@ -8,6 +8,8 @@ enum SelectionProbe {
     /// The selected text, or nil when nothing is selected or the selection is in a text field such as the composer.
     static func selectedText(keepOnPasteboard: Bool = false) -> String? {
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isFieldEditor { return nil }
+        // A transcript text view hands over its selection directly, so the read does not depend on `copy:` and the pasteboard.
+        if let view = NSApp.keyWindow?.firstResponder as? ChatTextView { return selectedText(in: view) }
         let board = NSPasteboard.general
         let before = board.changeCount
         let saved = snapshot(board)
@@ -16,6 +18,15 @@ enum SelectionProbe {
         if !keepOnPasteboard { restore(saved, to: board) }
         guard let text, !text.isEmpty else { return nil }
         return text
+    }
+
+    /// The selection in a transcript text view as the pasteboard would get it, or nil when it is empty.
+    static func selectedText(in view: ChatTextView) -> String? {
+        guard let storage = view.textStorage else { return nil }
+        let range = view.selectedRange()
+        guard range.length > 0, NSMaxRange(range) <= storage.length else { return nil }
+        let text = MarkdownText.plainText(of: storage, in: range).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     private static func snapshot(_ board: NSPasteboard) -> [[(NSPasteboard.PasteboardType, Data)]] {
