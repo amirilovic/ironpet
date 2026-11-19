@@ -41,6 +41,7 @@ final class SlashCommandTests: XCTestCase {
         session.receiveCommands(list)
         await h.model.settle()
         h.model.input = "/co"
+        await h.model.settle()
         XCTAssertEqual(h.model.slashMatches.map(\.name), ["compact"])
         XCTAssertTrue(h.model.completeSlash())
         XCTAssertEqual(h.model.input, "/compact ")
@@ -54,6 +55,7 @@ final class SlashCommandTests: XCTestCase {
         XCTAssertFalse(h.model.dismissSlash())
         h.model.inputChanged(from: "/", to: "/r")
         h.model.input = "/r"
+        await h.model.settle()
         XCTAssertEqual(h.model.slashMatches.map(\.name), ["review"])
     }
 

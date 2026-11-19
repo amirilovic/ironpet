@@ -139,11 +139,28 @@ struct ChatNamedInfo: Codable, Equatable, Identifiable {
     var detail = ""
 }
 
+enum ChatCommandKind: String, Codable {
+    /// A command the agent offers after a slash.
+    case command
+    /// A skill the agent offers after a slash. Agents that report skills as commands show as `command`.
+    case skill
+}
+
+/// One row of the slash popup: what the agent offers after a `/`. A client fetches the list when the user types `/`, then
+/// filters and highlights it itself.
 struct ChatCommandInfo: Codable, Equatable, Identifiable {
     var id: String { name }
     var name: String
     var detail: String
+    /// What to type after the name, such as `<path>`.
     var hint: String?
+    var kind: ChatCommandKind = .command
+}
+
+/// Which agent's commands to list. With `thread`, the agent that thread belongs to; else `agent`; else the open chat's agent.
+struct ChatCommandsRequest: Codable, Equatable {
+    var thread: String?
+    var agent: String?
 }
 
 /// Which agent, model and folder the chat runs with, and what is blocking it.
@@ -162,8 +179,6 @@ struct ChatOptions: Codable, Equatable {
     var installingRuntime: Bool
     /// Ways to sign in when the agent asked for it.
     var signInMethods: [ChatNamedInfo]
-    /// Commands the agent offers after a slash.
-    var commands: [ChatCommandInfo]
 }
 
 /// Everything a client reads about the chat, at one moment.
@@ -247,6 +262,19 @@ final class ChatAPI {
     func threads() async -> [ChatThreadInfo] { currentThreads }
     func options() async -> ChatOptions { currentOptions }
 
+    /// The slash commands for an agent, in the agent's order. The list is data: nothing here depends on what the user has typed. The
+    /// open chat's agent returns what its session reported last; any other agent returns what was kept from its last session.
+    func commands(_ request: ChatCommandsRequest = ChatCommandsRequest()) async throws -> [ChatCommandInfo] {
+        var agentID = request.agent ?? session.agent.id
+        if let thread = request.thread {
+            guard let saved = ThreadStore.load(thread) else { throw APIError.notFound("no thread with id \"\(thread)\"") }
+            agentID = saved.agent
+        }
+        guard AgentCatalog.agent(id: agentID) != nil else { throw APIError.notFound("no agent \"\(agentID)\"") }
+        let list = agentID == session.agent.id ? session.commands : SlashCommand.cached(for: agentID)
+        return list.map { ChatCommandInfo(name: $0.name, detail: $0.detail, hint: $0.hint, kind: .command) }
+    }
+
     private var currentApprovals: [ChatApprovalInfo] { session.approvals.map { ChatApprovalInfo(id: $0.id, title: $0.title, detail: $0.detail) } }
     private var currentForms: [ChatFormInfo] { session.forms.map { ChatFormInfo(id: $0.id, form: $0.form, answers: $0.answers) } }
 
@@ -266,8 +294,7 @@ final class ChatAPI {
                     models: session.models.map { ChatNamedInfo(id: $0.id, name: $0.name) }, folder: session.workspace?.path,
                     folderLabel: session.workspaceLabel, recentFolders: session.recents.map(\.path), needsFolder: session.needsWorkspace,
                     autoMode: session.autoMode, runtimeOffer: session.runtimeOffer, installingRuntime: session.installingRuntime,
-                    signInMethods: session.signInOptions.map { ChatNamedInfo(id: $0.id, name: $0.name, detail: $0.detail) },
-                    commands: session.commands.map { ChatCommandInfo(name: $0.name, detail: $0.detail, hint: $0.hint) })
+                    signInMethods: session.signInOptions.map { ChatNamedInfo(id: $0.id, name: $0.name, detail: $0.detail) })
     }
 
     // MARK: Sending and stopping

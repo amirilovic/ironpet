@@ -74,7 +74,9 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(h.model.model, "fast")
         h.session.receiveCommands([SlashCommand(name: "compact", detail: "Shrink")])
         await settle()
+        XCTAssertTrue(h.model.commands.isEmpty, "nothing is fetched until the user types a slash")
         h.model.input = "/co"
+        await settle()
         XCTAssertEqual(h.model.slashMatches.map(\.name), ["compact"])
         XCTAssertTrue(h.model.completeSlash())
         XCTAssertEqual(h.model.input, "/compact ")

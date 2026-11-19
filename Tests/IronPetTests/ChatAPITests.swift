@@ -260,6 +260,30 @@ final class ChatAPITests: XCTestCase {
         do { try await api.chat.useFolder("/definitely/not/here"); XCTFail("picked a missing folder") } catch { XCTAssertEqual((error as? APIError)?.code, .invalid) }
     }
 
+    func testCommandsAreDataForTheOpenChatsAgentAnotherAgentOrAThread() async throws {
+        session.receiveCommands([SlashCommand(name: "compact", detail: "Shrink", hint: "<focus>"), SlashCommand(name: "review", detail: "Review")])
+        let open = try await api.chat.commands()
+        XCTAssertEqual(open.map(\.name), ["compact", "review"])
+        XCTAssertEqual(open.first?.hint, "<focus>")
+        XCTAssertEqual(open.first?.kind, .command)
+        XCTAssertEqual(open.first?.id, "compact")
+        // No filtering here: the client decides what the user's text matches.
+        let other = AgentCatalog.agent(id: "claude").map(\.id) == session.agent.id ? "cursor" : "claude"
+        let none = try await api.chat.commands(ChatCommandsRequest(agent: other))
+        XCTAssertTrue(none.isEmpty, "an agent that has not run has no kept commands")
+        let saved = ChatThread(id: "cmd-thread", title: "t", workspace: "/tmp", updatedAt: Date(), items: [], agent: other)
+        ThreadStore.save(saved)
+        let viaThread = try await api.chat.commands(ChatCommandsRequest(thread: "cmd-thread"))
+        XCTAssertTrue(viaThread.isEmpty)
+        do { _ = try await api.chat.commands(ChatCommandsRequest(thread: "nope")); XCTFail("listed for a missing thread") } catch {
+            XCTAssertEqual((error as? APIError)?.code, .notFound)
+        }
+        do { _ = try await api.chat.commands(ChatCommandsRequest(agent: "no-such")); XCTFail("listed for a missing agent") } catch {
+            XCTAssertEqual((error as? APIError)?.code, .notFound)
+        }
+        XCTAssertEqual(try JSONDecoder().decode([ChatCommandInfo].self, from: JSONEncoder().encode(open)), open)
+    }
+
     func testEverythingARemoteClientReadsRoundTripsAsJSON() async throws {
         _ = try await send("hi", from: phone)
         await settle()

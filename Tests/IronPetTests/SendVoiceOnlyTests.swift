@@ -86,6 +86,7 @@ final class SendVoiceOnlyTests: XCTestCase {
         session.receiveCommands([SlashCommand(name: "compact", detail: "Shrink")])
         await h.model.settle()
         edit(to: "/co")
+        await h.model.settle()
         XCTAssertTrue(h.model.completeSlash())
         await settle()
         XCTAssertTrue(sent.isEmpty)

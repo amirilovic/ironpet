@@ -140,7 +140,7 @@ final class BoundaryTests: XCTestCase {
             guard isMember, !trimmed.hasPrefix("@discardableResult") else { continue }
             // The engine is handed to the initializer by the app; no client ever sees it.
             if trimmed.hasPrefix("init(") { continue }
-            let signature = trimmed.components(separatedBy: " {").first?.components(separatedBy: " = ").first ?? trimmed
+            let signature = trimmed.components(separatedBy: " {").first ?? trimmed
             for name in Self.typeNames(in: signature) where !codable.contains(name) { problems.append("\(trimmed): \(name) is not a Codable type") }
             let name = trimmed.replacingOccurrences(of: "static ", with: "").dropFirst(5).prefix { $0 != "(" }
             if trimmed.contains("func "), !signature.contains("async"), !["snapshot", "onTurn", "cachedModels"].contains(String(name)) {

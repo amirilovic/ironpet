@@ -18,6 +18,8 @@ final class ChatViewModel: ObservableObject {
     var draftDirectory = FileIntake.directory
     @Published var input = "" {
         didSet {
+            // The popup needs the commands only once the user types a slash.
+            if input.hasPrefix("/"), !oldValue.hasPrefix("/") { read { await $0.refreshCommands() } }
             if DraftPolicy.exceedsLimit(input) {
                 let result = DraftPolicy.apply(input, into: draftDirectory)
                 if let file = result.attachment { attachments.append(file) }
@@ -125,7 +127,8 @@ final class ChatViewModel: ObservableObject {
         case (.chatState, "approvals"?): read { $0.approvals = await $0.api.approvals(); await $0.refreshStatus() }
         case (.chatState, "forms"?): read { $0.forms = await $0.api.forms(); await $0.refreshStatus() }
         case (.chatState, "queue"?): read { $0.queue = await $0.api.queue(); await $0.refreshStatus() }
-        case (.chatState, "options"?): read { await $0.refreshOptions() }
+        case (.chatState, "options"?): read { await $0.refreshOptions(); await $0.refreshCommands() }
+        case (.chatState, "commands"?): read { await $0.refreshCommands() }
         case (.chatState, "threads"?): read { $0.history = await $0.api.threads() }
         case (.chatState, "status"?): read { await $0.refreshStatus() }
         case (.chatState, "draft"?): read { await $0.takeRestoredDraft() }
@@ -142,7 +145,6 @@ final class ChatViewModel: ObservableObject {
         forms = snapshot.forms
         queue = snapshot.queue
         history = snapshot.threads
-        if snapshot.options.commands != options.commands { slash.selection = 0 }
         options = snapshot.options
     }
 
@@ -157,9 +159,19 @@ final class ChatViewModel: ObservableObject {
 
     func refreshStatus() async { status = await api.status() }
 
+    /// Fetches the commands for the popup, only while the input is a slash. The popup's filter, highlight and selection are this
+    /// window's own.
+    func refreshCommands() async {
+        guard input.hasPrefix("/") else { return }
+        let list = ((try? await api.commands()) ?? []).map { SlashCommand(name: $0.name, detail: $0.detail, hint: $0.hint) }
+        if list != commands {
+            commands = list
+            slash.selection = 0
+        }
+    }
+
     func refreshOptions() async {
         let next = await api.options()
-        if next.commands != options.commands { slash.selection = 0 }
         options = next
     }
 
@@ -189,7 +201,8 @@ final class ChatViewModel: ObservableObject {
     var runtimeOffer: String? { options.runtimeOffer }
     var installingRuntime: Bool { options.installingRuntime }
     var signInOptions: [ChatNamedInfo] { options.signInMethods }
-    var commands: [SlashCommand] { options.commands.map { SlashCommand(name: $0.name, detail: $0.detail, hint: $0.hint) } }
+    /// The agent's slash commands as last fetched. They are fetched when the input starts with a slash, not before.
+    @Published private(set) var commands: [SlashCommand] = []
     /// The chat message being read aloud, so its speaker button shows Stop.
     var speakingID: UUID? { voiceAPI.speakingItem }
     var isSpeaking: Bool { voiceAPI.status.speaking }

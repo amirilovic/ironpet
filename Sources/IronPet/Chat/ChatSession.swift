@@ -188,7 +188,7 @@ final class ChatSession: ObservableObject {
         didSet { events?.publish(.chatState, id: "options") }
     }
     @Published private(set) var commands: [SlashCommand] = [] {
-        didSet { events?.publish(.chatState, id: "options") }
+        didSet { events?.publish(.chatState, id: "commands") }
     }
     func receiveCommands(_ list: [SlashCommand]) {
         commands = list
