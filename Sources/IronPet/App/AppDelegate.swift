@@ -188,8 +188,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.pet.refreshMood() }
             .store(in: &cancellables)
-        registerHotKeys()
-        _ = recordingKeys // Starts following the recording phase.
         config.$config
             .removeDuplicates()
             .scan((Config(), config.config)) { ($0.1, $1) }
@@ -198,6 +196,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         setUpAutomations()
+        // After the API exists: the hotkeys read the settings model, which builds the Telegram bridge over `api.chat`.
+        registerHotKeys()
+        _ = recordingKeys // Starts following the recording phase.
         // These read `api`, which `setUpAutomations()` builds.
         settingsModel.voice = api.voice
         telegram.onPairingRequest = { [weak self] request in
