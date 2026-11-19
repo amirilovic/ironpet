@@ -36,6 +36,14 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(h.model.items.map(\.id), h.session.items.map(\.id))
     }
 
+    func testReadsAreForgottenOnceTheyFinish() async {
+        await h.type("hello")
+        await settle()
+        for chunk in 0..<50 { deliver[0](.assistant("chunk \(chunk) ")) }
+        await settle()
+        XCTAssertTrue(h.model.pendingReadCount == 0, "finished reads must not pile up")
+    }
+
     func testSendingClearsTheDraftAndKeepsItWhenNothingWasSent() async {
         h.model.input = "first"
         h.model.attachments = [URL(fileURLWithPath: "/tmp/a.png")]

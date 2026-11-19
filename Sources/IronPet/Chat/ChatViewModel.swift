@@ -66,8 +66,10 @@ final class ChatViewModel: ObservableObject {
     private let events: APIEventBus
     private var subscription: APIEventBus.Subscription?
     private var cancellables: Set<AnyCancellable> = []
-    /// Reads started by events, so a test can wait for them.
-    private var reads: [Task<Void, Never>] = []
+    /// Reads started by events and actions that have not finished, so a test can wait for them. Each removes itself when done.
+    private var reads: [UUID: Task<Void, Never>] = [:]
+    /// Messages with a read queued but not started. A streamed reply fires an event per chunk, and one read gets them all.
+    private var queuedMessageReads: Set<UUID> = []
 
     init(api: ChatAPI, voiceAPI: VoiceAPI, events: APIEventBus, voice: VoiceController? = nil, persists: Bool = true) {
         self.api = api
@@ -88,29 +90,36 @@ final class ChatViewModel: ObservableObject {
         subscription = events.subscribe { [weak self] event in self?.heard(event) }
     }
 
+    /// How many reads are still running. Tests use it to check that finished ones are dropped.
+    var pendingReadCount: Int { reads.count }
+
     /// Waits for the reads that events and actions started. Tests call it before looking at the copy.
     func settle() async {
         while !reads.isEmpty {
-            let pending = reads
-            reads = []
-            for task in pending { await task.value }
+            for task in Array(reads.values) { await task.value }
         }
     }
 
     // MARK: Keeping the copy current
 
     private func read(_ work: @escaping @MainActor (ChatViewModel) async -> Void) {
-        reads.append(Task { [weak self] in
+        let id = UUID()
+        reads[id] = Task { [weak self] in
             guard let self else { return }
             await work(self)
-        })
+            reads[id] = nil
+        }
     }
 
     private func heard(_ event: APIEvent) {
         switch (event.kind, event.id) {
         case (.chatItem, let id?):
             guard let uuid = UUID(uuidString: id) else { return }
-            read { await $0.refresh(message: uuid) }
+            guard queuedMessageReads.insert(uuid).inserted else { return }
+            read {
+                $0.queuedMessageReads.remove(uuid)
+                await $0.refresh(message: uuid)
+            }
         case (.chatItem, nil):
             read { await $0.refreshMessages() }
         case (.chatState, "approvals"?): read { $0.approvals = await $0.api.approvals(); await $0.refreshStatus() }

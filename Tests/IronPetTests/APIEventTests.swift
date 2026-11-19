@@ -73,6 +73,15 @@ final class APIEventTests: XCTestCase {
         XCTAssertFalse(bus.replay(after: 0).gap)
     }
 
+    func testMergingAnEventIntoANewerOneIsNotAGap() {
+        let bus = APIEventBus(capacity: 30)
+        bus.publish(.chatItem, id: "reply")
+        bus.publish(.chatItem, id: "reply")
+        bus.publish(.chatItem, id: "reply")
+        XCTAssertEqual(bus.replay(after: 0).events.map(\.seq), [3])
+        XCTAssertFalse(bus.replay(after: 0).gap, "seq 1 and 2 were merged into 3, so the client missed nothing")
+    }
+
     func testChatEventsWithoutAnIdAreNeverMerged() {
         let bus = APIEventBus()
         bus.publish(.chatItem)

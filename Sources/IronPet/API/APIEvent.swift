@@ -55,6 +55,8 @@ final class APIEventBus {
 
     let capacity: Int
     private(set) var lastSeq = 0
+    /// The highest `seq` pushed out of a full buffer. Events merged into a newer one do not count: nothing was lost.
+    private var evictedThrough = 0
     private var buffer: [APIEvent] = []
     private var handlers: [UUID: (APIEvent) -> Void] = [:]
     private let now: () -> Date
@@ -75,16 +77,18 @@ final class APIEventBus {
             buffer.remove(at: earlier)
         }
         buffer.append(event)
-        if buffer.count > capacity { buffer.removeFirst(buffer.count - capacity) }
+        if buffer.count > capacity {
+            evictedThrough = max(evictedThrough, buffer[buffer.count - capacity - 1].seq)
+            buffer.removeFirst(buffer.count - capacity)
+        }
         for handler in Array(handlers.values) { handler(event) }
     }
 
     /// The events with a `seq` above `seq`, oldest first, and whether older ones were already dropped.
     func replay(after seq: Int) -> (events: [APIEvent], gap: Bool) {
         let missed = buffer.filter { $0.seq > seq }
-        let oldest = buffer.first?.seq ?? (lastSeq + 1)
         // A `seq` above `lastSeq` comes from an earlier launch, whose numbers restarted: the client must re-read everything.
-        return (missed, seq + 1 < oldest || seq > lastSeq)
+        return (missed, seq < evictedThrough || seq > lastSeq)
     }
 
     /// Calls `handler` with every later event. With `after`, it first gets the buffered events above that `seq`, in order, before
