@@ -78,6 +78,26 @@ final class Announcer {
         chime()
     }
 
+    /// The bubble for a phone that sent a valid pairing code. Allow gives it a token that reads and changes tasks on this Mac, so the
+    /// bubble says so and expires with the code.
+    static func remotePairingBubble(_ request: RemotePairingRequest, allow: @escaping () -> Void, deny: @escaping () -> Void) -> Bubble {
+        let pet = ConfigStore.shared.config.pet.name
+        return Bubble(id: remotePairingID(request.id), symbol: "iphone", tint: .blue,
+                      title: "Allow \(request.deviceName) to control \(pet)?",
+                      body: "This device asked to pair with the remote API. Only allow it if you just scanned the pairing code yourself.",
+                      actions: [.init(title: "Allow", style: .primary, run: allow), .init(title: "Deny", style: .destructive, run: deny)],
+                      expires: request.created.addingTimeInterval(RemoteService.codeLifetime))
+    }
+
+    /// Too many requests without a valid token. One bubble per lockout, replaced if it comes again.
+    static func remoteBlockedBubble() -> Bubble {
+        Bubble(id: "remote:blocked", symbol: "exclamationmark.shield", tint: .orange, title: "Remote API: blocked requests",
+               body: "Several requests without a valid device token arrived. The remote API ignores unauthenticated requests for five minutes.",
+               expires: Date().addingTimeInterval(60))
+    }
+
+    static func remotePairingID(_ id: String) -> String { "remote-pairing:\(id)" }
+
     func clearTelegramPairing(id: Int64) {
         bubbles.dismiss(Self.telegramID(id))
     }

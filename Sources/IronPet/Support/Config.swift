@@ -218,6 +218,21 @@ struct Config: Codable, Equatable {
         var allowedUsers: [User] = []
     }
 
+    /// The remote API a paired phone reaches through the user's own TLS front, such as `tailscale serve`. Off by default: turning it on
+    /// opens a listener on 127.0.0.1 that answers only requests with a device token (see SECURITY.md).
+    struct Remote: Codable, Equatable {
+        var enabled = false
+        /// Loopback port. Outside the hook server's 47321-47340 range, which has no per-device tokens.
+        var port = Remote.defaultPort
+        /// Where the paired device reaches this Mac, such as `https://mac.tailnet.ts.net`. It goes into the pairing link.
+        var baseUrl = ""
+
+        static let defaultPort = 47380
+        static let portRange = 1024...65_535
+        /// The hook server walks up from 47321 to find a free port. The remote API never takes one of these.
+        static let reservedPorts = 47_321...47_340
+    }
+
     /// An extra app for the "Open sessions in" picker. Without `urlTemplate` the folder is opened with the app;
     /// `{cwd}` in a template becomes the percent-encoded folder path.
     struct Editor: Codable, Equatable {
@@ -305,6 +320,7 @@ struct Config: Codable, Equatable {
     var screenCapture = ScreenCapture()
     var desktopControl = DesktopControl()
     var memory = Memory()
+    var remote = Remote()
 
     static let file = Paths.root.appendingPathComponent("config.json")
 
@@ -381,6 +397,9 @@ struct Config: Codable, Equatable {
         c.memory.reflectModel = c.memory.reflectModel?.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.memory.reflectModel?.isEmpty == true || c.memory.reflectAgent == nil { c.memory.reflectModel = nil }
         c.memory.quietMinutes = min(Memory.quietRange.upperBound, max(Memory.quietRange.lowerBound, c.memory.quietMinutes))
+        if !Remote.portRange.contains(c.remote.port) || Remote.reservedPorts.contains(c.remote.port) { c.remote.port = Remote.defaultPort }
+        c.remote.baseUrl = c.remote.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        while c.remote.baseUrl.hasSuffix("/") { c.remote.baseUrl.removeLast() }
         return c
     }
 

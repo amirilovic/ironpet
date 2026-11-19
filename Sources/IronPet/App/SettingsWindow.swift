@@ -37,6 +37,8 @@ final class SettingsModel: ObservableObject {
     let pets = PetGalleryModel()
     private let announcer: Announcer
     let telegram: TelegramBridge
+    /// The remote API, set once the app has built it.
+    var remote: RemoteController?
     /// The selected page's tag, kept so the window reopens on it. Tests set it to screenshot a page.
     @Published var tab = UserDefaults.standard.string(forKey: "settingsTab").flatMap { SettingsView.page($0)?.tag } ?? "general" {
         didSet { UserDefaults.standard.set(tab, forKey: "settingsTab") }
@@ -147,6 +149,7 @@ struct SettingsView: View {
         Page(tag: "meetings", title: "Meetings", symbol: "person.2.wave.2"),
         Page(tag: "usage", title: "Usage", symbol: "chart.bar"),
         Page(tag: "screen", title: "Screen", symbol: "rectangle.dashed.badge.record"),
+        Page(tag: "devices", title: "Devices", symbol: "iphone.gen3"),
     ]
     static let sidebarWidth: CGFloat = 180
     /// The pages keep the width they had as tabs, beside the sidebar.
@@ -200,6 +203,7 @@ struct SettingsView: View {
         case "meetings": MeetingSettings(model: model)
         case "usage": UsageSettings()
         case "screen": ScreenSettings(model: model)
+        case "devices": RemoteSettings(model: model)
         default: GeneralSettings(model: model)
         }
     }

@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dueReminders: TaskDueReminders?
     /// Nil until the database is open, a moment after launch.
     private var activity: ActivityLog?
+    private var remote: RemoteController?
     private var welcomeBack: WelcomeBack?
     /// Replaces the system idle time in test mode (`POST /test/presence`). Nil otherwise.
     private var testIdleSeconds: TimeInterval?
@@ -287,6 +288,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
         settingsModel.pets.api = api.pet
+        let remoteController = RemoteController(api: api, settings: api.settings, database: database, bubbles: announcer.bubbles,
+                                                chime: { NSSound(named: "Pop")?.play() }, activity: log)
+        remote = remoteController
+        settingsModel.remote = remoteController
+        remoteController.reconcile()
         api.meetings.askHandler = { [weak self] files in self?.openMeetingInChat(files) }
         meetingPanel = MeetingPanel(controller: api.meetings)
         meeting.onChange = { [weak self] in self?.syncMeetingPanel() }
@@ -993,6 +999,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             control.onMeetingSummaryText = { [weak self] text, meeting in self?.suggestTasks(fromSummary: text, meeting: meeting) }
             control.screen = capture
             control.tasks = taskStore
+            control.remote = remote
             control.chatModel = chatModel
             control.welcomeBack = welcomeBack
             control.setIdleSeconds = { [weak self] seconds in self?.testIdleSeconds = seconds }

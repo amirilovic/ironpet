@@ -213,6 +213,24 @@ enum PreviewRenderer {
         for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
             render(ScreenSettings(model: settingsModel).frame(width: 560, height: 900).panel(), to: dir, "settings-screen" + suffix, scheme: scheme)
         }
+        // Settings → Devices with a QR code on screen and two paired devices.
+        if let database = try? Database(path: nil, migrations: AppMigrations.all) {
+            var remoteOn = patterned
+            remoteOn.remote = .init(enabled: true, port: Config.Remote.defaultPort, baseUrl: "https://mac.tailnet.ts.net")
+            ConfigStore.shared.usePreview(remoteOn)
+            let service = RemoteService(store: RemoteStore(database: database), identity: RemoteIdentity(storage: MemoryKeyStorage()))
+            for (name, ago) in [("Aleksandar's iPhone", 86_400.0 * 3), ("iPad", 3600.0)] {
+                let device = RemoteDevice(id: UUID().uuidString, name: name, created: Date().addingTimeInterval(-ago * 4), lastSeen: Date().addingTimeInterval(-ago),
+                                          origin: "100.101.102.103", publicKey: nil)
+                try? service.store.add(device, tokenHash: RemoteHash.hex(device.id))
+            }
+            let controller = RemoteController(preview: service, settings: SettingsAPI.live, bubbles: BubbleStore(), status: .listening(port: Config.Remote.defaultPort))
+            controller.startPairing()
+            settingsModel.remote = controller
+            for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
+                render(RemoteSettings(model: settingsModel).frame(width: 560, height: 900).panel(), to: dir, "settings-devices" + suffix, scheme: scheme)
+            }
+        }
         // Settings → Memory with sample notes and recent changes, and with nothing learned yet.
         ConfigStore.shared.usePreview(patterned)
         let memoryFolder = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-memory-\(UUID().uuidString)")

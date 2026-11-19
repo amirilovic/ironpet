@@ -15,7 +15,7 @@ final class BoundaryTests: XCTestCase {
     static let adapters: Set<String> = [
         "Bridge/MCPEndpoint.swift", "Tasks/TaskMCP.swift", "Tasks/TaskJSON.swift", "Automations/AutomationMCP.swift",
         "Capture/ScreenMCP.swift", "Desktop/DesktopMCP.swift", "Jobs/AssistantMCP.swift", "Telegram/TelegramBridge.swift",
-        "Notifications/NotificationMCP.swift",
+        "Notifications/NotificationMCP.swift", "Remote/RemoteServer.swift", "Remote/RemoteTasks.swift",
     ]
 
     /// Files that build every store from sample data to render screenshots. They are a test harness, not a client.

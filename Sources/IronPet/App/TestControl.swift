@@ -56,6 +56,8 @@ final class TestControl {
     var onMeetingSummaryText: ((String, URL) -> Void)?
     /// The task store, for the `/test/tasks/*` endpoints. It is the app's own store, set by the app delegate.
     var tasks: TaskStore?
+    /// The remote API, for `/test/remote/*`: a pairing code to scan and the paired devices.
+    var remote: RemoteController?
     /// Screen capture, for the `/test/screen/*` endpoints. They feed synthetic captures in, so no test reads the real screen.
     var screen: CaptureService?
     /// Opens the Screen section and returns its window number.
@@ -352,6 +354,17 @@ final class TestControl {
             // The Tasks tab's Add all. The suggestions bubble has no buttons.
             store.acceptAll()
             return tasksSnapshot()
+        case ("POST", "/test/remote/code"):
+            guard let remote else { return Self.encode(["ok": false, "error": "no remote API"]) }
+            // The same call the Pair a device button makes, so the page shows the QR code too.
+            remote.startPairing()
+            guard let code = remote.pairing else { return Self.encode(["ok": false, "error": "no pairing code"]) }
+            return Self.encode(["ok": true, "code": code.code, "fingerprint": code.fingerprint,
+                                "port": remote.server?.port ?? 0, "running": remote.server?.isRunning ?? false])
+        case ("GET", "/test/remote"):
+            guard let remote else { return Self.encode(["ok": false, "error": "no remote API"]) }
+            return Self.encode(["ok": true, "running": remote.server?.isRunning ?? false, "port": remote.server?.port ?? 0,
+                                "devices": remote.service.devices.map { ["id": $0.id, "name": $0.name] }])
         case ("GET", "/test/screen"):
             return screenSnapshot()
         case ("GET", "/test/voice-mode/state"), ("POST", "/test/voice-mode/start"), ("POST", "/test/voice-mode/utterance"),
