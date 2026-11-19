@@ -1,6 +1,6 @@
 import Foundation
 
-enum AgentSource: String {
+enum AgentSource: String, Codable {
     case cursor, claude, codex, gemini, copilot, pi
 
     var displayName: String {
@@ -16,7 +16,7 @@ enum AgentSource: String {
 }
 
 /// Ordered by how urgently the pet should surface it.
-enum AgentStatus: Int, Comparable {
+enum AgentStatus: Int, Comparable, Codable {
     case idle, running, done, failed, needsInput
 
     static func < (a: AgentStatus, b: AgentStatus) -> Bool { a.rawValue < b.rawValue }
@@ -43,7 +43,7 @@ enum AgentStatus: Int, Comparable {
 }
 
 /// Where the hook ran, used to jump back to the session.
-struct SessionOrigin {
+struct SessionOrigin: Codable {
     var workspace: String?
     var termProgram: String?
     var itermSessionID: String?
@@ -53,7 +53,7 @@ struct SessionOrigin {
     var ownerBundleID: String?
 }
 
-struct AgentSession: Identifiable {
+struct AgentSession: Identifiable, Codable {
     let id: String
     let source: AgentSource
     var status: AgentStatus = .idle

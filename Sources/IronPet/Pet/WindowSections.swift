@@ -29,17 +29,16 @@ struct ActionsSection: View {
 
 /// The Agents section: watched sessions, grouped by what they need.
 struct AgentsSection: View {
-    @ObservedObject var store: SessionStore
-    let onJump: (AgentSession) -> Void
+    @ObservedObject var agents: AgentsAPI
 
     var body: some View {
         VStack(spacing: 0) {
-            agents
+            list
         }
         .pageHeader(IronPetSection.agents.title) {
             HStack(spacing: 4) {
                 ForEach([AgentStatus.needsInput, .running, .failed, .done], id: \.self) { status in
-                    let count = store.ordered.filter { $0.status == status }.count
+                    let count = agents.sessions.filter { $0.status == status }.count
                     if count > 0 { CountChip(count: count, color: status.tint) }
                 }
             }
@@ -47,7 +46,7 @@ struct AgentsSection: View {
     }
 
     private var sections: [(title: String, sessions: [AgentSession])] {
-        let all = store.ordered
+        let all = agents.sessions
         return [
             ("Needs you", all.filter { $0.status == .needsInput }),
             ("Working", all.filter { $0.status == .running }),
@@ -55,9 +54,9 @@ struct AgentsSection: View {
         ].filter { !$0.sessions.isEmpty }
     }
 
-    private var agents: some View {
+    private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if store.ordered.isEmpty {
+            if agents.sessions.isEmpty {
                 EmptyState(symbol: "moon.zzz", title: "No agents running",
                            detail: "Cursor and Claude Code sessions show up here.")
             } else {
@@ -65,14 +64,14 @@ struct AgentsSection: View {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(sections, id: \.title) { section in
                             if section.title == "Finished" {
-                                SectionHeader(section.title, action: "Clear finished") { store.acknowledgeAll() }
+                                SectionHeader(section.title, action: "Clear finished") { agents.acknowledgeAll() }
                             } else {
                                 SectionTitle(section.title)
                             }
                             ForEach(section.sessions) { session in
                                 SessionRow(session: session,
-                                           onJump: { onJump(session) },
-                                           onDismiss: { store.acknowledge(session.id) })
+                                           onJump: { try? agents.focus(session.id) },
+                                           onDismiss: { try? agents.acknowledge(session.id) })
                             }
                         }
                     }

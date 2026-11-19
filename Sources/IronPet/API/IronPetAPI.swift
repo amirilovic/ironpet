@@ -19,6 +19,7 @@ final class IronPetAPI {
         var automations: AutomationService
         var signals: SignalStore
         var bubbles: BubbleStore
+        var sessions: SessionStore
     }
 
     let events: APIEventBus
@@ -26,6 +27,7 @@ final class IronPetAPI {
     let automations: AutomationsAPI
     let alerts: AlertsAPI
     let bubbles: BubblesAPI
+    let agents: AgentsAPI
 
     init(stores: Stores, events: APIEventBus? = nil) {
         let events = events ?? APIEventBus()
@@ -38,5 +40,7 @@ final class IronPetAPI {
         stores.bubbles.events = events
         alerts = AlertsAPI(store: stores.signals)
         bubbles = BubblesAPI(store: stores.bubbles)
+        stores.sessions.events = events
+        agents = AgentsAPI(store: stores.sessions)
     }
 }

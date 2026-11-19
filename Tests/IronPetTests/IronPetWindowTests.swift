@@ -27,31 +27,31 @@ final class IronPetWindowTests: XCTestCase {
     func testAnAgentThatNeedsYouWinsOverAlertsAndTasks() throws {
         let list = tasks()
         _ = try list.create(title: "Approve the deploy", status: .needsYou, source: .agent, by: "agent:mcp")
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(.needsInput), alerts: AlertsAPI(store: signals(2)), tasks: TasksAPI(store: list)), .agents)
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(.failed), alerts: AlertsAPI(store: signals(2)), tasks: TasksAPI(store: list)), .agents)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions(.needsInput)), alerts: AlertsAPI(store: signals(2)), tasks: TasksAPI(store: list)), .agents)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions(.failed)), alerts: AlertsAPI(store: signals(2)), tasks: TasksAPI(store: list)), .agents)
     }
 
     func testAlertsOpenWhenNoAgentIsWorking() {
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(.done), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks())), .alerts)
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(.running), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks())), .agents)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks())), .alerts)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions(.running)), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks())), .agents)
     }
 
     func testTasksOpenWhenOneNeedsYouAndNothingElseDoes() throws {
         let list = tasks()
         _ = try list.create(title: "Approve the deploy", status: .needsYou, source: .agent, by: "agent:mcp")
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: list)), .tasks)
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: tasks())), .agents)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions()), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: list)), .tasks)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions()), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: tasks())), .agents)
     }
 
     func testTasksWaitingOnSomeoneElseDoNotOpenTasks() throws {
         let list = tasks()
         _ = try list.create(title: "Send the deck", source: .meeting, waitingOn: "Ana", by: "user")
         _ = try list.create(title: "Approve the budget", status: .needsYou, source: .agent, waitingOn: "Them", by: "agent:mcp")
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: list)), .agents)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions()), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: list)), .agents)
         XCTAssertEqual(list.activeCount, 0)
 
         list.suggest([("Share the results", nil, "Priya")], meeting: URL(fileURLWithPath: "/tmp/meeting"))
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: list)), .tasks,
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions()), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: list)), .tasks,
                        "a suggestion still waits on the user's Add or Skip")
     }
 
@@ -212,7 +212,7 @@ final class IronPetWindowTests: XCTestCase {
         let model = IronPetWindowModel(defaults: freshDefaults())
         model.section = section
         let store = SessionStore()
-        let view = IronPetWindowView(model: model, store: store, alerts: AlertsAPI(store: SignalStore()), tasks: TasksAPI(store: tasks()), chat: nil,
+        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: store), alerts: AlertsAPI(store: SignalStore()), tasks: TasksAPI(store: tasks()), chat: nil,
                                      meetings: nil, actions: .none)
         return bitmap(of: view, scheme: scheme)
     }
@@ -291,7 +291,7 @@ final class IronPetWindowTests: XCTestCase {
         ConfigStore.shared.usePreview(config)
         let model = IronPetWindowModel(defaults: freshDefaults())
         model.section = .alerts
-        let view = IronPetWindowView(model: model, store: SessionStore(), alerts: AlertsAPI(store: SignalStore()), tasks: TasksAPI(store: tasks()), chat: nil,
+        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: SessionStore()), alerts: AlertsAPI(store: SignalStore()), tasks: TasksAPI(store: tasks()), chat: nil,
                                      meetings: nil, actions: .none)
         let panel = IronPetPanel(model: model, session: nil, content: view)
         panel.appearance = NSAppearance(named: scheme)
@@ -404,7 +404,7 @@ final class IronPetWindowTests: XCTestCase {
         let model = IronPetWindowModel(defaults: freshDefaults())
         model.sidebarCollapsed = collapsed
         model.section = .agents
-        let view = IronPetWindowView(model: model, store: sessions(.done), alerts: AlertsAPI(store: signals(alerts)), tasks: TasksAPI(store: tasks()), chat: nil,
+        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(alerts)), tasks: TasksAPI(store: tasks()), chat: nil,
                                      meetings: nil, actions: .none)
         return bitmap(of: view, scheme: scheme)
     }
@@ -455,7 +455,7 @@ final class IronPetWindowTests: XCTestCase {
         chat.loadPreview(.done)
         let meetings = MeetingLibrary(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         var seen = PageHeaderFrames()
-        let view = IronPetWindowView(model: model, store: sessions(.done), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks()), chat: chat,
+        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks()), chat: chat,
                                      meetings: meetings, settings: nil, actions: .none)
             .onPreferenceChange(PageHeaderFrames.self) { seen = $0 }
             .frame(width: IronPetPanel.minimumSize.width, height: IronPetPanel.minimumSize.height)
@@ -610,7 +610,7 @@ final class IronPetWindowTests: XCTestCase {
     /// A drag that starts on the edge reaches the handle, in the real window, and collapses or expands the sidebar.
     func testDraggingTheEdgeInTheRealWindowCollapsesAndExpandsTheSidebar() throws {
         let model = IronPetWindowModel(defaults: freshDefaults())
-        let view = IronPetWindowView(model: model, store: sessions(.done), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: tasks()), chat: nil,
+        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: tasks()), chat: nil,
                                      meetings: nil, actions: .none)
         let panel = IronPetPanel(model: model, session: nil, content: view)
         panel.setContentSize(IronPetPanel.minimumSize)

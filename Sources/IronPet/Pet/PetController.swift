@@ -15,6 +15,10 @@ final class PetController: NSObject {
     private let signals: SignalStore
     /// The alerts the window shows. Falls back to one over `signals`.
     var alerts: AlertsAPI?
+    /// The sessions the window shows. Falls back to one over `store`.
+    var agents: AgentsAPI?
+    private lazy var fallbackAgents = AgentsAPI(store: store)
+    private var agentList: AgentsAPI { agents ?? fallbackAgents }
     private lazy var fallbackAlerts = AlertsAPI(store: signals)
     private var alertList: AlertsAPI { alerts ?? fallbackAlerts }
     private let windowModel = IronPetWindowModel()
@@ -251,7 +255,7 @@ final class PetController: NSObject {
     /// already open.
     func showWindow(_ section: IronPetSection?) {
         lastActivity = Date()
-        windowModel.section = section ?? IronPetSection.needingAttention(store: store, alerts: alertList, tasks: taskList)
+        windowModel.section = section ?? IronPetSection.needingAttention(agents: agentList, alerts: alertList, tasks: taskList)
         settings?.refresh()
         NSApp.activate()
         window.show(near: panel.frame)
@@ -268,7 +272,6 @@ final class PetController: NSObject {
 
     private func makeWindow() -> IronPetPanel {
         let actions = SessionActions(
-            onJump: { [weak self] session in self?.jump(to: session) },
             onAsk: { [weak self] prompt in self?.onAsk?(prompt) },
             onTrick: { [weak self] trick in
                 // Bubbles are hidden while this window is open.
@@ -297,7 +300,7 @@ final class PetController: NSObject {
             },
             onBriefOpen: { [weak self] target in self?.openBrief(target) })
         let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(
-            model: windowModel, store: store, alerts: alertList, tasks: taskList, chat: chat, meetings: meetings,
+            model: windowModel, agents: agentList, alerts: alertList, tasks: taskList, chat: chat, meetings: meetings,
             settings: settings, brief: brief, actions: actions))
         window.onVisibilityChange = { [weak self] visible in
             guard let self else { return }

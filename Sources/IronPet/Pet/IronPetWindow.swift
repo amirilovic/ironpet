@@ -66,9 +66,9 @@ enum IronPetSection: String, CaseIterable, Identifiable {
 
     /// Agents that need the user win; otherwise alerts when there are some and no agent is working, then tasks that
     /// wait on the user or on Add / Skip.
-    @MainActor static func needingAttention(store: SessionStore, alerts: AlertsAPI, tasks: TasksAPI) -> IronPetSection {
-        if store.ordered.contains(where: { $0.status == .needsInput || $0.status == .failed }) { return .agents }
-        let idle = store.ordered.allSatisfy { $0.status != .running }
+    @MainActor static func needingAttention(agents: AgentsAPI, alerts: AlertsAPI, tasks: TasksAPI) -> IronPetSection {
+        if agents.sessions.contains(where: { $0.status == .needsInput || $0.status == .failed }) { return .agents }
+        let idle = agents.sessions.allSatisfy { $0.status != .running }
         if !alerts.alerts.isEmpty, idle { return .alerts }
         if idle, !tasks.suggestions.isEmpty || tasks.all.contains(where: \.needsUser) { return .tasks }
         return .agents
@@ -498,7 +498,7 @@ final class IronPetPanel: NSPanel {
 
 struct IronPetWindowView: View {
     @ObservedObject var model: IronPetWindowModel
-    @ObservedObject var store: SessionStore
+    @ObservedObject var agents: AgentsAPI
     @ObservedObject var alerts: AlertsAPI
     @ObservedObject var tasks: TasksAPI
     /// Nil in previews and tests that do not show it; its row is hidden then.
@@ -661,7 +661,7 @@ struct IronPetWindowView: View {
 
     private func count(_ section: IronPetSection) -> Int {
         switch section {
-        case .agents: return store.ordered.count
+        case .agents: return agents.sessions.count
         case .alerts: return alerts.alerts.count
         case .tasks: return tasks.activeCount + tasks.suggestions.count
         default: return 0
@@ -676,7 +676,7 @@ struct IronPetWindowView: View {
             VStack(spacing: 0) {
                 switch model.section {
                 case .chat: EmptyView()
-                case .agents: AgentsSection(store: store, onJump: actions.onJump)
+                case .agents: AgentsSection(agents: agents)
                 case .alerts: AlertsSection(alerts: alerts, onAsk: actions.onAsk)
                 case .tasks:
                     TaskListView(tasks: tasks, onTellGhost: actions.onTellGhost, onOpenThread: actions.onOpenThread,
@@ -714,7 +714,6 @@ struct IronPetWindowView: View {
 
 /// What the rows and buttons in the window's sections do.
 struct SessionActions {
-    var onJump: (AgentSession) -> Void
     var onAsk: (String) -> Void
     var onTrick: (PetController.Trick) -> Void
     var onTellGhost: (String) -> Void
@@ -729,7 +728,7 @@ struct SessionActions {
     /// A row of the Today page.
     var onBriefOpen: (Brief.Target) -> Void = { _ in }
 
-    static let none = SessionActions(onJump: { _ in }, onAsk: { _ in }, onTrick: { _ in }, onTellGhost: { _ in },
+    static let none = SessionActions(onAsk: { _ in }, onTrick: { _ in }, onTellGhost: { _ in },
                                      onOpenThread: { _ in }, onOpenSession: { _ in })
 }
 

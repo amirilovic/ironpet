@@ -62,8 +62,8 @@ enum PreviewRenderer {
         meetings.reload()
         func list(_ sessions: SessionStore, tasks: TasksAPI, on section: IronPetSection? = nil) -> some View {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
-            model.section = section ?? IronPetSection.needingAttention(store: sessions, alerts: AlertsAPI(store: signals), tasks: tasks)
-            return IronPetWindowView(model: model, store: sessions, alerts: AlertsAPI(store: signals), tasks: tasks, chat: chat,
+            model.section = section ?? IronPetSection.needingAttention(agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks)
+            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: chat,
                                      meetings: meetings, actions: .none)
                 .frame(width: 780, height: 560).panel()
         }
@@ -119,7 +119,7 @@ enum PreviewRenderer {
             model.todayShown = true
             model.briefKind = kind
             model.section = .today
-            return IronPetWindowView(model: model, store: sessions, alerts: AlertsAPI(store: signals), tasks: tasks, chat: chat,
+            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: chat,
                                      meetings: meetings, brief: content, actions: .none)
                 .frame(width: 780, height: 560).panel()
         }
@@ -145,7 +145,7 @@ enum PreviewRenderer {
                     model.sidebarCollapsed = collapsed
                     model.todayShown = true
                     model.section = section
-                    let view = IronPetWindowView(model: model, store: sessions, alerts: AlertsAPI(store: signals), tasks: tasks, chat: chat,
+                    let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: chat,
                                                  meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
                     renderWindow(model: model, session: chat, content: view, to: dir,
                                  "real-\(section.rawValue)-\(suffix)\(collapsed ? "-collapsed" : "")", scheme: scheme)
@@ -167,7 +167,7 @@ enum PreviewRenderer {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.sidebarCollapsed = true
             model.section = .chat
-            let view = IronPetWindowView(model: model, store: sessions, alerts: AlertsAPI(store: signals), tasks: tasks, chat: markdownChat,
+            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: markdownChat,
                                          meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
             renderWindow(model: model, session: markdownChat, content: view, to: dir, "real-chat-markdown-\(suffix)", scheme: scheme)
         }
@@ -197,7 +197,7 @@ enum PreviewRenderer {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.sidebarCollapsed = true
             model.section = .chat
-            let view = IronPetWindowView(model: model, store: sessions, alerts: AlertsAPI(store: signals), tasks: tasks, chat: speaking,
+            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: speaking,
                                          meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
             renderWindow(model: model, session: speaking, content: view, to: dir, "real-chat-speaking-\(suffix)", scheme: scheme)
         }
