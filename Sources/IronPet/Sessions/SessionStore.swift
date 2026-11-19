@@ -10,7 +10,11 @@ struct HookEvent {
 /// Folds hook events into per-session status and a single pet-level summary.
 @MainActor
 final class SessionStore: ObservableObject {
-    @Published private(set) var sessions: [String: AgentSession] = [:]
+    @Published private(set) var sessions: [String: AgentSession] = [:] {
+        didSet { events?.publish(.agentsChanged) }
+    }
+    /// Where changes are published for API clients.
+    weak var events: APIEventBus?
 
     /// Called when a session enters a status worth announcing.
     var onAttention: ((AgentSession) -> Void)?

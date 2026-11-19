@@ -103,6 +103,13 @@ final class MeetingController: ObservableObject {
     /// Opens a meeting file. Tests replace it.
     var openFile: (URL) -> Void = { MeetingFileOpener.open($0) }
     var onChange: (() -> Void)?
+    /// Where `meetings.changed` is published for API clients.
+    weak var events: APIEventBus?
+
+    private func didChange() {
+        events?.publish(.meetingsChanged)
+        onChange?()
+    }
     /// Opens Settings → Meetings, where unnamed voices are labelled.
     var onLabelSpeakers: (() -> Void)?
     /// Rebuilds the summary of a meeting folder from its transcript. True when summary.md was replaced.
@@ -303,13 +310,13 @@ final class MeetingController: ObservableObject {
         guard phase == .recording else { return }
         notice = "Your side of the call stopped recording. " + message
         objectWillChange.send()
-        onChange?()
+        didChange()
     }
 
     private func fail(_ message: String) {
         notice = message
         // Back to the picker, so the user can pick again or cancel.
-        if phase != .choosing { setPhase(.choosing) } else { objectWillChange.send(); onChange?() }
+        if phase != .choosing { setPhase(.choosing) } else { objectWillChange.send(); didChange() }
     }
 
     private var tickCount = 0
@@ -503,7 +510,7 @@ final class MeetingController: ObservableObject {
             }
         }
         objectWillChange.send()
-        onChange?()
+        didChange()
         pump()
     }
 
@@ -602,7 +609,7 @@ final class MeetingController: ObservableObject {
         writeTranscript()
         namesChangedSinceSummary = true
         objectWillChange.send()
-        onChange?()
+        didChange()
     }
 
     /// The naming flow offers "Regenerate summary" once a name was given after the summary was written (or without one).
@@ -627,7 +634,7 @@ final class MeetingController: ObservableObject {
     func dismissSpeaker(_ id: Int, mixed: Bool) {
         speakerTable.dismiss(id, mixed: mixed)
         objectWillChange.send()
-        onChange?()
+        didChange()
     }
 
     // MARK: Summary
@@ -785,7 +792,7 @@ final class MeetingController: ObservableObject {
 
     private func setPhase(_ next: Phase) {
         phase = next
-        onChange?()
+        didChange()
     }
 
     private func reset() {

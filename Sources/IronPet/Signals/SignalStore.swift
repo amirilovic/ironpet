@@ -20,7 +20,11 @@ struct Signal: Identifiable, Equatable {
 
 @MainActor
 final class SignalStore: ObservableObject {
-    @Published private(set) var signals: [Signal] = []
+    @Published private(set) var signals: [Signal] = [] {
+        didSet { events?.publish(.alertsChanged) }
+    }
+    /// Where changes are published for API clients.
+    weak var events: APIEventBus?
 
     /// Called for signals that should notify (not for state found on the first run).
     var onNew: ((Signal) -> Void)?
@@ -34,9 +38,11 @@ final class SignalStore: ObservableObject {
     }
 
     func add(_ signal: Signal, notify: Bool) {
-        signals.removeAll { $0.id == signal.id }
-        signals.insert(signal, at: 0)
-        if signals.count > 50 { signals.removeLast(signals.count - 50) }
+        // One assignment, so one `alerts.changed` event.
+        var next = signals.filter { $0.id != signal.id }
+        next.insert(signal, at: 0)
+        if next.count > 50 { next.removeLast(next.count - 50) }
+        signals = next
         if notify { onNew?(signal) }
     }
 

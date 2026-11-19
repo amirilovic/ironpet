@@ -145,6 +145,13 @@ final class TaskStore: ObservableObject {
 
     /// Called after any change, with the task's id (nil for suggestions).
     var onChange: ((String?) -> Void)?
+    /// Where changes are published for API clients: `tasks.changed` with the task's id, `suggestions.changed` without one.
+    weak var events: APIEventBus?
+
+    private func didChange(_ id: String?) {
+        events?.publish(id == nil ? .suggestionsChanged : .tasksChanged, id: id)
+        onChange?(id)
+    }
 
     private let database: Database
     private let now: () -> Date
@@ -208,7 +215,7 @@ final class TaskStore: ObservableObject {
                          + (sourceRef.map { " [source: \(source.rawValue) \($0)]" } ?? ""))
         }
         reload()
-        onChange?(id)
+        didChange(id)
         return task(id) ?? item
     }
 
@@ -253,7 +260,7 @@ final class TaskStore: ObservableObject {
             for (kind, detail) in events { try Self.log(db, id, time, by, kind, detail) }
         }
         reload()
-        onChange?(id)
+        didChange(id)
         return task(id) ?? changed
     }
 
@@ -273,7 +280,7 @@ final class TaskStore: ObservableObject {
             try Self.log(db, id, time, by, .deleted, item.title)
         }
         reload()
-        onChange?(id)
+        didChange(id)
     }
 
     // MARK: Suggestions
@@ -357,7 +364,7 @@ final class TaskStore: ObservableObject {
             return []
         }
         reload()
-        onChange?(nil)
+        didChange(nil)
         return added.map(\.suggestion)
     }
 
@@ -447,7 +454,7 @@ final class TaskStore: ObservableObject {
     private func removeSuggestion(_ id: String) {
         try? database.write { try $0.execute("DELETE FROM task_suggestions WHERE id = ?", [id]) }
         reload()
-        onChange?(nil)
+        didChange(nil)
     }
 
     // MARK: Agent and CLI interface

@@ -5,8 +5,8 @@ import XCTest
 /// stores here as its namespace appears.
 @MainActor
 enum APITestSupport {
-    static func makeAPI() -> IronPetAPI {
-        IronPetAPI()
+    static func makeAPI(events: APIEventBus? = nil) -> IronPetAPI {
+        IronPetAPI(events: events)
     }
 
     static func memoryDatabase() -> Database {

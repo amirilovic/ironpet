@@ -325,7 +325,11 @@ struct Config: Codable, Equatable {
 final class ConfigStore: ObservableObject {
     static let shared = ConfigStore()
 
-    @Published private(set) var config: Config
+    @Published private(set) var config: Config {
+        didSet { if config != oldValue { events?.publish(.settingsChanged) } }
+    }
+    /// Where changes are published for API clients.
+    weak var events: APIEventBus?
     @Published private(set) var error: String?
     private var stamp: Date?
     private var timer: Timer?

@@ -8,9 +8,14 @@ import Foundation
 ///   for a client.
 /// - A call takes a `Codable` request value and returns a `Codable` response value, or throws `APIError`. No call returns a
 ///   store type, an `NSImage` or a closure, so the same call can later cross a network.
+/// - Every change a client needs to see is published on `events` by the store that made it.
 /// - Views read state through the API and observe the same stores they always did for redraws, but they never call a store.
 ///   `BoundaryTests` fails when a client file names a store type.
 @MainActor
 final class IronPetAPI {
-    init() {}
+    let events: APIEventBus
+
+    init(events: APIEventBus? = nil) {
+        self.events = events ?? APIEventBus()
+    }
 }

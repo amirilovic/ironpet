@@ -50,8 +50,11 @@ final class BubbleStore: ObservableObject {
     /// When each id was last shown, for the past hour, so a summary can tell what came up while the user was away.
     private(set) var shownAt: [String: Date] = [:]
     var now: () -> Date = Date.init
+    /// Where `bubble.shown` is published for API clients, with the bubble's id.
+    weak var events: APIEventBus?
 
     func show(_ bubble: Bubble) {
+        defer { events?.publish(.bubbleShown, id: bubble.id) }
         let now = now()
         let onScreen = Set(bubbles.map(\.id))
         shownAt = shownAt.filter { onScreen.contains($0.key) || now.timeIntervalSince($0.value) < 3600 }
