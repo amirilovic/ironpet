@@ -261,6 +261,8 @@ final class ChatSession: ObservableObject {
     private var speechChanges: [AnyCancellable] = []
     /// The running turn was sent from the chat, not from Telegram or an automation; its reply is read aloud when it ends.
     private var turnSpoken = false
+    /// True once an approval card was shown during the running turn. The user took part, so a quiet reply stays visible.
+    private var turnAskedApproval = false
     /// True during a call or a meeting recording, when a reply is not read aloud on its own. Set by `AppDelegate`.
     var isQuiet: () -> Bool = { false }
     /// The transcription error that offers Retry, so only that card shows the button.
@@ -710,6 +712,7 @@ final class ChatSession: ObservableObject {
         let preamble = threadID == nil ? Memory.preamble(for: workspace) : nil
         telegramChat = telegram
         turnSpoken = telegram == nil && automation == nil
+        turnAskedApproval = false
         if let telegram { onTelegram?(telegram, .started) }
         automationRun = automation
         if let automation { onAutomation?(automation, .started) }
@@ -813,23 +816,26 @@ final class ChatSession: ObservableObject {
         onAutomation?(id, error.map { .failed($0) } ?? (noChange ? .noChange : .finished))
     }
 
-    /// Removes an automation's prompt and reply from the transcript when the reply is exactly its `quiet` text.
-    /// Returns true when it did. Any other reply stays as a normal automation turn.
+    /// Removes an automation's whole turn from the transcript when its final reply is exactly its `quiet` text. Tool
+    /// calls do not matter, since a check runs tools before it finds nothing to report. The turn stays when the agent
+    /// wrote any other text, asked for an approval or a form. A message the user typed waits in the queue, so it is never in the removed range. Returns true when it removed the turn.
     private func hideQuietTurn() -> Bool {
         guard let id = automationRun, let quiet = quietReply(id)?.trimmingCharacters(in: .whitespacesAndNewlines), !quiet.isEmpty,
+              !turnAskedApproval,
               let start = items.lastIndex(where: { if case .user = $0.kind { return true } else { return false } }),
               items[start].origin == Self.automationOrigin,
               lastAnswer()?.trimmingCharacters(in: .whitespacesAndNewlines) == quiet else { return false }
-        // The reply is the whole turn. Tool calls or other text before the line mean the agent did something.
         let rest = items[(start + 1)...]
-        let onlyTheLine = rest.allSatisfy { item in
-            if case .assistant(let text) = item.kind {
+        let onlyQuiet = rest.allSatisfy { item in
+            switch item.kind {
+            case .tool: return true
+            case .assistant(let text):
                 let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 return t.isEmpty || t == quiet
+            default: return false
             }
-            return false
         }
-        guard onlyTheLine else { return false }
+        guard onlyQuiet else { return false }
         items.removeSubrange(start...)
         return true
     }
@@ -1066,6 +1072,7 @@ final class ChatSession: ObservableObject {
             return
         }
         approvals.append(approval)
+        turnAskedApproval = true
         if let chat = telegramChat { onTelegram?(chat, .approval(id: approval.id, title: approval.title, detail: approval.detail)) }
         if !isVisible { onApprovalNeeded?(approval) }
     }
