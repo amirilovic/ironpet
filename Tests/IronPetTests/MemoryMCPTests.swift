@@ -133,6 +133,8 @@ final class MemoryMCPTests: XCTestCase {
     func testAnAutomationSessionMayNotEditMemoryFiles() {
         let memoryEdit = ACPToolCall(id: "1", title: "Edit", kind: "edit", paths: [FileMemoryStore.directory.appendingPathComponent("me.md").path])
         XCTAssertFalse(AutomationSession.decision(for: memoryEdit).allow)
+        XCTAssertFalse(AutomationPrompt.decision(for: memoryEdit).allow, "the {{item.*}} run carries outside text")
+        XCTAssertTrue(AutomationPrompt.decision(for: ACPToolCall(id: "2", title: "Read", kind: "read", paths: ["/tmp/x"])).allow)
         let otherEdit = ACPToolCall(id: "2", title: "Edit", kind: "edit", paths: ["/tmp/work/app.swift"])
         XCTAssertTrue(AutomationSession.decision(for: otherEdit).allow, "other non-destructive edits run in an automation's session")
     }

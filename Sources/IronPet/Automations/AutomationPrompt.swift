@@ -11,6 +11,13 @@ enum AutomationPrompt {
     }
 
     /// `agentOverride` lets tests run a scripted agent instead of one from the catalog.
+    /// Only what reads. This run carries outside item text, so even Ghost's memory notes, which a chat may edit without a card, are
+    /// refused: they reach every new chat's preamble.
+    nonisolated static func decision(for call: ACPToolCall) -> ApprovalDecision {
+        if case .allow = ApprovalRules.policy(for: call, auto: false, isMemoryFile: { _ in false }) { return .allow }
+        return .deny("Automations can only read")
+    }
+
     static func run(_ automation: Automation, prompt: String, workspace: URL, timeout: TimeInterval = 300,
                     agentOverride: ACPAgent? = nil) async -> Result<String, AutomationError> {
         guard let agent = agentOverride ?? AgentCatalog.agent(id: agentID(automation)) else {
@@ -20,10 +27,7 @@ enum AutomationPrompt {
         let runner = ACPBackend(agent: agent)
         runner.restricted = true
         runner.usageFeature = .automations
-        runner.onPermission = { call, respond in
-            if case .allow = ApprovalRules.policy(for: call, auto: false) { respond(.allow) }
-            else { respond(.deny("Automations can only read")) }
-        }
+        runner.onPermission = { call, respond in respond(decision(for: call)) }
         let text = "This is an automated run of \"\(automation.name)\" from ironpet. Answer in under 600 characters, as plain text for a small notification.\n\n\(prompt)"
         let turn = ACPTurn(prompt: text, preamble: nil, workspace: workspace, resume: nil, model: automation.action.model, images: [], files: [])
         let state = Box()

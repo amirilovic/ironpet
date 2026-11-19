@@ -78,7 +78,8 @@ final class MemorySettingsModel: ObservableObject {
     func undo(_ change: MemoryChange) {
         if case .failure(let failure) = store.undo(change) { undoMessage = failure.message } else { undoMessage = nil }
         reload()
-        if let selected, selected == change.file { load(selected) }
+        guard let selected, selected == change.file else { return }
+        if hasUnsavedEdit { message = "Undo changed this file while you were editing. Revert to see the new version, then make your edit again." } else { load(selected) }
     }
 
     func search(_ query: String) -> [MemoryIndex.Hit] {
@@ -179,9 +180,14 @@ struct MemorySettingsBody: View {
             } else {
                 LabeledContent("Model") { Text("Haiku for Claude Code, each agent's default for the others").foregroundStyle(.secondary) }
             }
-            Stepper(value: Binding(get: { config.quietMinutes }, set: { v in store.update { $0.memory.quietMinutes = v } }),
-                    in: Config.Memory.quietRange, step: config.quietMinutes < 10 ? 1 : 5) {
+            Stepper {
                 Text("Learn after \(config.quietMinutes) min of quiet")
+            } onIncrement: {
+                let q = config.quietMinutes
+                store.update { $0.memory.quietMinutes = min(Config.Memory.quietRange.upperBound, q < 10 ? q + 1 : q + 5) }
+            } onDecrement: {
+                let q = config.quietMinutes
+                store.update { $0.memory.quietMinutes = max(Config.Memory.quietRange.lowerBound, q > 10 ? max(10, q - 5) : q - 1) }
             }
             .disabled(!config.reflect)
             Toggle("Tidy files that grow too big", isOn: Binding(get: { config.tidy }, set: { on in store.update { $0.memory.tidy = on } }))

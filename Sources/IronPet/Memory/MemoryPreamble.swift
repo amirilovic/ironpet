@@ -43,7 +43,7 @@ enum MemoryPreamble {
             blocks.append(block(.project, about: project.isRepo ? "the \(project.name) repo (\(project.key))" : "the \(project.name) folder"))
         }
         blocks.append(block(.people))
-        let files = store.editableFolder.map { " They are plain files in \($0.path), which you may also edit directly." } ?? ""
+        let files = store.editableFolder.map { " They are plain files in \($0.path), which you may also edit directly, though only memory_remember and memory_forget keep the earlier version." } ?? ""
         return """
         You are \(name), a small desktop pet assistant (ironpet) helping the user with coding and everyday tasks. \
         Be concise: your replies appear in a small chat bubble.

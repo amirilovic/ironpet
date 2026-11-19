@@ -51,6 +51,16 @@ final class MemoryPreambleTests: XCTestCase {
         XCTAssertTrue(text.hasSuffix(MemoryPreamble.memoryInstructions + "\n\nUser request:"))
     }
 
+    func testPeopleLinesOutsideASectionStillReachThePreamble() throws {
+        try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+        try "# People\n\n- Sara leads the payments team\n".write(to: store.people, atomically: true, encoding: .utf8)
+        _ = try store.remember("Owns auth", scope: .people, person: "Ana", source: "chat:a").get()
+        let text = MemoryPreamble.build(store: store, workspace: workspace, firstMessage: "hi")
+        XCTAssertTrue(text.contains("- Sara leads the payments team"))
+        XCTAssertTrue(text.contains("## Ana\n- Owns auth"))
+        XCTAssertFalse(text.contains("## \n"))
+    }
+
     func testTheNoProjectFolderHasNoProjectBlock() {
         let text = MemoryPreamble.build(store: store, workspace: ChatSession.scratchWorkspace, firstMessage: "hi")
         XCTAssertFalse(text.contains("projects/"))

@@ -186,6 +186,7 @@ final class MemoryReflectorTests: XCTestCase {
 
     func testAPickedAgentOnlyReadsItsOwnText() async throws {
         config.reflectAgent = "claude"
+        index.setCursor(MemoryReflector.seededKey, item: "1", at: clock)
         threads["c1"] = ChatThread(id: "c1", title: "t", workspace: workspace.path, updatedAt: clock, items: [.init(kind: .user("I use zsh"))],
                                    agent: "cursor")
         reflector.left(thread: "c1")
@@ -322,11 +323,27 @@ final class MemoryReflectorTests: XCTestCase {
         XCTAssertTrue(prompts.isEmpty)
     }
 
+    func testTheFirstCatchUpMarksEarlierChatsAsReadAndSendsNothing() async {
+        chat("before", [.init(kind: .user("I use tabs")), .init(kind: .assistant("OK"))])
+        reflector.catchUp()
+        await waitIdle()
+        XCTAssertTrue(prompts.isEmpty, "the update does not send chats from before it")
+        var thread = threads["before"]!
+        thread.items += [.init(kind: .user("I moved to Lisbon"))]
+        threads["before"] = thread
+        reflector.catchUp()
+        await waitIdle()
+        XCTAssertEqual(prompts.count, 1)
+        XCTAssertTrue(prompts[0].contains("I moved to Lisbon"))
+        XCTAssertFalse(prompts[0].contains("I use tabs"))
+    }
+
     func testCatchUpReadsAtMostFiveRecentUnreadThreads() async {
         for n in 0..<7 { chat("recent\(n)", [.init(kind: .user("message \(n)"))], updated: clock.addingTimeInterval(-Double(n) * 3600)) }
         chat("old", [.init(kind: .user("old message"))], updated: clock.addingTimeInterval(-8 * 86_400))
         chat("run", [.init(kind: .user("automation"))], automation: "watcher")
         index.setCursor("recent0", item: threads["recent0"]!.items.last!.id.uuidString, at: clock)
+        index.setCursor(MemoryReflector.seededKey, item: "1", at: clock)
         reflector.catchUp()
         await waitIdle()
         XCTAssertEqual(prompts.count, 5)

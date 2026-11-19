@@ -49,6 +49,8 @@ final class MemoryReflector {
     /// Launch catches up on threads from this far back, at most `catchUpLimit` of them.
     static let catchUpDays = 7.0
     static let catchUpLimit = 5
+    /// The cursor row that says earlier chats were marked as read.
+    static let seededKey = "catch-up:seeded"
 
     let store: MemoryStore
     let index: MemoryIndex
@@ -122,6 +124,14 @@ final class MemoryReflector {
     /// At launch: the recent threads with messages no run has read, newest first.
     func catchUp() {
         guard automatic, config().reflect else { return }
+        // The first catch-up marks the chats from before memory existed as read, so the update itself sends none of them.
+        if index.cursor(Self.seededKey) == nil {
+            for thread in recentThreads() {
+                if let last = thread.items.last { index.setCursor(thread.id, item: last.id.uuidString, at: now()) }
+            }
+            index.setCursor(Self.seededKey, item: "1", at: now())
+            return
+        }
         let cutoff = now().addingTimeInterval(-Self.catchUpDays * 86_400)
         let config = config()
         let pending = recentThreads().filter { thread in

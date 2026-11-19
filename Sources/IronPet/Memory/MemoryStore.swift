@@ -209,13 +209,15 @@ final class FileMemoryStore: MemoryStore {
         return (base, 1)
     }
 
-    private static func stamp(_ date: Date) -> String {
+    private static let stampFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(identifier: "UTC")
         f.dateFormat = "yyyy-MM-dd'T'HH-mm-ss.SSS'Z'"
-        return f.string(from: date)
-    }
+        return f
+    }()
+
+    private static func stamp(_ date: Date) -> String { stampFormatter.string(from: date) }
 
     private func reindex(_ url: URL, _ document: MemoryDocument) {
         index?.indexNotes(file: relativePath(url), title: title(url, document), entries: document.entries, modified: now())
@@ -420,7 +422,8 @@ final class FileMemoryStore: MemoryStore {
         var entries = document.entries
         if let sections {
             let wanted = sections.map { $0.lowercased() }
-            entries = entries.filter { $0.section.map { wanted.contains($0.lowercased()) } ?? false }
+            // Lines outside any `## Name` section (hand-written, or from older builds) stay in.
+            entries = entries.filter { $0.section.map { wanted.contains($0.lowercased()) } ?? true }
         }
         return Self.budget(entries, bytes: bytes, grouped: sections != nil)
     }
@@ -447,7 +450,7 @@ final class FileMemoryStore: MemoryStore {
                 if bySection[name] == nil { order.append(name) }
                 bySection[name, default: []].append(entry.note.line)
             }
-            lines = order.flatMap { ["## \($0)"] + (bySection[$0] ?? []) }
+            lines = order.flatMap { ($0.isEmpty ? [] : ["## \($0)"]) + (bySection[$0] ?? []) }
         } else {
             lines = kept.map(\.note.line)
         }
