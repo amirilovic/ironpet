@@ -59,7 +59,7 @@ final class HeartbeatRemovalTests: AutomationTestCase {
             let s = store([heartbeat(enabled: enabled), mine()])
             XCTAssertTrue(HeartbeatRemoval.removeAutomation(from: s))
             XCTAssertEqual(s.automations.map(\.id), ["my-check"])
-            XCTAssertFalse(HeartbeatRemoval.removeAutomation(from: s), "a second run changes nothing")
+            XCTAssertTrue(HeartbeatRemoval.removeAutomation(from: s), "a second run finds nothing left")
             XCTAssertEqual(AutomationStore(paths: paths, defaults: { [] }, watch: false).automations.map(\.id), ["my-check"])
             try? FileManager.default.removeItem(at: paths.file)
         }
@@ -77,13 +77,13 @@ final class HeartbeatRemovalTests: AutomationTestCase {
         let entries = Data("# Heartbeat\n- Check the deploy\n".utf8)
         try entries.write(to: checklist)
 
-        XCTAssertEqual(HeartbeatRemoval.removeSkill(home: home), 3)
+        XCTAssertEqual(HeartbeatRemoval.removeSkill(home: home).removed, 3)
         XCTAssertFalse(exists(".agents/skills/heartbeat"))
         XCTAssertFalse(exists(".cursor/skills/heartbeat"))
         XCTAssertFalse(exists(".claude/skills/heartbeat"))
         XCTAssertTrue(exists(".agents/skills/ironpet-tasks"), "other skills stay")
         XCTAssertEqual(try Data(contentsOf: checklist), entries)
-        XCTAssertEqual(HeartbeatRemoval.removeSkill(home: home), 0, "idempotent")
+        XCTAssertEqual(HeartbeatRemoval.removeSkill(home: home).removed, 0, "idempotent")
     }
 
     // S3
@@ -94,7 +94,7 @@ final class HeartbeatRemovalTests: AutomationTestCase {
         try FileManager.default.createSymbolicLink(atPath: home.appendingPathComponent(".claude/skills/heartbeat").path,
                                                    withDestinationPath: "../../.agents/skills/heartbeat")
         try write(".cursor/skills/heartbeat/SKILL.md", "---\nname: heartbeat\ndescription: mine\n---\n")
-        XCTAssertEqual(HeartbeatRemoval.removeSkill(home: home), 0)
+        XCTAssertEqual(HeartbeatRemoval.removeSkill(home: home).removed, 0)
         XCTAssertEqual(try String(contentsOf: home.appendingPathComponent(".agents/skills/heartbeat/SKILL.md"), encoding: .utf8), edited)
         XCTAssertTrue(exists(".claude/skills/heartbeat"))
         XCTAssertTrue(exists(".cursor/skills/heartbeat"))
@@ -104,7 +104,7 @@ final class HeartbeatRemovalTests: AutomationTestCase {
         let other = Automation(id: "heartbeat", name: "Mine", trigger: .init(type: "interval", minutes: 5, clock: "wall"),
                                action: .init(type: "prompt", prompt: "check my stuff"), createdBy: "user")
         let s = store([other, mine()])
-        XCTAssertFalse(HeartbeatRemoval.removeAutomation(from: s))
+        XCTAssertTrue(HeartbeatRemoval.removeAutomation(from: s))
         XCTAssertEqual(s.automations.map(\.id), ["heartbeat", "my-check"])
     }
 
@@ -116,6 +116,25 @@ final class HeartbeatRemovalTests: AutomationTestCase {
         try s.replace([heartbeat()])
         HeartbeatRemoval.runOnce(store: s, home: home, defaults: suite)
         XCTAssertEqual(s.automations.map(\.id), ["heartbeat"], "the second launch leaves a later automation alone")
+    }
+
+    func testAnUnreadableAutomationsFileLeavesTheFlagUnsetUntilALaterLaunchSucceeds() throws {
+        let suite = UserDefaults(suiteName: "ironpet-heartbeat-\(UUID().uuidString)")!
+        _ = store([heartbeat(), mine()])
+        let good = try Data(contentsOf: paths.file)
+        try Data("{ not json".utf8).write(to: paths.file)
+        let broken = AutomationStore(paths: paths, defaults: { [] }, watch: false)
+        XCTAssertNotNil(broken.error)
+
+        HeartbeatRemoval.runOnce(store: broken, home: home, defaults: suite)
+        XCTAssertFalse(suite.bool(forKey: HeartbeatRemoval.doneKey), "nothing was removed, so the next launch must retry")
+        XCTAssertEqual(try Data(contentsOf: paths.file), Data("{ not json".utf8), "the broken file is left alone")
+
+        try good.write(to: paths.file)
+        let fixed = AutomationStore(paths: paths, defaults: { [] }, watch: false)
+        HeartbeatRemoval.runOnce(store: fixed, home: home, defaults: suite)
+        XCTAssertEqual(fixed.automations.map(\.id), ["my-check"])
+        XCTAssertTrue(suite.bool(forKey: HeartbeatRemoval.doneKey))
     }
 
     func testTheShippedTextMatchesTheRecordedHash() {
