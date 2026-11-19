@@ -46,7 +46,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isBusy: { [weak self] in self?.meeting.isBusy ?? true })
     private var callMonitor: CallMonitor?
     /// Watches for calls while spoken replies are on, so a reply is not read aloud over one.
-    private let speechMic = MicWatch()
+    private lazy var micIgnore = MicIgnoreModel(
+        entries: { ConfigStore.shared.config.meetings.ignoredMicApps },
+        save: { list in ConfigStore.shared.update { $0.meetings.ignoredMicApps = list } })
+    private let speechMic = MicWatch(ignored: { ConfigStore.shared.config.meetings.ignoredMicApps })
     private var meetingBubbleRemoving = false
     private var hotKeys: [HotKey] = []
     private var previousApp: NSRunningApplication?
@@ -1057,7 +1060,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var env = WelcomeBack.Environment()
         let systemIdle = env.idleSeconds
         env.idleSeconds = { [weak self] in self?.testIdleSeconds ?? systemIdle() }
-        let micWatch = MicWatch()
+        let micWatch = MicWatch(ignored: { ConfigStore.shared.config.meetings.ignoredMicApps })
         let presence = Presence(
             meetingActive: { [weak self] in self.map { [.recording, .finishing, .summarizing].contains($0.meeting.phase) } ?? false },
             detectedCalls: { [weak self] in self?.callMonitor.flatMap { $0.isRunning ? $0.detector.activeApps : nil } },
@@ -1139,7 +1142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let meetings = config.config.meetings
         let on = meetings.enabled && meetings.offerToRecordCalls
         if on, callMonitor == nil {
-            let detector = CallDetector(source: { [] })
+            let detector = CallDetector(source: { [] }, ignored: { ConfigStore.shared.config.meetings.ignoredMicApps })
             detector.onStarted = { [weak self] app in self?.callEvent(app, started: true) }
             detector.onEnded = { [weak self] app in self?.callEvent(app, started: false) }
             callMonitor = CallMonitor(detector: detector)
@@ -1167,21 +1170,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showCallBubble(_ bundleID: String, stop: Bool) {
         let name = appName(bundleID)
-        let close = { [weak self] in self?.announcer.bubbles.dismiss(Self.callBubbleID) }
+        let close: () -> Void = { [weak self] in self?.announcer.bubbles.dismiss(Self.callBubbleID) }
         let actions: [Bubble.Action] = stop
             ? [.init(title: "Stop recording", style: .primary) { [weak self] in
                     self?.meeting.stop()
                     close()
                 },
                .init(title: "Keep recording") { close() }]
-            : [.init(title: "Record", style: .primary) { [weak self] in
-                    close()
-                    self?.recordCall(bundleID, name: name)
-                },
-               .init(title: "Not now") { [weak self] in
-                    self?.callPrompt.notNow(bundleID)
-                    close()
-                }]
+            : CallOffer.recordActions(
+                bundleID: bundleID, name: name, ignore: micIgnore,
+                record: { [weak self] in self?.recordCall(bundleID, name: name) },
+                notNow: { [weak self] in self?.callPrompt.notNow(bundleID) },
+                close: close)
         announcer.bubbles.show(Bubble(id: Self.callBubbleID, symbol: "phone.fill", tint: .red,
                                       title: stop ? "Call ended. Stop recording?" : "Looks like a call in \(name). Record it?",
                                       actions: actions))

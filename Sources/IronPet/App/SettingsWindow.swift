@@ -674,6 +674,7 @@ private struct MeetingSettings: View {
                 Text("When another app, such as WhatsApp, Zoom or a browser, uses your microphone for about 10 seconds, Ghost asks whether to record the call. Nothing is recorded until you click Record.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            MicIgnoreSection()
             SpeakerSettings()
             Section("Summary") {
                 Toggle("Summarize automatically when a meeting ends", isOn: Binding(
@@ -978,5 +979,60 @@ private struct ChatBackgroundSection: View {
         } catch {
             message = error.localizedDescription
         }
+    }
+}
+
+/// The "Never treat as a call" list: apps whose microphone use is dictation or an assistant, not a call. It applies to call
+/// offers and to holding back spoken replies, so it works with meeting transcripts off.
+struct MicIgnoreSection: View {
+    @ObservedObject private var store = ConfigStore.shared
+    @StateObject private var model: MicIgnoreModel
+    @State private var typed = ""
+    @State private var error: String?
+
+    init() {
+        let store = ConfigStore.shared
+        _model = StateObject(wrappedValue: MicIgnoreModel(
+            entries: { store.config.meetings.ignoredMicApps },
+            save: { list in store.update { $0.meetings.ignoredMicApps = list } }))
+    }
+
+    var body: some View {
+        Section {
+            if model.rows.isEmpty {
+                Text("No apps added.").font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(model.rows) { row in
+                HStack {
+                    Text(row.title).textSelection(.enabled)
+                    Spacer()
+                    Button { model.remove(row.bundleID) } label: { Image(systemName: "minus.circle") }
+                        .buttonStyle(.borderless).help("Count this app as a call again")
+                }
+            }
+            HStack {
+                Menu {
+                    ForEach(model.suggestions) { row in
+                        Button(row.title) { error = model.add(row.bundleID)?.message }
+                    }
+                } label: { Label("Add app", systemImage: "plus.circle") }
+                    .disabled(model.suggestions.isEmpty)
+                    .help("Apps that used the microphone recently")
+                TextField("Bundle id, like com.example.dictate", text: $typed).onSubmit(addTyped)
+                Button("Add", action: addTyped).disabled(typed.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+        } header: {
+            Text("Never treat as a call")
+        } footer: {
+            Text("Apps here never count as holding the microphone for a call: ironpet makes no call offer for them and still speaks replies while they listen. Add dictation apps this way. Siri, Apple dictation and voice control, and Wispr Flow are always ignored. An entry is a bundle id prefix, so it also covers the app's helper processes. The + lists apps that used the microphone recently, and the field takes any bundle id.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .task { await model.loadRecent() }
+    }
+
+    private func addTyped() {
+        error = model.add(typed)?.message
+        if error == nil { typed = "" }
     }
 }

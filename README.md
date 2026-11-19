@@ -465,6 +465,7 @@ Turn it on under **Settings → Meetings**. The switch only turns on after the v
 | Summary model | `meetings.summaryModel` | A model id the agent reported in the chat. Unset uses the agent's default. Settings offers the models the agent listed the last time it ran in the chat |
 | Summarize automatically | `meetings.autoSummary` | Default on. Off means no agent runs |
 | Offer to record calls | `meetings.offerToRecordCalls` | Default on, and only applies with meetings on. When another app holds the microphone for about 10 seconds, Ghost asks whether to record it. Nothing records until you click Record |
+| Never treat as a call | `meetings.ignoredMicApps` | Default empty. Bundle id prefixes (at least two dot-separated parts, such as `com.example.dictate`) of apps whose microphone use is not a call, for example dictation apps. They get no call offer and do not hold back spoken replies. Siri, Apple dictation and Wispr Flow are always ignored. Works with meetings off |
 | Recognise speakers in meetings | `meetings.recogniseSpeakers` | Default off. See [Recognising speakers](#recognising-speakers) |
 | Start or stop shortcut | `hotkeys.meeting` | No default. Registered only while meetings are on |
 | Last recorded app | `meetings.lastApp` | Written by ironpet: a bundle id, or `"all"` |

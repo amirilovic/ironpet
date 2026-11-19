@@ -74,6 +74,9 @@ struct Config: Codable, Equatable {
         var autoSummary = true
         /// Ghost offers to record when another app holds the microphone for a call. Only applies with `enabled` on.
         var offerToRecordCalls = true
+        /// Bundle id prefixes of apps that never count as a call, on top of the built-in list in `CallApps`. Dictation
+        /// and voice assistants go here. Applies to call offers and to holding back spoken replies.
+        var ignoredMicApps: [String] = []
         /// Splits "Them" into individual speakers and recognises voices the user has named. Off by default because
         /// voiceprints are biometric data. Turning it on downloads the models once.
         var recogniseSpeakers = false
@@ -307,6 +310,7 @@ struct Config: Codable, Equatable {
         c.speech.speed = c.speech.speed.isFinite
             ? min(Speech.speedRange.upperBound, max(Speech.speedRange.lowerBound, c.speech.speed)) : Speech.defaultSpeed
         if c.meetings.summaryModel?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.meetings.summaryModel = nil }
+        c.meetings.ignoredMicApps = MicIgnoreList.normalized(c.meetings.ignoredMicApps)
         c.screenCapture.retentionDays = min(365, max(1, c.screenCapture.retentionDays))
         return c
     }
