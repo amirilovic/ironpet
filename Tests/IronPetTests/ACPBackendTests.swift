@@ -106,6 +106,7 @@ final class ACPBackendTests: XCTestCase {
     """#
 
     override func setUpWithError() throws {
+        TestMemory.isolate()
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-acp-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try Self.script.write(to: dir.appendingPathComponent("fake-agent"), atomically: true, encoding: .utf8)

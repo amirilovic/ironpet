@@ -104,7 +104,7 @@ final class JobTests: XCTestCase {
         service.currentAgent = { (AgentCatalog.all[0], "fast-model") }
         service.maxRunning = { max }
         service.preamble = { _ in "PREAMBLE" }
-        service.makeAgent = { [unowned self] _ in
+        service.makeAgent = { [unowned self] _, _ in
             let agent = FakeJobAgent()
             configure(agent)
             agents.append(agent)
@@ -118,6 +118,19 @@ final class JobTests: XCTestCase {
     private func until(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<200 where !condition() { try? await Task.sleep(for: .milliseconds(5)) }
         XCTAssertTrue(condition(), "timed out", file: file, line: line)
+    }
+
+    func testAJobsAgentUsesTheJobScopeAndNamesTheJobToMemory() throws {
+        let saved = ACPBackend.defaultMCPServers
+        defer { ACPBackend.defaultMCPServers = saved }
+        ACPBackend.defaultMCPServers = { [["name": "ironpet", "command": "/x", "args": ["mcp"], "env": [] as [JSON]], ["name": "other", "command": "/y"]] }
+        let job = Job(id: "job-abc123", title: "Fix", prompt: "Fix it", folder: folder.path, agent: AgentCatalog.all[0].id, created: Date())
+        let backend = try XCTUnwrap(JobService(database: database, tasks: nil).makeAgent(AgentCatalog.all[0], job) as? ACPBackend)
+        let env = try XCTUnwrap(backend.sessionMCPServers.first?["env"] as? [JSON])
+        XCTAssertEqual(env.first { $0["name"] as? String == MCPEndpoint.scopeVariable }?["value"] as? String, "job")
+        XCTAssertEqual(env.first { $0["name"] as? String == MCPEndpoint.callerVariable }?["value"] as? String, "job:job-abc123")
+        XCTAssertNil(backend.sessionMCPServers.last?["env"], "other servers are left alone")
+        backend.shutdown()
     }
 
     func testJobRunsTracksATaskAndSavesItsThread() async throws {

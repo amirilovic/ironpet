@@ -8,6 +8,7 @@ final class ChatKeepsSessionTests: XCTestCase {
     private let folderB = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-folder-b")
 
     override func setUp() async throws {
+        TestMemory.isolate()
         session = ChatSession(restore: false)
         session.workspace = folderA
         session.turnRunner = { _, _ in }

@@ -39,6 +39,7 @@ final class TelegramMediaTests: XCTestCase {
     private var users = UserStore()
 
     override func setUp() async throws {
+        TestMemory.isolate()
         client = FakeTelegram()
         session = ChatSession(restore: false)
         session.use(URL(fileURLWithPath: "/tmp/telegram-media-project"))

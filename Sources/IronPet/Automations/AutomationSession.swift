@@ -10,6 +10,16 @@ import Foundation
 enum AutomationSession {
     /// Runs one `own` thread holds before the next run starts a fresh thread.
     static let ownRunLimit = 50
+
+    /// Nobody is there to answer, so anything that would ask is refused. Edits to Ghost's memory files are refused too: what an
+    /// automation learns goes through the memory tools, which mark it as coming from the automation.
+    nonisolated static func decision(for call: ACPToolCall) -> ApprovalDecision {
+        if ["edit", "delete", "move"].contains(call.kind), let path = call.path, FileMemoryStore.contains(path) {
+            return .deny("Automations may not edit Ghost's memory files")
+        }
+        if case .allow = ApprovalRules.policy(for: call, auto: true) { return .allow }
+        return .deny("This automation runs without anyone to ask")
+    }
     /// Threads kept per automation. Older ones are deleted after a run.
     static let keptThreads = 50
 
@@ -18,8 +28,7 @@ enum AutomationSession {
     /// `agentOverride` and `turnRunner` let tests run a scripted agent.
     static func run(_ automation: Automation, prompt: String, workspace: URL, timeout: TimeInterval = 900,
                     agentOverride: ACPAgent? = nil, turnRunner: TurnRunner? = nil, now: Date = Date()) async -> Result<String, AutomationError> {
-        let agentID = automation.action.agent ?? UserDefaults.standard.string(forKey: "chatAgent")
-        guard let agent = agentOverride ?? AgentCatalog.agent(id: agentID) ?? AgentCatalog.agent(id: "cursor") else {
+        guard let agent = agentOverride ?? AgentCatalog.agent(id: AutomationPrompt.agentID(automation)) else {
             return .failure(.init(message: "no agent is available"))
         }
         try? FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
@@ -38,11 +47,9 @@ enum AutomationSession {
         if run == nil {
             let created = ACPBackend(agent: agent)
             created.usageFeature = .automations
-            created.onPermission = { call, respond in
-                // Nobody is there to answer, so anything that would ask is refused.
-                if case .allow = ApprovalRules.policy(for: call, auto: true) { respond(.allow) }
-                else { respond(.deny("This automation runs without anyone to ask")) }
-            }
+            created.mcpCaller = "automation:\(automation.id)"
+            created.sharesMemoryFolder = false
+            created.onPermission = { call, respond in respond(Self.decision(for: call)) }
             backend = created
             run = { turn, emit in await created.runTurn(turn, onEvent: emit) }
         }

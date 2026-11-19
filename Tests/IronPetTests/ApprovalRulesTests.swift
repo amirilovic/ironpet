@@ -92,12 +92,10 @@ final class ApprovalRulesTests: XCTestCase {
 
     func testAssistantReadsAndMemoryRunWithoutACardButJobControlAsks() {
         for tool in ["status_overview", "status_sessions", "jobs_list", "jobs_get", "jobs_open", "projects_resolve",
-                     "memory_recall", "memory_remember", "memory_forget", "memory_list"] {
+                     "memory_remember", "memory_forget", "memory_search", "memory_get"] {
             XCTAssertEqual(policy(ACPToolCall(id: "1", title: "mcp__ironpet__\(tool)", kind: "other", rawInput: ["text": "x"])), .allow, tool)
             if case .allow = policy(ACPToolCall(id: "1", title: "mcp__other__\(tool)", kind: "other")) { XCTFail("another server must ask: \(tool)") }
-        }
-        if case .allow = policy(ACPToolCall(id: "1", title: "memory_forget", kind: "other")) {
-            XCTFail("a bare assistant tool name could be another server's")
+            if case .allow = policy(ACPToolCall(id: "1", title: tool, kind: "other")) { XCTFail("a bare \(tool) could be another server's") }
         }
         for tool in ["jobs_start", "jobs_followup", "jobs_stop"] {
             if case .allow = policy(ACPToolCall(id: "1", title: "mcp__ironpet__\(tool)", kind: "other", rawInput: ["id": "job-1"])) {

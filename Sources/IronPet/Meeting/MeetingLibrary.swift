@@ -25,6 +25,8 @@ final class MeetingLibrary: ObservableObject {
     @Published private(set) var meetings: [MeetingRecord] = []
     /// Rebuilds a meeting's transcript and summary. Lives here so the list and the work on it share one place.
     let regenerator = MeetingRegenerator()
+    /// Called with the folder after a meeting went to the Trash, so its text leaves the memory index.
+    var onDeleted: ((URL) -> Void)?
     private let root: URL
 
     init(root: URL = Paths.meetings) {
@@ -40,6 +42,7 @@ final class MeetingLibrary: ObservableObject {
     func delete(_ id: String) throws {
         guard let meeting = meetings.first(where: { $0.id == id }) else { return }
         try FileManager.default.trashItem(at: meeting.folder, resultingItemURL: nil)
+        onDeleted?(meeting.folder)
         reload()
     }
 

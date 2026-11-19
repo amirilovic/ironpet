@@ -86,12 +86,13 @@ enum AutomationCLI {
     }
 
     /// Sends one request to the app. Returns nil when the app is not running.
-    static func post(path: String, body: Data) -> (status: Int, body: Data)? {
+    static func post(path: String, body: Data, caller: String? = nil) -> (status: Int, body: Data)? {
         guard let (port, token) = endpoint(), let url = URL(string: "http://127.0.0.1:\(port)\(path)") else { return nil }
         var request = URLRequest(url: url, timeoutInterval: 120)
         request.httpMethod = "POST"
         request.httpBody = body
         request.setValue(token, forHTTPHeaderField: "x-ironpet-token")
+        if let caller { request.setValue(caller, forHTTPHeaderField: MCPEndpoint.callerHeader) }
         let semaphore = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var result: (Int, Data)?
         URLSession.shared.dataTask(with: request) { data, response, _ in
@@ -175,9 +176,11 @@ enum AutomationCLI {
 
     /// MCP over stdio: each input line is a JSON-RPC message that goes to the app's `/mcp` endpoint.
     static func stdioBridge(path: String = "/mcp") -> Int32 {
+        // Set by the session that started this bridge when it is not the user's chat, such as an automation's own session.
+        let caller = ProcessInfo.processInfo.environment[MCPEndpoint.callerVariable]
         while let line = readLine(strippingNewline: true) {
             guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
-            guard let response = post(path: path, body: Data(line.utf8)) else {
+            guard let response = post(path: path, body: Data(line.utf8), caller: caller) else {
                 if let message = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any], let id = message["id"] {
                     let error: [String: Any] = ["jsonrpc": "2.0", "id": id, "error": ["code": -32000, "message": "ironpet is not running"]]
                     if let data = try? JSONSerialization.data(withJSONObject: error) { print(String(decoding: data, as: UTF8.self)) }
