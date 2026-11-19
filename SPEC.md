@@ -113,6 +113,16 @@ Status of milestone 2: built. Threads are saved to `~/.ironpet/threads/` and reo
 
 - **First run (`App/SetupWindow.swift`).** Shown when setup was never finished or skipped and there is no `config.json` (a config brought from another Mac counts as set up). It offers pet name, hooks per agent (pre-ticked when the tool is detected or ironpet's hooks are already there), launch at login, break reminders and GitHub alerts. Start writes `config.json`, installs the chosen hooks, removes unticked ones left by an older version, and switches chat to Claude Code if cursor-agent is missing. Not now or closing the window writes the default config (no hooks). Hooks are recorded as `integrations.cursorHooks` / `claudeHooks`; on each launch the chosen ones are refreshed, and toggling them in Settings installs or removes only that agent's hooks.
 
+## API layer
+
+Every client reaches the app's state through one in-process API, `IronPetAPI` (`Sources/IronPet/API/`). The clients are the ironpet window and its views, `MCPEndpoint`, the `IronPet` CLI, the Telegram bridge and, in a later phase, a remote client. They are equals: whatever one can do, the others can do, and there is one chat and one set of state, not one per client. This is phase 0 of the iOS app. It adds no network listener, pairing or tokens, and the app behaves as before.
+
+- **Only the API touches stores.** A store (`TaskStore`, `SignalStore`, `SessionStore`, `ConfigStore`, `MeetingController` and the others) is held by the API and by the AppKit owner that creates it. A view, an adapter or a CLI handler never calls one. Phase 1 then puts a transport and authentication in front of the API and nothing else changes.
+- **Namespaces.** One property per area on `IronPetAPI` (`api.tasks`, `api.automations`, and so on), added as the area moves behind it.
+- **Calls.** A call takes a `Codable` request value and returns a `Codable` response value, or throws `APIError`. No call returns a store, an image or a closure, so the same call can cross a network later.
+- **Errors.** `APIError` has a `code` (`not_found`, `invalid`, `conflict`, `unavailable`, `failed`) and a `message`. A store's own error is wrapped with `APIError.wrap`.
+- **Tests.** `APITestSupport.makeAPI()` builds the API over in-memory stores, so an area's tests drive it only through the API.
+
 ## Tasks
 
 The agent's board, not the user's: the agent keeps track of the items, the user tells it what happened. Moving cards by hand would lose what the agent knows, so the UI only marks done, deletes, and adds or skips suggestions from meetings and watchers.
