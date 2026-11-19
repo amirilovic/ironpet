@@ -226,6 +226,8 @@ struct ChatView: View {
                 } label: {
                     if thread.isAutomationRun {
                         Label("\(thread.automationName ?? thread.title) — automation run", systemImage: "gearshape.2")
+                    } else if thread.voice == true {
+                        Label(thread.title, systemImage: "mic.fill")
                     } else {
                         Text("\(thread.title) — \(URL(fileURLWithPath: thread.workspace).lastPathComponent)")
                     }
@@ -1264,11 +1266,15 @@ private struct UserBubble: View {
                     Image(systemName: "shippingbox.fill").font(.system(size: 9))
                     Text("Background job").font(.system(size: 10))
                 }
+                if source == ChatSession.voiceOrigin {
+                    Image(systemName: "mic.fill").font(.system(size: 9))
+                    Text("Voice").font(.system(size: 10))
+                }
                 if let date { Text(timeFormatter.string(from: date)).font(.system(size: 10)) }
             }
             .foregroundStyle(.tertiary)
             .help(source == ChatSession.telegramOrigin ? "Sent from Telegram" : source == ChatSession.automationOrigin ? "Sent by an automation"
-                  : source == ChatSession.jobOrigin ? "Sent to a background job" : "")
+                  : source == ChatSession.jobOrigin ? "Sent to a background job" : source == ChatSession.voiceOrigin ? "Said in voice mode" : "")
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 50)

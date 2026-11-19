@@ -86,6 +86,8 @@ final class ChatSession: ObservableObject {
     static let automationOrigin = "automation"
     /// A prompt or follow-up that a background job ran (`JobService`).
     static let jobOrigin = "job"
+    /// Something the user said in voice mode (`FrontDesk`).
+    static let voiceOrigin = "voice"
 
     struct Approval: Identifiable {
         let id = UUID()
@@ -621,9 +623,10 @@ final class ChatSession: ObservableObject {
             thread.automationName = earlier.automationName
             thread.runs = earlier.runs
         }
-        if let earlier = ThreadStore.load(threadID), earlier.job != nil {
+        if let earlier = ThreadStore.load(threadID), earlier.job != nil || earlier.voice == true {
             thread.title = earlier.title
             thread.job = earlier.job
+            thread.voice = earlier.voice
         }
         ThreadStore.save(thread)
         history = ThreadStore.recent()

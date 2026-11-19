@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Nil until the database is open, a moment after launch.
     private var jobs: JobService?
     private lazy var assistant = makeAssistantContext()
+    private lazy var voiceMode = makeVoiceMode()
     /// A job `jobs_open` asked for while the chat was running the turn that asked. Opened when that turn ends.
     private var jobToOpen: String?
     private var dueReminders: TaskDueReminders?
@@ -108,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.onOpenJob = { [weak self] id in self?.openJob(id) }
         bubblePanel = BubblePanel(store: announcer.bubbles)
         pet.extraMenuItems = { [weak self] in self?.hookMenuItems() ?? [] }
-        pet.chatMood = { [weak self] in self?.chat.mood }
+        pet.chatMood = { [weak self] in self?.voiceMode.conversation.mood ?? self?.chat.mood }
         pet.onChatToggle = { [weak self] in self?.toggleChat() }
         pet.onCapture = { [weak self] region in self?.captureScreen(region: region) }
         pet.chat = chat
@@ -321,7 +322,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setUpJobs(_ database: Database, tasks: TaskStore) {
         let service = JobService(database: database, tasks: tasks)
         service.currentAgent = { [weak self] in self.map { ($0.chat.agent, $0.chat.model) } }
-        service.onChange = { [weak self] job in self?.store.setJob(Job.sessionKey(job.id), job.agentSession) }
+        service.onChange = { [weak self] job in
+            self?.store.setJob(Job.sessionKey(job.id), job.agentSession)
+            self?.voiceMode.jobChanged(job)
+        }
+        voiceMode.isFromVoice = { [weak service] id in service?.isFromVoice(id) ?? false }
+        voiceMode.conversation.cancelHeldJob = { [weak service] in service?.cancelHeldVoiceJob() }
+        voiceMode.conversation.releaseHeldJobs = { [weak service] in service?.releaseVoiceHolds() }
         service.onThreadSaved = { [weak self] thread in self?.chat.threadSaved(thread) }
         service.askApproval = { [weak self] id, job, title, detail, decide in
             self?.announcer.automation(AutomationNotice(
@@ -343,6 +350,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return (try? service.followUp(job.id, message: text)) != nil
         }
         jobs = service
+    }
+
+    /// Voice mode on the chat's agent, with voice mode's model or the agent's fastest. It stays quiet during calls and
+    /// meeting recordings, and job updates are not spoken to an empty room.
+    private func makeVoiceMode() -> VoiceModeController {
+        let desk = FrontDesk()
+        desk.memory = assistant.memory
+        desk.currentAgent = { [weak self] in
+            guard let self else { return nil }
+            let configured = config.config.voiceMode.model
+            return (chat.agent, configured.isEmpty ? FrontDesk.fastestModel(in: chat.models) ?? chat.model : configured)
+        }
+        desk.onThreadSaved = { [weak self] thread in self?.chat.threadSaved(thread) }
+        let controller = VoiceModeController(frontDesk: desk)
+        controller.petFrame = { [weak self] in self?.pet.panel.frame ?? .zero }
+        controller.quietReason = { [weak self] in
+            guard let self else { return nil }
+            if [.recording, .finishing].contains(meeting.phase) { return "a meeting recording" }
+            let calls = callMonitor.flatMap { $0.isRunning ? $0.detector.activeApps : nil } ?? speechMic.calls()
+            return calls.isEmpty ? nil : "a call"
+        }
+        let systemIdle = WelcomeBack.Environment().idleSeconds
+        controller.isAway = { [weak self] in
+            (self?.testIdleSeconds ?? systemIdle()) >= ConfigStore.shared.config.reminders.idleResetMinutes * 60
+        }
+        controller.pauseChatDictation = { [weak self] paused in
+            guard let self else { return }
+            if paused { wispr.stop() } else if chat.isVisible { wispr.start() }
+        }
+        controller.conversation.onFailure = { [weak self] message in
+            self?.announcer.automation(AutomationNotice(id: "voice-mode", symbol: "mic.slash.fill", tint: .warn, title: "Voice mode",
+                                                        body: message, expires: 15))
+        }
+        controller.onStateChange = { [weak self] in self?.pet.refreshMood() }
+        return controller
     }
 
     /// What the `jobs_*`, `status_*`, `memory_*` and `projects_resolve` tools read.
@@ -568,7 +610,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setHooks(installed: newAgents.filter { !oldAgents.contains($0) })
         setHooks(removed: oldAgents.filter { !newAgents.contains($0) })
         if new.hotkeys != old.hotkeys || new.voice.enabled != old.voice.enabled
-            || new.meetings.enabled != old.meetings.enabled { registerHotKeys() }
+            || new.meetings.enabled != old.meetings.enabled || new.voiceMode.enabled != old.voiceMode.enabled { registerHotKeys() }
+        if !new.voiceMode.enabled { voiceMode.conversation.end() }
         if new.telegram.enabled != old.telegram.enabled { telegram.setEnabled(new.telegram.enabled) }
         if !new.voice.enabled { chat.voice.cancel() }
         if !new.speech.enabled { chat.speech.stop() }
@@ -624,6 +667,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let shortcut = Shortcut(text) {
                 let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, id: 5) { [weak self] in
                     MainActor.assumeIsolated { self?.toggleMeeting() }
+                }
+                if hotKey.isRegistered { hotKeys.append(hotKey) } else { failed.insert(text) }
+            } else {
+                failed.insert(text)
+            }
+        }
+        // Start or end a voice conversation. Only registered with voice mode on.
+        if let text = VoiceModeController.hotkey(in: config.config) {
+            if let shortcut = Shortcut(text) {
+                let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, id: 10) { [weak self] in
+                    MainActor.assumeIsolated { self?.voiceMode.toggle() }
                 }
                 if hotKey.isRegistered { hotKeys.append(hotKey) } else { failed.insert(text) }
             } else {
@@ -710,6 +764,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        voiceMode.conversation.end()
+        voiceMode.frontDesk.shutdown()
         meeting.prepareForQuit()
         chat.persistForRelaunch()
         chat.shutdown()
@@ -833,6 +889,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             control.windowState = { [weak self] in self?.pet.windowState ?? [:] }
             control.openBrief = { [weak self] target in self?.pet.openBrief(target) }
+            control.voiceMode = voiceMode
+            control.jobs = { [weak self] in self?.jobs }
             testControl = control
             server.onTest = { request, respond in
                 DispatchQueue.main.async { respond(control.handle(request)) }
@@ -900,7 +958,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         chat.prepareForShow()
         chat.isVisible = true
-        wispr.start()
+        // A Wispr voice conversation reads the same dictations; the chat's bridge waits until it ends.
+        if !(voiceMode.conversation.isActive && voiceMode.conversation.mode == .wispr) { wispr.start() }
         pet.refreshMood()
         pet.window.focusInput()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
@@ -1131,7 +1190,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The first poll answers empty, so polling starts when spoken replies are turned on rather than when a reply ends.
     /// While the meeting call monitor runs, it answers instead and this watch stays off.
     private func syncSpeechQuiet() {
-        if config.config.speech.enabled, callMonitor?.isRunning != true { _ = speechMic.calls() } else { speechMic.stop() }
+        let speaks = config.config.speech.enabled || config.config.voiceMode.enabled
+        if speaks, callMonitor?.isRunning != true { _ = speechMic.calls() } else { speechMic.stop() }
     }
 
     /// Watches the microphone while meetings and call offers are on, and stops otherwise.

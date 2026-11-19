@@ -1058,6 +1058,88 @@ def scenario_speech():
                 stub.close()
 
 
+def voice_mode(path="state", body=None):
+    return call("GET", "/test/voice-mode/state") if path == "state" else call("POST", f"/test/voice-mode/{path}", body or {})
+
+
+def voice_mode_listening(mode):
+    return wait_for(lambda: (lambda s: s if s["state"] == "listening" and s["pill"] and s["mode"] == mode else None)(voice_mode()), 5)
+
+
+def scenario_voice_mode():
+    """Voice mode with a silent microphone and voice: the conversation loop, goodbye, Wispr mode, and one real
+    front-desk turn that starts a voice job which "cancel that" stops inside its hold, so the job's agent never runs."""
+    conversations = f"{ROOT}/memory/conversations.md"
+    threads = f"{ROOT}/threads"
+    with PreservedUserState(), PreservedTasks():
+        notes = open(conversations, "rb").read() if os.path.exists(conversations) else None
+        before = set(os.listdir(threads)) if os.path.isdir(threads) else set()
+        try:
+            voice_mode_checks()
+        finally:
+            # The last conversation's summary turn may still be writing; stop the app before putting files back.
+            subprocess.run(["pkill", "-f", f"{APP}/Contents/MacOS/IronPet"])
+            time.sleep(1.5)
+            for name in (set(os.listdir(threads)) if os.path.isdir(threads) else set()) - before:
+                os.remove(os.path.join(threads, name))
+            if notes is None:
+                if os.path.exists(conversations):
+                    os.remove(conversations)
+            else:
+                with open(conversations, "wb") as f:
+                    f.write(notes)
+
+
+def voice_mode_checks():
+    relaunch(test_mode=True)
+    config = read_config()
+    config["voiceMode"] = {"enabled": False}
+    json.dump(config, open(CONFIG, "w"), indent=2)
+    time.sleep(2.6)
+    record("Voice mode: off, the test endpoint refuses to start", voice_mode("start").get("error") == "voice mode is off")
+
+    config["voiceMode"] = {"enabled": True}
+    json.dump(config, open(CONFIG, "w"), indent=2)
+    time.sleep(2.6)
+    voice_mode("start", {"reply": "All quiet. Nothing needs you."})
+    s = voice_mode_listening("microphone")
+    record("Voice mode: the shortcut's path opens the pill and listens", bool(s), str(s or voice_mode()))
+    shot("voice-mode-listening")
+    voice_mode("utterance", {"text": "what's going on"})
+    back = wait_for(lambda: (lambda s: s if s["state"] == "listening" and s["reply"] else None)(voice_mode()), 10)
+    record("Voice mode: a question is answered and it listens again", bool(back) and back["heard"] == "what's going on"
+           and "All quiet" in back["reply"], str(back or voice_mode()))
+    voice_mode("utterance", {"text": "that's all"})
+    ended = wait_for(lambda: (lambda s: s if s["state"] == "idle" and not s["pill"] else None)(voice_mode()), 5)
+    record("Voice mode: goodbye ends it and hides the pill", bool(ended), str(ended or voice_mode()))
+
+    voice_mode("start", {"reply": "Sure.", "mode": "wispr"})
+    s = voice_mode_listening("wispr")
+    record("Voice mode: Wispr mode listens without the microphone", bool(s), str(s or voice_mode()))
+    shot("voice-mode-wispr")
+    voice_mode("utterance", {"text": "hello"})
+    back = wait_for(lambda: (lambda s: s if s["state"] == "listening" and s["reply"] == "Sure." else None)(voice_mode()), 10)
+    record("Voice mode: a dictation is answered in Wispr mode", bool(back), str(back or voice_mode()))
+    s = voice_mode("end")
+    record("Voice mode: Esc's path ends it", s.get("state") == "idle", str(s))
+
+    fresh_workspace()
+    voice_mode("start", {"mode": "ironpet"})
+    voice_mode_listening("microphone")
+    voice_mode("utterance", {"text": f"Start a background job in {WS} that creates a file named voice.txt containing hi."})
+    job = wait_for(lambda: next((j for j in call("GET", "/test/jobs")["jobs"] if j["fromVoice"] and j["folder"].endswith(WS)), None), 120)
+    record("Voice mode: the front desk starts a job held as a voice job", bool(job) and job["state"] == "queued",
+           str(job) if job else f"no voice job; conversation={voice_mode()}")
+    if job:
+        voice_mode("utterance", {"text": "cancel that"})
+        stopped = wait_for(lambda: next((j for j in call("GET", "/test/jobs")["jobs"]
+                                         if j["id"] == job["id"] and j["state"] == "stopped"), None), 10)
+        time.sleep(6)
+        record("Voice mode: cancel that stops the held job before it runs", bool(stopped)
+               and not os.path.exists(os.path.join(WS, "voice.txt")), str(stopped))
+    voice_mode("end")
+
+
 def scenario_voice_key():
     """An API key typed in Settings → Voice goes to the Keychain and to no file under ~/.ironpet."""
     secret = "e2e-key-" + str(int(time.time()))
@@ -1813,7 +1895,7 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
              "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
              "notification": scenario_notification_approval, "mcp": scenario_mcp,
              "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
-             "voice": scenario_voice, "voice-key": scenario_voice_key, "speech": scenario_speech, "meeting": scenario_meeting,
+             "voice": scenario_voice, "voice-mode": scenario_voice_mode, "voice-key": scenario_voice_key, "speech": scenario_speech, "meeting": scenario_meeting,
              "meeting-system": scenario_meeting_system_audio, "tasks": scenario_tasks, "screen": scenario_screen,
              "welcome-back": scenario_welcome_back, "brief": scenario_brief}
 
@@ -1829,7 +1911,10 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # "tasks" runs two short turns on $IRONPET_E2E_AGENT (default cursor) and puts ironpet.db back afterwards.
 # "welcome-back" posts synthetic Claude hook events and a stand-in idle time, so it runs no agent; it puts config.json and ironpet.db back.
 # "brief" starts no agent; it puts ironpet.db and automations.json back afterwards.
-OPT_IN = {"mcp", "sentry", "voice", "voice-key", "speech", "runtime", "asks", "meeting", "meeting-system"}
+# "voice-mode" opens no microphone and plays no audio; it runs one front-desk turn on the chat's agent (its fastest model)
+# and stops the job that turn starts before the job's agent runs. It puts config.json, ironpet.db and
+# memory/conversations.md back and deletes the threads it saved.
+OPT_IN = {"mcp", "sentry", "voice", "voice-key", "voice-mode", "speech", "runtime", "asks", "meeting", "meeting-system"}
 
 if __name__ == "__main__":
     if {"-h", "--help"} & set(sys.argv[1:]):

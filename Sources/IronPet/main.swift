@@ -13,7 +13,7 @@ if CommandLine.arguments.dropFirst().first == "skills" {
 }
 if ["mcp", "mcp-stdio"].contains(CommandLine.arguments.dropFirst().first ?? "") {
     // A background job's session must not start or steer jobs, so its bridge asks for the job scope.
-    exit(AutomationCLI.stdioBridge(path: ProcessInfo.processInfo.environment[MCPEndpoint.scopeVariable] == "job" ? MCPEndpoint.jobPath : "/mcp"))
+    exit(AutomationCLI.stdioBridge(path: MCPEndpoint.path(forScope: ProcessInfo.processInfo.environment[MCPEndpoint.scopeVariable])))
 }
 
 if CommandLine.arguments.contains("--uninstall") {

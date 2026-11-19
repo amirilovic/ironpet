@@ -18,6 +18,8 @@ struct ChatThread: Codable, Identifiable {
     var runs: Int? = nil
     /// The id of the background job whose transcript this thread holds (`JobService`).
     var job: String? = nil
+    /// True for a voice-mode conversation (`FrontDesk`).
+    var voice: Bool? = nil
 
     var isAutomationRun: Bool { automation != nil }
 }

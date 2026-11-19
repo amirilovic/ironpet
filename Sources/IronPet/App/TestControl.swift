@@ -65,6 +65,9 @@ final class TestControl {
     var windowState: (() -> [String: Any])?
     /// Presses a Today row, as a click would.
     var openBrief: ((Brief.Target) -> Void)?
+    /// Voice mode, for `/test/voice-mode/*`. It runs on test doubles: no microphone, no speech server.
+    var voiceMode: VoiceModeController?
+    var jobs: (() -> JobService?)?
 
     init(chat: ChatSession, actions: Actions) {
         self.chat = chat
@@ -326,6 +329,12 @@ final class TestControl {
             return tasksSnapshot()
         case ("GET", "/test/screen"):
             return screenSnapshot()
+        case ("GET", "/test/voice-mode/state"), ("POST", "/test/voice-mode/start"), ("POST", "/test/voice-mode/utterance"),
+             ("POST", "/test/voice-mode/end"):
+            return voiceModeEndpoint(request.path, body)
+        case ("GET", "/test/jobs"):
+            guard let service = jobs?() else { return Self.encode(["ok": false, "error": "jobs are not built"]) }
+            return Self.encode(["ok": true, "jobs": service.jobs.map { $0.json.merging(["fromVoice": service.isFromVoice($0.id)]) { a, _ in a } }])
         case ("POST", "/test/screen/ingest"), ("POST", "/test/screen/filter"), ("POST", "/test/screen/send"), ("POST", "/test/screen/propose"), ("POST", "/test/screen/inspector"), ("POST", "/test/screen/stub"), ("POST", "/test/screen/reset"):
             return screenEndpoint(request.method, request.path, body)
         default:
@@ -366,6 +375,31 @@ final class TestControl {
             break
         }
         return screenSnapshot()
+    }
+
+    /// `start` takes `reply` (what the front desk answers; without it the real agent runs) and `mode` (`ironpet` or
+    /// `wispr`). `utterance` takes `text`, said to the microphone or dictated through Wispr.
+    private func voiceModeEndpoint(_ path: String, _ body: [String: Any]) -> Data {
+        guard let voiceMode else { return Self.encode(["ok": false, "error": "voice mode is not built"]) }
+        let conversation = voiceMode.conversation
+        switch path {
+        case "/test/voice-mode/start":
+            guard ConfigStore.shared.config.voiceMode.enabled else { return Self.encode(["ok": false, "error": "voice mode is off"]) }
+            voiceMode.useTestDoubles(reply: body["reply"] as? String)
+            if let mode = body["mode"] as? String {
+                conversation.listenMode = { mode == Config.VoiceMode.wispr ? .wispr : .microphone }
+            }
+            if !conversation.isActive { voiceMode.toggle() }
+        case "/test/voice-mode/utterance":
+            let text = body["text"] as? String ?? ""
+            guard conversation.state != .idle, !text.isEmpty else { return Self.encode(["ok": false, "error": "no conversation, or no text"]) }
+            if conversation.mode == .wispr { conversation.receive(text) } else { conversation.hear(Data(text.utf8)) }
+        case "/test/voice-mode/end":
+            conversation.end()
+        default:
+            break
+        }
+        return Self.encode(voiceMode.testSnapshot())
     }
 
     /// Files named by `mic` and `them` stand in for the microphone and the app's audio.

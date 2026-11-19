@@ -184,9 +184,23 @@ enum PreviewRenderer {
         var speechOn = patterned
         speechOn.voice.enabled = true
         speechOn.speech.enabled = true
+        speechOn.voiceMode.enabled = true
         ConfigStore.shared.usePreview(speechOn)
         for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
-            render(VoiceSettings(model: settingsModel).frame(width: 560, height: 1000).panel(), to: dir, "settings-voice" + suffix, scheme: scheme)
+            render(VoiceSettings(model: settingsModel).frame(width: 560, height: 1500).panel(), to: dir, "settings-voice" + suffix, scheme: scheme)
+        }
+        // Voice mode's pill in each state, with what was heard.
+        let pills: [(VoiceConversation.State, VoiceConversation.Mode, String?, String)] = [
+            (.listening, .microphone, nil, "listening"), (.thinking, .microphone, "What's going on with my jobs?", "thinking"),
+            (.speaking, .microphone, "What's going on with my jobs?", "speaking"), (.listening, .wispr, nil, "wispr"),
+        ]
+        for (state, mode, heard, name) in pills {
+            let conversation = VoiceConversation(frontDesk: FrontDesk())
+            conversation.loadPreview(state: state, mode: mode, heard: heard)
+            for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
+                render(VoicePillView(conversation: conversation, petName: "Ghost", onEnd: {}).padding(16),
+                       to: dir, "voice-pill-\(name)" + suffix, scheme: scheme)
+            }
         }
         let speaking = ChatSession(restore: false)
         speaking.loadPreview(.done)
