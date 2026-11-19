@@ -7,13 +7,15 @@ final class FakeTelegram: TelegramClient, @unchecked Sendable {
         let chat: Int64
         let text: String
         let html: Bool
-        var buttons: [TelegramButton] = []
+        var keyboard: [[TelegramButton]] = []
+        var buttons: [TelegramButton] { keyboard.flatMap { $0 } }
     }
 
     struct Edit: Equatable {
         let chat: Int64
         let messageID: Int64
         let text: String
+        var keyboard: [[TelegramButton]] = []
     }
 
     private let lock = NSLock()
@@ -50,8 +52,8 @@ final class FakeTelegram: TelegramClient, @unchecked Sendable {
         return try await updates(offset)
     }
 
-    func sendMessage(chat: Int64, text: String, html: Bool, buttons: [TelegramButton]) async throws -> Int64 {
-        let message = Sent(chat: chat, text: text, html: html, buttons: buttons)
+    func sendMessage(chat: Int64, text: String, html: Bool, keyboard: [[TelegramButton]]) async throws -> Int64 {
+        let message = Sent(chat: chat, text: text, html: html, keyboard: keyboard)
         if let failure = sendFailure(message) { throw failure }
         return lock.withLock {
             _sent.append(message)
@@ -60,8 +62,8 @@ final class FakeTelegram: TelegramClient, @unchecked Sendable {
         }
     }
 
-    func editMessage(chat: Int64, messageID: Int64, text: String) async throws {
-        lock.withLock { _edits.append(Edit(chat: chat, messageID: messageID, text: text)) }
+    func editMessage(chat: Int64, messageID: Int64, text: String, keyboard: [[TelegramButton]]) async throws {
+        lock.withLock { _edits.append(Edit(chat: chat, messageID: messageID, text: text, keyboard: keyboard)) }
     }
 
     func answerCallback(id: String, text: String?, alert: Bool) async throws {

@@ -42,6 +42,13 @@ struct TelegramMessage: Codable, Equatable {
         let from: TelegramUser?
         let text: String?
         var caption: String? = nil
+        /// Lets a reply be matched to the bot message it answers.
+        var messageId: Int64? = nil
+
+        enum CodingKeys: String, CodingKey {
+            case from, text, caption
+            case messageId = "message_id"
+        }
     }
 
     struct Chat: Codable, Equatable {
@@ -132,12 +139,12 @@ enum TelegramError: LocalizedError, Equatable {
 protocol TelegramClient: Sendable {
     func getMe() async throws -> TelegramUser
     func getUpdates(offset: Int, timeout: Int) async throws -> [TelegramUpdate]
-    /// `html` true sends `text` with parse mode HTML. `buttons` become one row of inline keyboard buttons. Returns the
+    /// `html` true sends `text` with parse mode HTML. `keyboard` is the inline keyboard, one array per row. Returns the
     /// new message's id.
     @discardableResult
-    func sendMessage(chat: Int64, text: String, html: Bool, buttons: [TelegramButton]) async throws -> Int64
-    /// Replaces a message's text and removes its inline keyboard.
-    func editMessage(chat: Int64, messageID: Int64, text: String) async throws
+    func sendMessage(chat: Int64, text: String, html: Bool, keyboard: [[TelegramButton]]) async throws -> Int64
+    /// Replaces a message's text and its inline keyboard. An empty keyboard removes it.
+    func editMessage(chat: Int64, messageID: Int64, text: String, keyboard: [[TelegramButton]]) async throws
     func answerCallback(id: String, text: String?, alert: Bool) async throws
     func sendChatAction(chat: Int64) async throws
     func getFile(id: String) async throws -> TelegramFilePath
@@ -146,7 +153,18 @@ protocol TelegramClient: Sendable {
 
 extension TelegramClient {
     func sendMessage(chat: Int64, text: String, html: Bool) async throws {
-        try await sendMessage(chat: chat, text: text, html: html, buttons: [])
+        try await sendMessage(chat: chat, text: text, html: html, keyboard: [])
+    }
+
+    /// `buttons` become one row.
+    @discardableResult
+    func sendMessage(chat: Int64, text: String, html: Bool, buttons: [TelegramButton]) async throws -> Int64 {
+        try await sendMessage(chat: chat, text: text, html: html, keyboard: buttons.isEmpty ? [] : [buttons])
+    }
+
+    /// Replaces a message's text and removes its inline keyboard.
+    func editMessage(chat: Int64, messageID: Int64, text: String) async throws {
+        try await editMessage(chat: chat, messageID: messageID, text: text, keyboard: [])
     }
 }
 
@@ -229,18 +247,21 @@ struct TelegramAPI: TelegramClient {
                        timeout: TimeInterval(timeout + 15), as: [TelegramUpdate].self)
     }
 
-    func sendMessage(chat: Int64, text: String, html: Bool, buttons: [TelegramButton]) async throws -> Int64 {
+    private static func markup(_ keyboard: [[TelegramButton]]) -> [String: Any] {
+        ["inline_keyboard": keyboard.map { row in row.map { ["text": $0.text, "callback_data": $0.data] } }]
+    }
+
+    func sendMessage(chat: Int64, text: String, html: Bool, keyboard: [[TelegramButton]]) async throws -> Int64 {
         var body: [String: Any] = ["chat_id": chat, "text": text, "disable_web_page_preview": true]
         if html { body["parse_mode"] = "HTML" }
-        if !buttons.isEmpty {
-            body["reply_markup"] = ["inline_keyboard": [buttons.map { ["text": $0.text, "callback_data": $0.data] }]]
-        }
+        if !keyboard.isEmpty { body["reply_markup"] = Self.markup(keyboard) }
         return try await call("sendMessage", body, as: TelegramMessage.self).messageId
     }
 
-    func editMessage(chat: Int64, messageID: Int64, text: String) async throws {
-        _ = try await call("editMessageText", ["chat_id": chat, "message_id": messageID, "text": text,
-                                               "disable_web_page_preview": true], as: TelegramMessage.self)
+    func editMessage(chat: Int64, messageID: Int64, text: String, keyboard: [[TelegramButton]]) async throws {
+        var body: [String: Any] = ["chat_id": chat, "message_id": messageID, "text": text, "disable_web_page_preview": true]
+        if !keyboard.isEmpty { body["reply_markup"] = Self.markup(keyboard) }
+        _ = try await call("editMessageText", body, as: TelegramMessage.self)
     }
 
     func answerCallback(id: String, text: String?, alert: Bool) async throws {

@@ -144,7 +144,7 @@ final class BoundaryTests: XCTestCase {
             let signature = trimmed.components(separatedBy: " {").first ?? trimmed
             for name in Self.typeNames(in: signature) where !codable.contains(name) { problems.append("\(trimmed): \(name) is not a Codable type") }
             let name = trimmed.replacingOccurrences(of: "static ", with: "").dropFirst(5).prefix { $0 != "(" }
-            if trimmed.contains("func "), !signature.contains("async"), !["snapshot", "onTurn", "cachedModels"].contains(String(name)) {
+            if trimmed.contains("func "), !signature.contains("async"), !["snapshot", "onTurn", "onFormsChanged", "cachedModels"].contains(String(name)) {
                 problems.append("\(trimmed): a call must be async")
             }
         }

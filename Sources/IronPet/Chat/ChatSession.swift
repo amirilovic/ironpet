@@ -158,7 +158,10 @@ final class ChatSession: ObservableObject {
         didSet { events?.publish(.chatState, id: "approvals") }
     }
     @Published private(set) var forms: [PendingForm] = [] {
-        didSet { events?.publish(.chatState, id: "forms") }
+        didSet {
+            events?.publish(.chatState, id: "forms")
+            onFormsChanged?()
+        }
     }
     @Published private(set) var history: [ChatThread] = ThreadStore.recent() {
         didSet { events?.publish(.chatState, id: "threads") }
@@ -230,6 +233,8 @@ final class ChatSession: ObservableObject {
     var isVisible = false
     /// Reports progress of turns that another client sent (`submit`), with the origin it gave.
     var onTurn: ((ChatOrigin, TurnEvent) -> Void)?
+    /// A form opened, closed or got an answer.
+    var onFormsChanged: (() -> Void)?
     /// Reports the start and end of a turn that an automation sent (`submitFromAutomation`).
     var onAutomation: ((String, AutomationEvent) -> Void)?
     /// The final reply of an automation's turn, with the automation's id, for Ghost's memory to read as outside text.

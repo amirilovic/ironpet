@@ -75,6 +75,29 @@ final class TelegramBridge: ObservableObject {
     /// Approvals being decided by a Telegram tap right now, to tell them from ones the Mac answered.
     private var applying: Set<UUID> = []
 
+    /// A form shown on Telegram. Its messages are edited when the Mac or Telegram answers it.
+    private enum FormSlot: Hashable {
+        case header
+        case question(Int)
+    }
+
+    private struct SentForm {
+        let short: Int
+        let form: ElicitationForm
+        let questions: [TelegramFormQuestion]
+        var messages: [Int64: [FormSlot: Int64]] = [:]
+        /// Per question: answered or skipped, with the text shown in its message.
+        var settled: [Int: String] = [:]
+        /// Per question: the options toggled so far in a multi select.
+        var picked: [Int: Set<Int>] = [:]
+        /// Per question: text typed into its Other box.
+        var other: [Int: String] = [:]
+        var closed = false
+    }
+    private var sentForms: [UUID: SentForm] = [:]
+    private var nextFormNumber = 1
+    private var stopListeningForms: (() -> Void)?
+
     init(client: TelegramClient, host: ChatAPI, tokens: TelegramTokenStore, storage: Storage,
          filesDirectory: URL = Paths.telegramFiles,
          voiceEnabled: (() -> Bool)? = nil,
@@ -96,6 +119,10 @@ final class TelegramBridge: ObservableObject {
         stopListening = host.onTurn { [weak self] origin, event in
             guard origin.client == ChatOrigin.telegramClient, let chat = Int64(origin.ref) else { return }
             self?.hostEvent(chat, event)
+        }
+        stopListeningForms = host.onFormsChanged { [weak self] in
+            guard let self else { return }
+            self.enqueueIncoming { await self.syncForms() }
         }
     }
 
@@ -319,6 +346,11 @@ final class TelegramBridge: ObservableObject {
             let sender = original.from?.isBot == true ? petName() : "You"
             quote = .init(itemID: UUID(), sender: sender, text: quoted, date: nil, fromUser: original.from?.isBot != true)
         }
+        if media.isEmpty, group.count == 1, !text.isEmpty, let replied = first.replyToMessage?.messageId,
+           formQuestion(chat: chat, messageID: replied) != nil {
+            enqueueIncoming { [self] in await handleFormReply(text, chat: chat, to: replied) }
+            return
+        }
         if media.isEmpty {
             if text.isEmpty { return reply(chat, "That kind of message is not supported. Send text, a photo, a file or a voice message.") }
             enqueueIncoming { [self] in await handleText(text, chat: chat, reply: quote) }
@@ -402,6 +434,10 @@ final class TelegramBridge: ObservableObject {
         guard callback.from.isBot != true, storage.users().contains(where: { $0.id == callback.from.id }) else {
             return answer("Not authorised.", alert: true)
         }
+        if let (number, tap) = TelegramFormLayout.parse(callback.data ?? "") {
+            guard callback.message?.chat.id == callback.from.id else { return answer("That button is no longer active.") }
+            return await handleFormTap(number, tap, chat: callback.from.id, answer: answer)
+        }
         let parts = (callback.data ?? "").split(separator: ":").map(String.init)
         guard parts.count == 3, parts[0] == "a", let id = UUID(uuidString: parts[1]), parts[2] == "1" || parts[2] == "0",
               callback.message?.chat.id == callback.from.id, approvalMessages[id]?.chat == callback.from.id else {
@@ -415,6 +451,225 @@ final class TelegramBridge: ObservableObject {
         try? await host.decide(DecideApprovalRequest(id: id, allow: allow))
         applying.remove(id)
         answer(allow ? "Approved." : "Rejected.")
+    }
+
+    // MARK: Forms
+
+    private static let formClosed = "This form is no longer open."
+
+    private func formQuestion(chat: Int64, messageID: Int64) -> (id: UUID, index: Int)? {
+        for (id, sent) in sentForms where !sent.closed {
+            guard let slots = sent.messages[chat] else { continue }
+            for (slot, mid) in slots where mid == messageID {
+                if case .question(let index) = slot { return (id, index) }
+            }
+        }
+        return nil
+    }
+
+    /// Shows new forms and closes the ones the Mac answered. Runs after every change to the chat's forms.
+    private func syncForms() async {
+        guard let host else { return }
+        let open = await host.forms()
+        let chats = storage.users().map(\.id)
+        for info in open where sentForms[info.id] == nil && !chats.isEmpty {
+            sendForm(info, to: chats)
+        }
+        let openIDs = Set(open.map(\.id))
+        for (id, sent) in sentForms where !sent.closed && !openIDs.contains(id) {
+            // The form is gone and Telegram did not close it, so the Mac answered it, or the turn ended.
+            let outcome: String
+            if case .form(let record)? = await host.messages().last?.kind, record.message == sent.form.message {
+                outcome = record.skipped ? "Skipped on the Mac." : "Answered on the Mac."
+            } else {
+                outcome = "No longer needed: the turn ended."
+            }
+            closeForm(id, outcome: outcome)
+        }
+        // Keep the few latest closed forms, so a late tap still gets the right answer.
+        let closed = sentForms.filter(\.value.closed).sorted { $0.value.short < $1.value.short }
+        for (id, _) in closed.dropLast(10) { sentForms.removeValue(forKey: id) }
+    }
+
+    private func sendForm(_ info: ChatFormInfo, to chats: [Int64]) {
+        let number = nextFormNumber
+        nextFormNumber += 1
+        let questions = TelegramFormLayout.questions(info.form)
+        sentForms[info.id] = SentForm(short: number, form: info.form, questions: questions)
+        let header = TelegramFormLayout.header(info.form, fallback: "\(petName()) has a question for you.")
+        for chat in chats {
+            sendFormMessage(info.id, chat: chat, slot: .header, text: header,
+                            keyboard: [[TelegramButton(text: "Skip form", data: TelegramFormLayout.data(form: number, .skipForm))]])
+            for (index, question) in questions.enumerated() {
+                sendFormMessage(info.id, chat: chat, slot: .question(index),
+                                text: TelegramFormLayout.question(info.form, question, number: index + 1, total: questions.count),
+                                keyboard: TelegramFormLayout.keyboard(info.form, question, form: number, picked: []))
+            }
+        }
+    }
+
+    private func sendFormMessage(_ id: UUID, chat: Int64, slot: FormSlot, text: String, keyboard: [[TelegramButton]]) {
+        enqueue { [client, weak self] in
+            do {
+                let messageID = try await client.sendMessage(chat: chat, text: text, html: false, keyboard: keyboard)
+                await self?.formMessageSent(id, chat: chat, slot: slot, messageID: messageID)
+            } catch {
+                await self?.formSendFailed(id, chat: chat)
+            }
+        }
+    }
+
+    private func formMessageSent(_ id: UUID, chat: Int64, slot: FormSlot, messageID: Int64) {
+        sentForms[id]?.messages[chat, default: [:]][slot] = messageID
+    }
+
+    private func formSendFailed(_ id: UUID, chat: Int64) {
+        guard let sent = sentForms[id], !sent.closed, sent.messages[chat]?[.header] == nil else { return }
+        sentForms[id]?.closed = true
+        reply(chat, "\(petName()) has a question, but it could not be shown here. Answer it on the Mac.")
+    }
+
+    /// Edits a form message once Telegram has confirmed it. The sends and edits share one queue, so the id is known by then.
+    private func editFormMessage(_ id: UUID, chat: Int64, slot: FormSlot, text: String, keyboard: [[TelegramButton]] = []) {
+        enqueue { [client, weak self] in
+            guard let messageID = await self?.sentForms[id]?.messages[chat]?[slot] else { return }
+            try? await client.editMessage(chat: chat, messageID: messageID, text: String(text.prefix(3900)), keyboard: keyboard)
+        }
+    }
+
+    private func questionText(_ sent: SentForm, _ index: Int) -> String {
+        TelegramFormLayout.question(sent.form, sent.questions[index], number: index + 1, total: sent.questions.count)
+    }
+
+    private func answeredText(_ sent: SentForm, _ index: Int) -> String {
+        var answer = sent.settled[index] ?? ""
+        if let other = sent.other[index] { answer += (answer.isEmpty ? "" : "; ") + "Other: " + other }
+        return questionText(sent, index) + "\n\nAnswer: " + answer
+    }
+
+    /// Closes a form on Telegram: every question that is still open gets the outcome, and no message keeps its buttons.
+    private func closeForm(_ id: UUID, outcome: String) {
+        guard var sent = sentForms[id], !sent.closed else { return }
+        sent.closed = true
+        sentForms[id] = sent
+        for chat in sent.messages.keys.sorted() {
+            // Answered questions keep their answer.
+            for index in sent.questions.indices where sent.settled[index] == nil {
+                editFormMessage(id, chat: chat, slot: .question(index), text: questionText(sent, index) + "\n\n" + outcome)
+            }
+            editFormMessage(id, chat: chat, slot: .header,
+                            text: TelegramFormLayout.header(sent.form, fallback: "\(petName()) had a question for you.") + "\n\n" + outcome)
+        }
+    }
+
+    private func handleFormTap(_ number: Int, _ tap: TelegramFormTap, chat: Int64, answer: (String, Bool) -> Void) async {
+        guard let host, let (id, sent) = sentForms.first(where: { $0.value.short == number }), !sent.closed,
+              await host.forms().contains(where: { $0.id == id }) else {
+            return answer(Self.formClosed, false)
+        }
+        if tap == .skipForm {
+            do { try await host.skipForm(id) } catch { return answer(Self.formClosed, false) }
+            closeForm(id, outcome: "Skipped from Telegram.")
+            return answer("Skipped.", false)
+        }
+        let field: Int
+        switch tap {
+        case .option(let f, _), .skip(let f), .done(let f): field = f
+        case .skipForm: return
+        }
+        guard let index = sent.questions.firstIndex(where: { $0.field == field }), sent.settled[index] == nil else {
+            return answer("Already answered.", false)
+        }
+        let question = sent.questions[index]
+        let definition = sent.form.fields[field]
+        var value: ElicitationValue?
+        var shown = ""
+        switch (tap, definition.kind) {
+        case (.skip, _):
+            guard !definition.required else { return answer("This question needs an answer.", false) }
+            shown = "Skipped"
+        case (.option(_, let option), .single(let options)) where options.indices.contains(option):
+            value = .one(options[option].value)
+            shown = options[option].title
+        case (.option(_, let option), .boolean) where option == 0 || option == 1:
+            value = .flag(option == 1)
+            shown = option == 1 ? "Yes" : "No"
+        case (.option(_, let option), .multi(let options)) where options.indices.contains(option):
+            var picked = sent.picked[index] ?? []
+            if picked.contains(option) { picked.remove(option) } else { picked.insert(option) }
+            sentForms[id]?.picked[index] = picked
+            editFormMessage(id, chat: chat, slot: .question(index), text: questionText(sent, index),
+                            keyboard: TelegramFormLayout.keyboard(sent.form, question, form: number, picked: picked))
+            return answer("", false)
+        case (.done, .multi(let options)):
+            let picked = (sent.picked[index] ?? []).sorted()
+            if picked.isEmpty {
+                guard !definition.required else { return answer("Pick at least one option.", false) }
+                shown = "Skipped"
+            } else {
+                value = .many(picked.map { options[$0].value })
+                shown = picked.map { options[$0].title }.joined(separator: ", ")
+            }
+        default:
+            return answer("That button is no longer active.", false)
+        }
+        do {
+            if let value { try await host.answerForm(AnswerFormRequest(id: id, field: definition.id, value: value)) }
+        } catch {
+            return answer(Self.formClosed, false)
+        }
+        answer("", false)
+        await settle(id, index, shown)
+    }
+
+    /// A reply to a question's message: the answer to a text or number field, or the Other box of a select.
+    private func handleFormReply(_ text: String, chat: Int64, to messageID: Int64) async {
+        guard let host, let (id, index) = formQuestion(chat: chat, messageID: messageID), let sent = sentForms[id],
+              await host.forms().contains(where: { $0.id == id }) else { return reply(chat, Self.formClosed) }
+        let question = sent.questions[index]
+        let definition = sent.form.fields[question.field]
+        switch definition.kind {
+        case .text, .number:
+            guard sent.settled[index] == nil else { return reply(chat, "Already answered.") }
+            if case .number(let integer) = definition.kind,
+               ElicitationForm(message: "", fields: [definition]).content([definition.id: .text(text)])[definition.id] == nil {
+                return reply(chat, integer ? "That is not a whole number. Reply with a whole number, like 3." : "That is not a number. Reply with a number, like 3 or 2.5.")
+            }
+            do { try await host.answerForm(AnswerFormRequest(id: id, field: definition.id, value: .text(text))) } catch { return reply(chat, Self.formClosed) }
+            await settle(id, index, text.trimmingCharacters(in: .whitespacesAndNewlines))
+        case .single, .multi:
+            guard let other = question.other else { return reply(chat, "Use the buttons on that question.") }
+            let note = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            do { try await host.answerForm(AnswerFormRequest(id: id, field: sent.form.fields[other].id, value: .text(note))) } catch { return reply(chat, Self.formClosed) }
+            sentForms[id]?.other[index] = note
+            if sent.settled[index] != nil {
+                for chat in sent.messages.keys.sorted() { editFormMessage(id, chat: chat, slot: .question(index), text: answeredText(sentForms[id] ?? sent, index)) }
+            } else if !definition.required {
+                await settle(id, index, "")
+            } else {
+                reply(chat, "Saved. Now choose an option on that question.")
+            }
+        case .boolean:
+            reply(chat, "Use the buttons on that question.")
+        }
+    }
+
+    /// Marks a question answered in every chat, and sends the form once every question is.
+    private func settle(_ id: UUID, _ index: Int, _ shown: String) async {
+        guard var sent = sentForms[id] else { return }
+        sent.settled[index] = shown
+        sentForms[id] = sent
+        for chat in sent.messages.keys.sorted() { editFormMessage(id, chat: chat, slot: .question(index), text: answeredText(sent, index)) }
+        guard sent.settled.count == sent.questions.count, let host else { return }
+        do {
+            try await host.submitForm(id)
+        } catch {
+            for chat in sent.messages.keys.sorted() {
+                reply(chat, "The answers are not complete yet: a required answer is missing. Answer it on the Mac.")
+            }
+            return
+        }
+        closeForm(id, outcome: "Answered.")
     }
 
     // MARK: Outgoing

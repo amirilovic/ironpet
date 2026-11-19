@@ -206,6 +206,7 @@ final class ChatAPI {
     private let session: ChatSession
     private let uploads: URL
     private var listeners: [UUID: (ChatOrigin, ChatTurnEvent) -> Void] = [:]
+    private var formListeners: [UUID: () -> Void] = [:]
 
     init(session: ChatSession, uploads: URL = FileIntake.directory) {
         self.session = session
@@ -213,6 +214,10 @@ final class ChatAPI {
         session.onTurn = { [weak self] origin, event in
             guard let self else { return }
             for listener in Array(listeners.values) { listener(origin, event) }
+        }
+        session.onFormsChanged = { [weak self] in
+            guard let self else { return }
+            for listener in Array(formListeners.values) { listener() }
         }
     }
 
@@ -230,6 +235,14 @@ final class ChatAPI {
         let id = UUID()
         listeners[id] = listener
         return { [weak self] in self?.listeners[id] = nil }
+    }
+
+    /// Hears that a form opened, closed or got an answer, whoever started the turn. Read `forms()` for what is open now.
+    @discardableResult
+    func onFormsChanged(_ listener: @escaping () -> Void) -> () -> Void {
+        let id = UUID()
+        formListeners[id] = listener
+        return { [weak self] in self?.formListeners[id] = nil }
     }
 
     /// Forgets an origin's queued messages and the answer it was waiting for.

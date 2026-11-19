@@ -3,7 +3,7 @@
 
   swift build && python3 scripts/telegram_check.py [shots-dir]
 
-Covers the setup, pairing and error scenarios. The chat round trip needs a real agent, so it is covered by
+Covers the setup, pairing, form and error scenarios. The chat round trip needs a real agent, so it is covered by
 TelegramTests and by a manual check with a real bot.
 """
 import json
@@ -89,6 +89,46 @@ try:
     off = wait(lambda: [m["text"] for m in fake("GET", "/_sent")["sent"] if "Settings → Voice" in m["text"]])
     check("S11 voice message with voice notes off gets an error reply", bool(off), str(off))
     check("S10/S11 nothing reached the chat", call("GET", "/test/chat")["items"] == [])
+    # Forms: S1 (shown), S2 (answered from Telegram), S3 (answered on the Mac).
+    def options(*names):
+        return [{"const": n, "title": n.upper()} for n in names]
+    def form(message):
+        return {"mode": "form", "message": message, "requestedSchema": {"type": "object", "required": ["question_0"], "properties": {
+            "question_0": {"type": "string", "title": "Runner", "oneOf": options("a", "b")},
+            "question_1": {"type": "string", "title": "Mode", "oneOf": options("x", "y")},
+            "question_2": {"type": "string", "title": "Size", "oneOf": options("s", "m")}}}}
+    def sent_after(count):
+        return fake("GET", "/_sent")["sent"][count:]
+    before = len(fake("GET", "/_sent")["sent"])
+    check("form opens", call("POST", "/test/form", form("Form one")).get("ok"))
+    shown = wait(lambda: len(sent_after(before)) >= 4 and sent_after(before))
+    check("S1 header and one message per question", bool(shown) and shown[0]["text"].startswith("Form one"), str(shown))
+    if shown:
+        questions = shown[1:4]
+        buttons = [[b for row in m["reply_markup"]["inline_keyboard"] for b in row] for m in questions]
+        check("S1 one button per option", [len(b) for b in buttons] == [2, 3, 3], str([len(b) for b in buttons]))
+        check("S1 callback data under 64 bytes", all(len(b["callback_data"].encode()) <= 64 for row in buttons for b in row))
+        for message, row in zip(questions, buttons):
+            fake("POST", "/_tap", {"from": 10, "data": row[0]["callback_data"], "message_id": message["message_id"]})
+        state = wait(lambda: call("GET", "/test/form").get("reply"))
+        check("S2 the agent gets an accept with the choices", bool(state) and state["action"] == "accept"
+              and state["content"] == {"question_0": "a", "question_1": "x", "question_2": "s"}, str(state))
+        check("S2 the Mac shows the answered record", call("GET", "/test/form").get("record", {}).get("answers") == ["A", "X", "S"])
+        edits = wait(lambda: len(fake("GET", "/_edits")["edits"]) >= 4 and fake("GET", "/_edits")["edits"])
+        check("S2 the Telegram messages show the answers", bool(edits) and any("Answer: A" in e["text"] for e in edits), str(edits))
+    before = len(fake("GET", "/_sent")["sent"])
+    edits_before = len(fake("GET", "/_edits")["edits"])
+    call("POST", "/test/form", form("Form two"))
+    shown = wait(lambda: len(sent_after(before)) >= 4 and sent_after(before))
+    call("POST", "/test/form/answer", {"skip": True})
+    closed = wait(lambda: len(fake("GET", "/_edits")["edits"]) - edits_before >= 4 and fake("GET", "/_edits")["edits"][edits_before:])
+    check("S3 Mac answer closes every Telegram message", bool(closed) and all(e["text"].endswith("Skipped on the Mac.") and not e.get("reply_markup") for e in closed), str(closed))
+    if shown:
+        row = shown[1]["reply_markup"]["inline_keyboard"][0][0]
+        answers_before = len(fake("GET", "/_edits")["answers"])
+        fake("POST", "/_tap", {"from": 10, "data": row["callback_data"], "message_id": shown[1]["message_id"]})
+        late = wait(lambda: len(fake("GET", "/_edits")["answers"]) > answers_before and fake("GET", "/_edits")["answers"][-1])
+        check("S3 a late tap is refused", late == "This form is no longer open.", str(late))
     # S6
     fake("POST", "/_mode", {"mode": "401"})
     status = wait(lambda: call("GET", "/test/telegram")["status"].startswith("error") and call("GET", "/test/telegram")["status"])

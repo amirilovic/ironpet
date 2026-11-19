@@ -378,11 +378,11 @@ private final class FailingFile: TelegramClient, @unchecked Sendable {
     var sent: [String] { lock.withLock { _sent } }
     func getMe() async throws -> TelegramUser { throw TelegramError.noToken }
     func getUpdates(offset: Int, timeout: Int) async throws -> [TelegramUpdate] { [] }
-    func sendMessage(chat: Int64, text: String, html: Bool, buttons: [TelegramButton]) async throws -> Int64 {
+    func sendMessage(chat: Int64, text: String, html: Bool, keyboard: [[TelegramButton]]) async throws -> Int64 {
         lock.withLock { _sent.append(text) }
         return 1
     }
-    func editMessage(chat: Int64, messageID: Int64, text: String) async throws {}
+    func editMessage(chat: Int64, messageID: Int64, text: String, keyboard: [[TelegramButton]]) async throws {}
     func answerCallback(id: String, text: String?, alert: Bool) async throws {}
     func sendChatAction(chat: Int64) async throws {}
     func getFile(id: String) async throws -> TelegramFilePath { throw TelegramError.api(code: 400, description: "Bad Request: file is too big") }

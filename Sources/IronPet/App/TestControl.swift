@@ -86,6 +86,9 @@ final class TestControl {
                           "iterm": session.origin.itermSessionID ?? ""])
     }
 
+    /// The reply the last form opened with `/test/form` got.
+    private var lastFormReply: [String: Any]?
+
     func handle(_ request: HTTPRequest) -> Data {
         let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] ?? [:]
         switch (request.method, request.path) {
@@ -242,6 +245,22 @@ final class TestControl {
         case ("POST", "/test/meeting/open-in-chat"):
             actions.meeting.openInChat()
             return meetingSnapshot()
+        case ("POST", "/test/form"):
+            // Opens an agent form (the params of `elicitation/create`) as if the agent had asked it.
+            guard let form = ElicitationForm.parse(body) else { return Self.encode(["ok": false, "error": "not a form"]) }
+            lastFormReply = nil
+            chat.handleElicitation(form) { [weak self] reply in self?.lastFormReply = reply.json }
+            return Self.encode(["ok": true])
+        case ("GET", "/test/form"):
+            var result: [String: Any] = ["open": chat.forms.count]
+            if let reply = lastFormReply { result["reply"] = reply }
+            if case .form(let record)? = chat.items.last?.kind { result["record"] = ["skipped": record.skipped, "answers": record.lines.map(\.answer)] }
+            return Self.encode(result)
+        case ("POST", "/test/form/answer"):
+            // Answers or skips the open form on the Mac, through the same calls as its buttons.
+            guard let open = chat.forms.first else { return Self.encode(["ok": false, "error": "no open form"]) }
+            if body["skip"] as? Bool == true { chat.skipForm(open.id) } else { chat.submitForm(open.id) }
+            return Self.encode(["ok": true])
         case ("GET", "/test/telegram"):
             return telegramSnapshot()
         case ("POST", "/test/telegram/token"):

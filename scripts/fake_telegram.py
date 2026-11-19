@@ -8,6 +8,7 @@ Bot API calls go to /bot<token>/<method>. The control endpoints start with an un
   POST /_push   {"from": 10, "name": "Ann", "username": "ann", "text": "hi"}  queue a message from a user
                 add "document": {"file_id": "d1", "file_name": "a.pdf", "file_size": 123} or "voice": {...} or
                 "photo": [{...}] for uploads, "caption": "..." for a caption
+                add "reply_to": <message_id> to reply to a bot message (Telegram's Reply)
   POST /_tap    {"from": 10, "data": "a:<uuid>:1", "message_id": 101}              queue a tap on an inline button
   POST /_file   {"file_id": "d1", "path": "documents/a.pdf", "content": "text"}    register a downloadable file
   GET  /_edits                                                                      editMessageText and answerCallbackQuery calls
@@ -78,6 +79,9 @@ class Handler(BaseHTTPRequestHandler):
                              "username": data.get("username")},
                     "chat": {"id": data["from"], "type": "private"}}})
                 message = updates[-1]["message"]
+                if "reply_to" in data:
+                    message["reply_to_message"] = {"message_id": data["reply_to"], "from": {"id": 1, "is_bot": True, "first_name": "Ghost"},
+                                                   "text": data.get("reply_to_text", "question")}
                 for key in ("text", "caption", "document", "voice", "photo"):
                     if key in data:
                         message[key] = data[key]
@@ -124,7 +128,8 @@ class Handler(BaseHTTPRequestHandler):
             return reply(self, {"ok": True, "result": {"message_id": message_id, "chat": {"id": data["chat_id"], "type": "private"}}})
         if method == "editMessageText":
             with lock:
-                edits.append({"chat": data["chat_id"], "message_id": data["message_id"], "text": data["text"]})
+                edits.append({"chat": data["chat_id"], "message_id": data["message_id"], "text": data["text"],
+                              "reply_markup": data.get("reply_markup")})
             return reply(self, {"ok": True, "result": {"message_id": data["message_id"], "chat": {"id": data["chat_id"], "type": "private"}}})
         if method == "answerCallbackQuery":
             with lock:
