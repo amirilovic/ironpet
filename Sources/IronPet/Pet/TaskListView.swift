@@ -16,6 +16,8 @@ struct TaskListView: View {
     @State private var showDone = false
     @State private var message = ""
     @State private var highlighted: String?
+    /// The label the list is filtered by, as `key=value`. Nil shows every task.
+    @State private var labelFilter: String?
 
     enum Content: Equatable { case unavailable, empty, list }
 
@@ -34,6 +36,7 @@ struct TaskListView: View {
                 EmptyState(symbol: "checklist", title: "No tasks yet",
                            detail: "Ask \(petName) to keep track of something, or finish a meeting.")
             } else {
+                labelFilterBar
                 ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
@@ -65,14 +68,51 @@ struct TaskListView: View {
 
     private var petName: String { ConfigStore.shared.config.pet.name }
 
-    private var open: [TaskItem] { tasks.ordered.filter { $0.status != .done } }
+    private var open: [TaskItem] { tasks.ordered.filter { $0.status != .done && matches($0) } }
+
+    private func matches(_ task: TaskItem) -> Bool {
+        guard let labelFilter else { return true }
+        return task.labels.contains { "\($0.key)=\($0.value)" == labelFilter }
+    }
+
+    /// A menu of the labels in use. Picking one shows only tasks with it; the chip clears it.
+    @ViewBuilder private var labelFilterBar: some View {
+        let labels = tasks.allLabels
+        if !labels.isEmpty || labelFilter != nil {
+            HStack(spacing: 6) {
+                Menu {
+                    ForEach(labels.map { "\($0.key)=\($0.value)" }, id: \.self) { label in
+                        Button(label) { labelFilter = label }
+                    }
+                } label: {
+                    Label(labelFilter == nil ? "Filter by label" : "Label", systemImage: "tag")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel("Filter by label")
+                if let labelFilter {
+                    Button { self.labelFilter = nil } label: {
+                        Label(labelFilter, systemImage: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+                    .accessibilityLabel("Clear label filter \(labelFilter)")
+                }
+                Spacer()
+            }
+            .font(.caption)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+        }
+    }
 
     private var waiting: [TaskItem] { open.filter { $0.waitingOn != nil } }
 
     /// Done tasks stay in the database for `tasks.keepDoneDays`; the list only shows the last week.
     private var done: [TaskItem] {
         let cutoff = Date().addingTimeInterval(-7 * 86_400)
-        return tasks.ordered.filter { $0.status == .done && ($0.closed ?? $0.updated) >= cutoff }
+        return tasks.ordered.filter { $0.status == .done && ($0.closed ?? $0.updated) >= cutoff && matches($0) }
     }
 
     @ViewBuilder private var suggestions: some View {
@@ -121,7 +161,14 @@ struct TaskListView: View {
                 onDone: { _ = try? tasks.close(task.id, by: "user") },
                 onDelete: { try? tasks.delete(task.id, by: "user") },
                 onOpen: open(_:),
-                history: { tasks.history(task.id) })
+                history: { tasks.history(task.id) },
+                onAddLabel: { key, value in
+                    do {
+                        _ = try tasks.update(task.id, addLabels: try TaskValidator.labels([key: value]), by: "user")
+                        return nil
+                    } catch { return (error as? TaskError)?.message ?? error.localizedDescription }
+                },
+                onRemoveLabel: { key in _ = try? tasks.update(task.id, removeLabels: [key], by: "user") })
             .background {
                 if highlighted == task.id { RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.18)) }
             }
@@ -195,6 +242,8 @@ private struct TaskRow: View {
     let onDelete: () -> Void
     let onOpen: (TaskLink) -> Void
     let history: () -> [TaskEvent]
+    let onAddLabel: (String, String) -> String?
+    let onRemoveLabel: (String) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
     @State private var expanded = false
@@ -214,7 +263,8 @@ private struct TaskRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                 details
                 if expanded {
-                    TaskDetailView(detail: TaskDetail(task: task, history: events), onOpen: onOpen)
+                    TaskDetailView(detail: TaskDetail(task: task, history: events), onOpen: onOpen,
+                                   onAddLabel: onAddLabel, onRemoveLabel: onRemoveLabel)
                         .padding(.top, 4)
                         .onTapGesture {}
                 }
@@ -264,6 +314,10 @@ private struct TaskRow: View {
             if let waiting = task.waitingLabel {
                 Text("·").accessibilityHidden(true)
                 Label(waiting, systemImage: "person.badge.clock").labelStyle(DueLabelStyle())
+            }
+            if !task.labels.isEmpty {
+                Text("·").accessibilityHidden(true)
+                Label(TaskStore.describe(task.labels), systemImage: "tag").labelStyle(DueLabelStyle())
             }
             if let due = task.dueLabel(now: now) {
                 Text("·").accessibilityHidden(true)
