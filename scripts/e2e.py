@@ -1808,6 +1808,121 @@ def scenario_brief():
         call("POST", "/test/tasks/reset")
 
 
+MEMORY_AGENT = os.environ.get("IRONPET_E2E_AGENT", "claude")
+MEMORY_DIR = f"{ROOT}/memory"
+MEMORY_BACKUP = "/tmp/ironpet-e2e-memory"
+MEMORY_WORKTREE = "/tmp/ironpet-e2e-ws-worktree"
+
+
+class PreservedMemory(PreservedTasks):
+    """Also backs up the memory folder and config.json, and puts them back after the app has quit, then rebuilds the notes' index."""
+
+    def __enter__(self):
+        if os.path.exists(MEMORY_BACKUP):
+            sys.exit(f"{MEMORY_BACKUP} is left from a run that did not finish and may be the only copy of {MEMORY_DIR}. "
+                     "Put it back (or delete it if you don't need it), then run again.")
+        super().__enter__()
+        self.had_memory = os.path.isdir(MEMORY_DIR)
+        if self.had_memory:
+            shutil.copytree(MEMORY_DIR, MEMORY_BACKUP)
+        self.config = open(CONFIG, "rb").read() if os.path.exists(CONFIG) else None
+        return self
+
+    def __exit__(self, *exc):
+        subprocess.run(["pkill", "-f", f"{APP}/Contents/MacOS/IronPet"])
+        time.sleep(1.5)
+        shutil.rmtree(MEMORY_DIR, ignore_errors=True)
+        if self.had_memory:
+            shutil.copytree(MEMORY_BACKUP, MEMORY_DIR)
+            shutil.rmtree(MEMORY_BACKUP, ignore_errors=True)
+        if self.config is None:
+            if os.path.exists(CONFIG):
+                os.remove(CONFIG)
+        else:
+            open(CONFIG, "wb").write(self.config)
+        subprocess.run(["git", "-C", WS, "worktree", "remove", "--force", MEMORY_WORKTREE], capture_output=True)
+        shutil.rmtree(MEMORY_WORKTREE, ignore_errors=True)
+        super().__exit__(*exc)
+        call("POST", "/test/memory/reset", {"reindex": True})
+        return False
+
+
+def memory_state():
+    return call("GET", "/test/memory")
+
+
+def memory_notes(state, word):
+    return [n for f in state.get("files", []) for n in f["notes"] if word in n["text"].lower()]
+
+
+def run_memory_turn(prompt, workspace=None):
+    """One chat turn in Auto mode on MEMORY_AGENT. The memory tools need no card; any other card is denied."""
+    body = {"prompt": prompt, "auto": True, "newChat": workspace is not None}
+    if workspace:
+        body.update({"backend": MEMORY_AGENT, "workspace": workspace})
+    call("POST", "/test/chat", body)
+    c = wait_approval_or_end(240)
+    while c and c["approvals"]:
+        call("POST", "/test/approve", {"allow": False})
+        c = wait_approval_or_end(240)
+    return c
+
+
+def scenario_memory():
+    """Memory: a preference is learned by the reflection pass, reaches a new chat in another worktree of the repo, is found again with
+    memory_search, and is forgotten in chat and brought back with Undo."""
+    with PreservedMemory():
+        reset = call("POST", "/test/memory/reset")
+        if not reset.get("ok"):
+            return record("Memory: test endpoints answer", False, reset.get("error", ""))
+        record("Memory: reset leaves no notes", not reset["files"] and not reset["changes"])
+        config = json.load(open(CONFIG)) if os.path.exists(CONFIG) else {}
+        # The defaults: each chat is read by its own agent, with Claude Code's haiku.
+        config["memory"] = {"reflect": True, "quietMinutes": 30}
+        json.dump(config, open(CONFIG, "w"))
+        time.sleep(3)
+
+        # A repo with an origin remote, and a worktree of it: both share one project file.
+        fresh_workspace()
+        for args in (["init", "-q"], ["remote", "add", "origin", "git@github.com:ironpet/e2e-memory.git"],
+                     ["-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "commit", "-q", "--allow-empty", "-m", "init"]):
+            subprocess.run(["git", "-C", WS, *args], capture_output=True)
+        shutil.rmtree(MEMORY_WORKTREE, ignore_errors=True)
+        subprocess.run(["git", "-C", WS, "worktree", "add", "-q", MEMORY_WORKTREE, "-b", f"e2e-{int(time.time())}"], capture_output=True)
+
+        end = run_memory_turn("I always use pnpm, never npm. Just reply OK, don't save anything yourself.", workspace=WS)
+        thread = memory_state()["thread"]
+        project = memory_state()["project"]
+        call("POST", "/test/memory/reflect")
+        state = wait_for(lambda: (lambda s: s if not s["running"] and s["lastOutcome"].get("job") == f"thread:{thread}" else None)(memory_state()), 240, 2)
+        state = state or memory_state()
+        learned = memory_notes(state, "pnpm")
+        record("Memory: the reflection pass saves the preference with the chat as its source",
+               end and end["state"] == "done" and bool(learned) and all(n["source"].startswith("chat:") for n in learned),
+               f"outcome={state.get('lastOutcome')} notes={learned}")
+        record("Memory: Recently learned lists it", any(c["action"] == "added" and "pnpm" in c["note"].lower() for c in state["changes"]),
+               str(state["changes"][:3]))
+
+        end = run_memory_turn("Which package manager should I use for a new script here? One word.", workspace=MEMORY_WORKTREE)
+        answer = next((i["text"] for i in reversed((end or {}).get("items", [])) if i["kind"] == "assistant"), "")
+        record("Memory: a new chat in a worktree of the repo shares its project file and knows the preference",
+               memory_state()["project"] == project and "pnpm" in answer.lower(), f"project={memory_state()['project']} answer={answer[:120]!r}")
+
+        end = run_memory_turn("What did we decide about pnpm in an earlier chat? Search your memory of past chats.", workspace=WS)
+        tools = [i["text"] for i in (end or {}).get("items", []) if i["kind"] == "tool"]
+        record("Memory: asking about an earlier chat calls memory_search",
+               any("memory" in t.lower() and "search" in t.lower() for t in tools), str(tools))
+
+        end = run_memory_turn("Forget that I use pnpm.")
+        state = memory_state()
+        forgot = [c for c in state["changes"] if c["action"] == "forgot" and "pnpm" in c["note"].lower()]
+        record("Memory: forgetting in chat removes the note and logs it", bool(forgot) and not memory_notes(state, "pnpm"),
+               f"state={end and end['state']} changes={state['changes'][:3]}")
+        if forgot:
+            state = call("POST", "/test/memory/undo", {"id": forgot[0]["id"]})
+            record("Memory: Undo in Settings brings it back", bool(memory_notes(state, "pnpm")), str(state.get("files")))
+
+
 SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_session, "claude": scenario_claude, "codex": scenario_codex, "agents": scenario_agents,
              "asks": scenario_asks, "runtime": scenario_runtime, "auto": scenario_auto, "picker": scenario_picker,
              "iterm": scenario_iterm_claude, "capture": scenario_capture, "summaries": scenario_summaries,
@@ -1815,7 +1930,7 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
              "sentry": scenario_sentry_mcp, "setup": scenario_setup, "settings": scenario_settings,
              "voice": scenario_voice, "voice-key": scenario_voice_key, "speech": scenario_speech, "meeting": scenario_meeting,
              "meeting-system": scenario_meeting_system_audio, "tasks": scenario_tasks, "screen": scenario_screen,
-             "welcome-back": scenario_welcome_back, "brief": scenario_brief}
+             "welcome-back": scenario_welcome_back, "brief": scenario_brief, "memory": scenario_memory}
 
 # Need MCP servers signed in with cursor-agent: "mcp" a Langfuse MCP (its write is denied, so nothing is created),
 # "sentry" a Sentry MCP. Run them by name, e.g. `python3 scripts/e2e.py mcp sentry`.
@@ -1829,7 +1944,9 @@ SCENARIOS = {"cursor": scenario_cursor, "cursor-session": scenario_cursor_sessio
 # "tasks" runs two short turns on $IRONPET_E2E_AGENT (default cursor) and puts ironpet.db back afterwards.
 # "welcome-back" posts synthetic Claude hook events and a stand-in idle time, so it runs no agent; it puts config.json and ironpet.db back.
 # "brief" starts no agent; it puts ironpet.db and automations.json back afterwards.
-OPT_IN = {"mcp", "sentry", "voice", "voice-key", "speech", "runtime", "asks", "meeting", "meeting-system"}
+# "memory" runs four chat turns and one reflection pass on $IRONPET_E2E_AGENT (default claude, haiku for the pass), in a git repo and a
+# worktree of it under /tmp; it puts the memory folder, ironpet.db and config.json back afterwards.
+OPT_IN = {"mcp", "sentry", "voice", "voice-key", "speech", "runtime", "asks", "meeting", "meeting-system", "memory"}
 
 if __name__ == "__main__":
     if {"-h", "--help"} & set(sys.argv[1:]):

@@ -41,6 +41,8 @@ extension ChatThread {
 enum ThreadStore {
     /// A variable so tests can point it at a temp folder.
     nonisolated(unsafe) static var directory = Paths.root.appendingPathComponent("threads")
+    /// Called after each save, for the memory index. Set once at launch on the main thread, before any thread is saved.
+    nonisolated(unsafe) static var didSave: ((ChatThread) -> Void)?
 
     private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -58,6 +60,7 @@ enum ThreadStore {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try encoder.encode(thread).write(to: file(thread.id), options: .atomic)
+            didSave?(thread)
         } catch {
             NSLog("ironpet: could not save thread \(thread.id): \(error)")
         }

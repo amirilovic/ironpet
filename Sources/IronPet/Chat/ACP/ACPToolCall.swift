@@ -65,6 +65,12 @@ struct ACPToolCall {
         paths.first ?? (input["file_path"] ?? input["path"] ?? input["target_file"] ?? input["notebook_path"]) as? String
     }
 
+    /// Every path the call names, a move's destination included.
+    var allPaths: [String] {
+        let keys = ["file_path", "path", "target_file", "notebook_path", "source", "destination", "new_path", "old_path", "target", "from", "to"]
+        return paths + keys.compactMap { input[$0] as? String }.filter { !$0.isEmpty }
+    }
+
     /// Everything the agent passes in, as text for the destructive-pattern check and the approval card.
     var arguments: String {
         if let text = rawInput as? String { return text }
@@ -121,16 +127,20 @@ enum ApprovalRules {
     }
 
     /// ironpet's own task tools only read and write rows in `ironpet.db` and run nothing, like memory-note edits. Delete still asks. The
-    /// `screen_*` tools only read the stored, redacted captures. Of the assistant tools, those that start, steer or stop a job still ask.
+    /// `screen_*` tools only read the stored, redacted captures. The `memory_*` tools write notes in `~/.ironpet/memory/` the way a
+    /// memory-file edit does, and `memory_forget` only moves notes to `.history`, so none of them can lose anything. Of the assistant
+    /// tools, those that start, steer or stop a job still ask.
     static let ownTaskTools: Set<String> = Set(["tasks_list", "tasks_get", "tasks_create", "tasks_update", "tasks_close", "tasks_suggest",
                                          "tasks_suggestions_list", "tasks_suggestion_accept", "tasks_suggestion_reject",
-                                         "screen_search", "screen_window"]).union(AssistantMCP.ownTools)
+                                         "screen_search", "screen_window"]).union(plainNamedTools)
+
+    /// Tools whose names are plain enough (`memory_forget`, `status_overview`) to belong to another server.
+    static let plainNamedTools: Set<String> = AssistantMCP.ownTools.union(MemoryMCP.names)
 
     /// Agents that name MCP tools `mcp__<server>__<tool>` must name the ironpet server; others report the bare tool name.
     static func isOwnTaskTool(server: String?, tool: String) -> Bool {
         guard ownTaskTools.contains(tool) else { return false }
-        // Names as plain as memory_forget could belong to another server, so those need ironpet named.
-        if AssistantMCP.ownTools.contains(tool) { return server == "ironpet" }
+        if plainNamedTools.contains(tool) { return server == "ironpet" }
         return server == nil || server == "ironpet"
     }
 
@@ -140,7 +150,7 @@ enum ApprovalRules {
 
     /// Whether ironpet answers a permission request itself or shows a card. The agent only asks about calls it
     /// considers risky, so anything not clearly read-only still asks.
-    static func policy(for call: ACPToolCall, auto: Bool, isMemoryFile: (String) -> Bool = Memory.contains) -> ApprovalPolicy {
+    static func policy(for call: ACPToolCall, auto: Bool, isMemoryFile: (String) -> Bool = FileMemoryStore.isNoteFile) -> ApprovalPolicy {
         switch call.kind {
         case "read", "search", "think", "fetch":
             return .allow
@@ -151,7 +161,9 @@ enum ApprovalRules {
             return .ask(title: dangerous ? "Run a destructive command?" : "Run this command?", detail: command)
         case "edit", "delete", "move":
             let path = call.path
-            if auto || path.map(isMemoryFile) == true { return .allow }
+            // Only edits: deleting or moving a note file skips its .history copy.
+            let all = call.allPaths
+            if auto || call.kind == "edit" && !all.isEmpty && all.allSatisfy(isMemoryFile) { return .allow }
             let preview = ((call.input["content"] ?? call.input["new_string"] ?? call.input["new_source"]) as? String)?
                 .split(separator: "\n", omittingEmptySubsequences: false).prefix(8).joined(separator: "\n")
             let verb = call.kind == "delete" ? "Delete" : call.kind == "move" ? "Move" : "Edit"

@@ -185,7 +185,8 @@ struct ChatView: View {
                 .pointerCursor()
                 historyMenu
                 Button {
-                    NSWorkspace.shared.open(Memory.directory)
+                    try? FileManager.default.createDirectory(at: FileMemoryStore.directory, withIntermediateDirectories: true)
+                    NSWorkspace.shared.open(FileMemoryStore.directory)
                     showSettings = false
                 } label: { Label("Memory folder", systemImage: "brain") }
                 .pointerCursor()

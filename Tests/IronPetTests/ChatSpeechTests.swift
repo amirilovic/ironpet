@@ -9,6 +9,7 @@ final class ChatSpeechTests: XCTestCase {
     private var spoken: [String] = []
 
     override func setUp() async throws {
+        TestMemory.isolate()
         session = ChatSession(restore: false)
         session.sendAfterDictation = true
         session.workspace = FileManager.default.temporaryDirectory

@@ -221,6 +221,40 @@ struct Config: Codable, Equatable {
         static let pasteLinesRange = 10...2_000
     }
 
+    /// Ghost's memory: notes in `~/.ironpet/memory/`. After a chat goes quiet, a background pass sends the new messages to the agent
+    /// that already had them, which only answers, and ironpet saves the lasting facts it names as notes. On by default: nothing
+    /// reaches a provider that did not have it, but each pass spends quota, so it has its own switch and Usage feature.
+    struct Memory: Codable, Equatable {
+        var reflect = true
+        /// nil: each chat is read by its own agent, a meeting summary by the summary agent and an automation's answer by the agent
+        /// that ran it. An ACP agent id: only text that went to that agent is read, by it.
+        var reflectAgent: String?
+        /// nil: the agent's cheap model when it has one (`cheapModels`), else its default. Only used with `reflectAgent` set, since a
+        /// model id means nothing to another agent.
+        var reflectModel: String?
+        /// A chat is reflected on this long after its last turn, or at once when the user moves on.
+        var quietMinutes = Memory.defaultQuietMinutes
+        /// Send a file that grew past its size limit to the reflection agent to merge and shorten. Off by default: the whole file
+        /// goes, including notes from chats with other agents and lines the user wrote, which that agent has not seen.
+        var tidy = false
+
+        /// Agents whose adapter offers a clearly cheap model in every session. Claude Code's `haiku` is its own alias for its
+        /// smallest model. The others either list no models or only parameterized ones with no cheap tier, so they use their default.
+        static let cheapModels = ["claude": "haiku"]
+        static let defaultQuietMinutes = 30
+
+        /// Who reads text that `source` already had, and with which model. Nil when a set `reflectAgent` is another agent, so the
+        /// text is skipped rather than sent to a provider that did not have it.
+        func reader(for source: String) -> (agent: String, model: String?)? {
+            if let reflectAgent {
+                guard reflectAgent == source else { return nil }
+                return (reflectAgent, reflectModel ?? Self.cheapModels[reflectAgent])
+            }
+            return (source, Self.cheapModels[source])
+        }
+        static let quietRange = 2...240
+    }
+
     /// The ironpet window (chat, agents, tasks and the other sections).
     struct Window: Codable, Equatable {
         /// Hide the window when another app becomes active, and bring it back when ironpet is activated again.
@@ -248,6 +282,7 @@ struct Config: Codable, Equatable {
     var telegram = Telegram()
     var screenCapture = ScreenCapture()
     var desktopControl = DesktopControl()
+    var memory = Memory()
 
     static let file = Paths.root.appendingPathComponent("config.json")
 
@@ -312,6 +347,11 @@ struct Config: Codable, Equatable {
         if c.meetings.summaryModel?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.meetings.summaryModel = nil }
         c.meetings.ignoredMicApps = MicIgnoreList.normalized(c.meetings.ignoredMicApps)
         c.screenCapture.retentionDays = min(365, max(1, c.screenCapture.retentionDays))
+        c.memory.reflectAgent = c.memory.reflectAgent?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if c.memory.reflectAgent?.isEmpty == true { c.memory.reflectAgent = nil }
+        c.memory.reflectModel = c.memory.reflectModel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if c.memory.reflectModel?.isEmpty == true || c.memory.reflectAgent == nil { c.memory.reflectModel = nil }
+        c.memory.quietMinutes = min(Memory.quietRange.upperBound, max(Memory.quietRange.lowerBound, c.memory.quietMinutes))
         return c
     }
 
