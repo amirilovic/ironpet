@@ -269,6 +269,29 @@ final class MemoryStoreTests: XCTestCase {
         XCTAssertEqual(store.document(store.aboutMe)?.notes.map(\.text), ["Keep me"])
     }
 
+    func testUndoOfAnOlderEditIsRefusedWhileANewerChangeStands() throws {
+        _ = try store.remember("Keep me", scope: .me, source: "chat:a").get()
+        clock += 1
+        try store.rewrite(store.aboutMe, with: "# About me\n\n- Shorter\n", action: .edited, source: "user", summary: "Edited in Settings").get()
+        let edit = try XCTUnwrap(store.recentChanges().first)
+        clock += 1
+        _ = try store.remember("Learned after the edit", scope: .me, source: "chat:b").get()
+        guard case .failure(let failure) = store.undo(edit) else { return XCTFail("undoing the edit would drop the newer note") }
+        XCTAssertTrue(failure.message.contains("undo the newer changes first"))
+        XCTAssertEqual(store.document(store.aboutMe)?.notes.map(\.text), ["Shorter", "Learned after the edit"])
+        try store.undo(XCTUnwrap(store.recentChanges().first)).get()
+        try store.undo(XCTUnwrap(store.recentChanges().first { $0.id == edit.id })).get()
+        XCTAssertEqual(store.document(store.aboutMe)?.notes.map(\.text), ["Keep me"], "once the newer change is undone, the edit can be")
+    }
+
+    func testPathChecksIgnoreCase() {
+        let saved = FileMemoryStore.directory
+        defer { FileMemoryStore.directory = saved }
+        FileMemoryStore.directory = URL(fileURLWithPath: "/tmp/m/memory")
+        XCTAssertTrue(FileMemoryStore.contains("/tmp/M/Memory/me.md"))
+        XCTAssertFalse(FileMemoryStore.isNoteFile("/tmp/m/memory/.History/me.md/x.md"))
+    }
+
     func testPeopleNeedANameAndProjectsNeedAFolder() {
         guard case .failure = store.remember("Likes tea", scope: .people, source: "chat:a") else { return XCTFail() }
         guard case .failure = store.remember("Uses SwiftPM", scope: .project, source: "chat:a") else { return XCTFail() }

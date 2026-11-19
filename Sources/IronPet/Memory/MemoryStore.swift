@@ -74,13 +74,18 @@ final class FileMemoryStore: MemoryStore {
 
     /// Whether a path is inside the memory folder, `.history` included.
     nonisolated static func contains(_ path: String) -> Bool {
-        URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(directory.standardizedFileURL.path + "/")
+        comparable(path).hasPrefix(comparable(directory.path) + "/")
     }
 
     /// A note file an agent may edit without a card (`ApprovalRules`): inside the memory folder, outside `.history`, which is what
     /// Undo and forgotten notes come back from.
     nonisolated static func isNoteFile(_ path: String) -> Bool {
-        contains(path) && !URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(directory.standardizedFileURL.path + "/.history/")
+        contains(path) && !comparable(path).hasPrefix(comparable(directory.path) + "/.history/")
+    }
+
+    /// Resolved and lowercased, since the Mac's file system ignores case: `~/.IRONPET/Memory/me.md` is the same file.
+    nonisolated private static func comparable(_ path: String) -> String {
+        URL(fileURLWithPath: (path as NSString).expandingTildeInPath).resolvingSymlinksInPath().standardizedFileURL.path.lowercased()
     }
 
     /// Past this size a file is tidied after the next reflection.
@@ -385,6 +390,10 @@ final class FileMemoryStore: MemoryStore {
             guard removeLine(change.note) else { return .failure(changed) }
             change.previous?.components(separatedBy: "\n").forEach(restore)
         case .tidied, .edited:
+            // Going back to the whole earlier file would drop what was learned after it.
+            if index?.hasLaterChange(to: change.file, after: change.id) == true {
+                return .failure(MemoryError(message: "\(change.file) changed after this; undo the newer changes first, or edit the file"))
+            }
             guard let previous = change.previous,
                   directory.appendingPathComponent(previous).standardizedFileURL.path.hasPrefix(directory.standardizedFileURL.path + "/"),
                   let text = try? String(contentsOf: directory.appendingPathComponent(previous), encoding: .utf8) else {

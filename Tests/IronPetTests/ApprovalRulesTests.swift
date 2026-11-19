@@ -51,6 +51,8 @@ final class ApprovalRulesTests: XCTestCase {
         XCTAssertEqual(policy(edit, auto: true), .allow)
         let memory = ACPToolCall(id: "2", title: "Edit", kind: "edit", paths: ["/memory/me.md"])
         XCTAssertEqual(policy(memory), .allow)
+        let alsoOutside = ACPToolCall(id: "4", title: "Edit", kind: "edit", rawInput: ["path": "/etc/hosts"], paths: ["/memory/me.md"])
+        if case .allow = policy(alsoOutside) { XCTFail("every path must be a note file") }
         for kind in ["delete", "move"] {
             if case .allow = policy(ACPToolCall(id: "3", title: kind, kind: kind, paths: ["/memory/me.md"])) {
                 XCTFail("\(kind) of a note file skips its .history copy, so it asks")

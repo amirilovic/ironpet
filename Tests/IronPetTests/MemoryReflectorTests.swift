@@ -267,6 +267,40 @@ final class MemoryReflectorTests: XCTestCase {
         XCTAssertEqual(store.document(store.projectFile(ProjectKey.of(workspace)))?.notes.count, MemoryReflector.maxNotes - 1)
     }
 
+    func testOnePassReplacesAtMostFiveNotesInAll() async throws {
+        for n in 0..<8 { _ = try store.remember("Old fact \(n)", scope: .me, source: "chat:old").get() }
+        chat("t1", [.init(kind: .user("everything changed"))])
+        answers = [notes(#"{"notes":[{"scope":"me","text":"New A","replaces":["Old fact 0","Old fact 1","Old fact 2"]},"#
+            + #"{"scope":"me","text":"New B","replaces":["Old fact 3","Old fact 4","Old fact 5"]},"#
+            + #"{"scope":"me","text":"New C","replaces":["Old fact 6","Old fact 7"]}]}"#)]
+        reflector.left(thread: "t1")
+        await waitIdle()
+        let texts = store.document(store.aboutMe)?.notes.map(\.text) ?? []
+        XCTAssertTrue(texts.contains("New A"))
+        XCTAssertFalse(texts.contains("New B"), "3 + 3 would pass 5")
+        XCTAssertTrue(texts.contains("New C"), "3 + 2 fits")
+        XCTAssertEqual(texts.filter { $0.hasPrefix("Old fact") }.count, 3)
+        XCTAssertTrue(reflector.lastOutcome?.dropped.contains { $0.contains("already replaced") } == true)
+    }
+
+    func testFirstLaunchMarksEarlierChatsAsReadBeforeAnyTrigger() async {
+        config.reflect = false
+        chat("before", [.init(kind: .user("I use tabs")), .init(kind: .assistant("OK"))])
+        reflector.seedIfNeeded()
+        config.reflect = true
+        reflector.left(thread: "before")
+        await waitIdle()
+        XCTAssertTrue(prompts.isEmpty, "seeded even with learning off, and before the user moved on")
+        var thread = threads["before"]!
+        thread.items += [.init(kind: .user("I moved to Lisbon"))]
+        threads["before"] = thread
+        reflector.seedIfNeeded()
+        reflector.left(thread: "before")
+        await waitIdle()
+        XCTAssertEqual(prompts.count, 1, "a second seed changes nothing")
+        XCTAssertFalse(prompts[0].contains("I use tabs"))
+    }
+
     func testAFileOverItsLimitIsLeftAloneWhileTidyingIsOff() async throws {
         for n in 0..<200 { _ = try store.remember("Note \(n) that repeats itself a little", scope: .me, source: "chat:old").get() }
         chat("t1", [.init(kind: .user("I like tea"))])
@@ -321,21 +355,6 @@ final class MemoryReflectorTests: XCTestCase {
         await waitIdle()
         XCTAssertTrue(reflector.due.isEmpty)
         XCTAssertTrue(prompts.isEmpty)
-    }
-
-    func testTheFirstCatchUpMarksEarlierChatsAsReadAndSendsNothing() async {
-        chat("before", [.init(kind: .user("I use tabs")), .init(kind: .assistant("OK"))])
-        reflector.catchUp()
-        await waitIdle()
-        XCTAssertTrue(prompts.isEmpty, "the update does not send chats from before it")
-        var thread = threads["before"]!
-        thread.items += [.init(kind: .user("I moved to Lisbon"))]
-        threads["before"] = thread
-        reflector.catchUp()
-        await waitIdle()
-        XCTAssertEqual(prompts.count, 1)
-        XCTAssertTrue(prompts[0].contains("I moved to Lisbon"))
-        XCTAssertFalse(prompts[0].contains("I use tabs"))
     }
 
     func testCatchUpReadsAtMostFiveRecentUnreadThreads() async {

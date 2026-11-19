@@ -65,6 +65,12 @@ struct ACPToolCall {
         paths.first ?? (input["file_path"] ?? input["path"] ?? input["target_file"] ?? input["notebook_path"]) as? String
     }
 
+    /// Every path the call names, a move's destination included.
+    var allPaths: [String] {
+        let keys = ["file_path", "path", "target_file", "notebook_path", "source", "destination", "new_path", "old_path", "target", "from", "to"]
+        return paths + keys.compactMap { input[$0] as? String }.filter { !$0.isEmpty }
+    }
+
     /// Everything the agent passes in, as text for the destructive-pattern check and the approval card.
     var arguments: String {
         if let text = rawInput as? String { return text }
@@ -156,7 +162,8 @@ enum ApprovalRules {
         case "edit", "delete", "move":
             let path = call.path
             // Only edits: deleting or moving a note file skips its .history copy.
-            if auto || call.kind == "edit" && path.map(isMemoryFile) == true { return .allow }
+            let all = call.allPaths
+            if auto || call.kind == "edit" && !all.isEmpty && all.allSatisfy(isMemoryFile) { return .allow }
             let preview = ((call.input["content"] ?? call.input["new_string"] ?? call.input["new_source"]) as? String)?
                 .split(separator: "\n", omittingEmptySubsequences: false).prefix(8).joined(separator: "\n")
             let verb = call.kind == "delete" ? "Delete" : call.kind == "move" ? "Move" : "Edit"

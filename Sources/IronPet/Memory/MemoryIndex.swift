@@ -330,6 +330,14 @@ final class MemoryIndex: @unchecked Sendable { // `database` serializes its own 
         })?.first.flatMap(Self.change)
     }
 
+    /// Whether a change to `file` after `id` is still in place.
+    func hasLaterChange(to file: String, after id: Int64) -> Bool {
+        let count = (try? database.read {
+            try $0.rows("SELECT COUNT(*) FROM memory_changes WHERE file = ? AND id > ? AND undone = 0", [file, id])
+        })?.first?.first as? Int64 ?? 0
+        return count > 0
+    }
+
     func markUndone(_ id: Int64) {
         try? database.write { try $0.execute("UPDATE memory_changes SET undone = 1 WHERE id = ?", [id]) }
     }

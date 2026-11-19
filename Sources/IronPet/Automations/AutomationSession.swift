@@ -14,7 +14,7 @@ enum AutomationSession {
     /// Nobody is there to answer, so anything that would ask is refused. Edits to Ghost's memory files are refused too: what an
     /// automation learns goes through the memory tools, which mark it as coming from the automation.
     nonisolated static func decision(for call: ACPToolCall) -> ApprovalDecision {
-        if ["edit", "delete", "move"].contains(call.kind), let path = call.path, FileMemoryStore.contains(path) {
+        if ["edit", "delete", "move"].contains(call.kind), call.allPaths.contains(where: FileMemoryStore.contains) {
             return .deny("Automations may not edit Ghost's memory files")
         }
         if case .allow = ApprovalRules.policy(for: call, auto: true) { return .allow }

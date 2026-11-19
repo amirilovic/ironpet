@@ -438,12 +438,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let store = FileMemoryStore(directory: FileMemoryStore.directory, index: index)
         FileMemoryStore.shared = store
         store.migrateLayout()
-        if index.count(.note) == 0 { store.reindexAll() }
+        // Only when there are note files to index: with none, this would walk `.history` on the main thread at every launch.
+        if index.count(.note) == 0, !store.files().isEmpty { store.reindexAll() }
         ThreadStore.didSave = { [index] thread in index.indexThread(thread) }
         index.backfill(threads: { ThreadStore.recent(limit: .max, automationLimit: 0) }, meetings: Paths.meetings)
         let reflector = MemoryReflector(store: store, index: index)
         reflector.automatic = !TestControl.isEnabled
         reflector.onChange = { [weak self] in self?.settingsModel.memory?.reload() }
+        reflector.seedIfNeeded()
         memory = reflector
         settingsModel.memory = MemorySettingsModel(store: store, index: index, reflector: reflector)
         chat.onTurnEnded = { [weak reflector] id in reflector?.turnEnded(thread: id) }

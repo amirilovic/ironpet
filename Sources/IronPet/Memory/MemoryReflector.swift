@@ -122,16 +122,18 @@ final class MemoryReflector {
     }
 
     /// At launch: the recent threads with messages no run has read, newest first.
+    /// Once, at the first launch with memory: marks the chats from before it as read, so the update itself sends none of them. Runs
+    /// whether or not learning is on, since it only writes cursors, and before any trigger can fire.
+    func seedIfNeeded() {
+        guard index.cursor(Self.seededKey) == nil else { return }
+        for thread in recentThreads() {
+            if let last = thread.items.last, index.cursor(thread.id) == nil { index.setCursor(thread.id, item: last.id.uuidString, at: now()) }
+        }
+        index.setCursor(Self.seededKey, item: "1", at: now())
+    }
+
     func catchUp() {
         guard automatic, config().reflect else { return }
-        // The first catch-up marks the chats from before memory existed as read, so the update itself sends none of them.
-        if index.cursor(Self.seededKey) == nil {
-            for thread in recentThreads() {
-                if let last = thread.items.last { index.setCursor(thread.id, item: last.id.uuidString, at: now()) }
-            }
-            index.setCursor(Self.seededKey, item: "1", at: now())
-            return
-        }
         let cutoff = now().addingTimeInterval(-Self.catchUpDays * 86_400)
         let config = config()
         let pending = recentThreads().filter { thread in
@@ -293,11 +295,18 @@ final class MemoryReflector {
                 return outcome
             }
             var touched: Set<MemoryScope> = []
+            // Like forget, one pass may replace at most `maxForget` notes in all, so a misled pass cannot empty a file.
+            var replaced = 0
             for proposal in proposals.prefix(Self.maxNotes) {
                 if let reason = Self.refusal(proposal, outside: input.outside, hasProject: input.project != nil) {
                     outcome.dropped.append("\(proposal.text) (\(reason))")
                     continue
                 }
+                guard replaced + proposal.replaces.count <= MemoryNote.maxForget else {
+                    outcome.dropped.append("\(proposal.text) (this pass already replaced \(replaced) of at most \(MemoryNote.maxForget) notes)")
+                    continue
+                }
+                replaced += proposal.replaces.count
                 switch store.replace(proposal.replaces, with: proposal.text, scope: proposal.scope, person: proposal.person,
                                      project: input.project, source: input.source) {
                 case .success(let note):

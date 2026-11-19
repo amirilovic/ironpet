@@ -134,6 +134,9 @@ final class MemoryMCPTests: XCTestCase {
         let memoryEdit = ACPToolCall(id: "1", title: "Edit", kind: "edit", paths: [FileMemoryStore.directory.appendingPathComponent("me.md").path])
         XCTAssertFalse(AutomationSession.decision(for: memoryEdit).allow)
         XCTAssertFalse(AutomationPrompt.decision(for: memoryEdit).allow, "the {{item.*}} run carries outside text")
+        let moveIn = ACPToolCall(id: "3", title: "Move", kind: "move", rawInput: ["source": "/tmp/x.md", "destination": FileMemoryStore.directory.appendingPathComponent("me.md").path],
+                                 paths: ["/tmp/x.md"])
+        XCTAssertFalse(AutomationSession.decision(for: moveIn).allow, "a move into the memory folder counts")
         XCTAssertTrue(AutomationPrompt.decision(for: ACPToolCall(id: "2", title: "Read", kind: "read", paths: ["/tmp/x"])).allow)
         let otherEdit = ACPToolCall(id: "2", title: "Edit", kind: "edit", paths: ["/tmp/work/app.swift"])
         XCTAssertTrue(AutomationSession.decision(for: otherEdit).allow, "other non-destructive edits run in an automation's session")
