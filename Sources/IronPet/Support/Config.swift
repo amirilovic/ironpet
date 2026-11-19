@@ -131,6 +131,14 @@ struct Config: Codable, Equatable {
         var keepDoneDays = 30
     }
 
+    /// Background jobs: work an agent hands off to its own agent session (`jobs_start`), each with a task in the Tasks section.
+    struct Jobs: Codable, Equatable {
+        /// Jobs running at once. A job started past this waits in line.
+        var maxRunning = 3
+
+        static let maxRunningRange = 1...5
+    }
+
     /// After the user has been away for `reminders.idleResetMinutes`, one bubble sums up what happened meanwhile. Built from
     /// ironpet's own activity log and stores; nothing is sent anywhere, so it is on by default.
     struct WelcomeBack: Codable, Equatable {
@@ -224,6 +232,7 @@ struct Config: Codable, Equatable {
     var automations = Automations()
     var skills = Skills()
     var tasks = Tasks()
+    var jobs = Jobs()
     var welcomeBack = WelcomeBack()
     var voice = Voice()
     var speech = Speech()
@@ -283,6 +292,7 @@ struct Config: Codable, Equatable {
         c.reminders.snoozeMinutes = max(1, c.reminders.snoozeMinutes)
         c.automations.logRetentionDays = min(365, max(1, c.automations.logRetentionDays))
         c.tasks.keepDoneDays = min(365, max(1, c.tasks.keepDoneDays))
+        c.jobs.maxRunning = min(Jobs.maxRunningRange.upperBound, max(Jobs.maxRunningRange.lowerBound, c.jobs.maxRunning))
         c.voice.baseUrl = c.voice.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         c.voice.model = c.voice.model.trimmingCharacters(in: .whitespacesAndNewlines)
         c.speech.model = c.speech.model.trimmingCharacters(in: .whitespacesAndNewlines)

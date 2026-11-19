@@ -16,6 +16,8 @@ struct ChatThread: Codable, Identifiable {
     var automationName: String? = nil
     /// How many automation runs this thread holds. An `own` session starts a fresh thread after a limit.
     var runs: Int? = nil
+    /// The id of the background job whose transcript this thread holds (`JobService`).
+    var job: String? = nil
 
     var isAutomationRun: Bool { automation != nil }
 }

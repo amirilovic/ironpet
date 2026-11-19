@@ -593,6 +593,7 @@ struct IronPetWindowView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button(action: actions.onSettings) {
                 Label("Settings", systemImage: "gearshape")
+                    .labelStyle(.ironPetSidebar)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
             }
@@ -652,6 +653,7 @@ struct IronPetWindowView: View {
 
     private func row(_ section: IronPetSection) -> some View {
         Label(section.title, systemImage: section.symbol)
+            .labelStyle(.ironPetSidebar)
             .badge(count(section))
             .tag(section)
             .help(shortcutHint(section))

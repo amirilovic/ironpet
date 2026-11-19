@@ -403,7 +403,9 @@ final class ACPBackend {
     // MARK: Sessions
 
     /// The MCP servers this backend's sessions get: all of ironpet's for the chat, none for a restricted run.
-    var sessionMCPServers: [JSON] { restricted ? [] : Self.defaultMCPServers() }
+    var sessionMCPServers: [JSON] { restricted ? [] : mcpServers ?? Self.defaultMCPServers() }
+    /// Replaces `defaultMCPServers` for this backend's sessions, such as a background job's narrower set.
+    var mcpServers: [JSON]?
 
     /// The `_meta` the Claude Code adapter reads its tool rules from (`claudeCode.options`), or nil when the turn sets none.
     nonisolated static func toolRulesMeta(_ turn: ACPTurn) -> JSON? {

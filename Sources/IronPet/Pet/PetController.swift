@@ -74,6 +74,8 @@ final class PetController: NSObject {
     var onOpenThread: ((String) -> Void)?
     /// A task's session link that is not a watched agent session (those jump to their terminal or editor here).
     var onOpenSession: ((String) -> Void)?
+    /// A background job's row or bubble: open its thread in the chat.
+    var onOpenJob: (String) -> Void = { _ in }
     var onRecordingClick: (() -> Void)? {
         didSet { view.onRecordingClick = onRecordingClick }
     }
@@ -173,6 +175,7 @@ final class PetController: NSObject {
             windowModel.section = .alerts
         case .session(let id, let workspace, let bundleID, let iterm):
             if let session = store.sessions[id] { return jump(to: session) }
+            if let job = Job.id(fromSessionKey: id) { return onOpenJob(job) }
             builtWindow?.close()
             // The session has ended: open its folder with the app it ran in, or its iTerm tab.
             if let iterm {
@@ -186,6 +189,10 @@ final class PetController: NSObject {
     }
 
     func jump(to session: AgentSession) {
+        if let job = Job.id(fromSessionKey: session.id) {
+            store.acknowledge(session.id)
+            return onOpenJob(job)
+        }
         builtWindow?.close()
         SourceJumper.jump(to: session)
         store.acknowledge(session.id)

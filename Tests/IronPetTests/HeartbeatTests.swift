@@ -136,6 +136,66 @@ final class HeartbeatTests: AutomationTestCase {
         XCTAssertTrue(history(rig, "watch-x").contains("ok: finished in the chat"))
     }
 
+    func testToolCallsDoNotKeepAQuietTurn() async {
+        let rig = wired([quietAutomation("watch-x", quiet: "ALL_CLEAR")])
+        run(rig, minutes: 10)
+        await settle()
+        deliver[0](.toolStarted(id: "t1", summary: "Ran gh pr list"))
+        deliver[0](.toolFinished(id: "t1", ok: true))
+        deliver[0](.assistant("ALL_CLEAR"))
+        deliver[0](.finished(error: nil))
+        await settle()
+        XCTAssertTrue(chat.items.isEmpty)
+        XCTAssertTrue(history(rig, "watch-x").contains("ok: no changes"))
+    }
+
+    func testToolCallsWithAnotherReplyStayVisible() async {
+        let rig = wired([quietAutomation("watch-x", quiet: "ALL_CLEAR")])
+        run(rig, minutes: 10)
+        await settle()
+        deliver[0](.toolStarted(id: "t1", summary: "Ran gh pr list"))
+        deliver[0](.toolFinished(id: "t1", ok: true))
+        deliver[0](.assistant("ALL_CLEAR plus one PR needs you"))
+        deliver[0](.finished(error: nil))
+        await settle()
+        XCTAssertFalse(chat.items.isEmpty)
+    }
+
+    func testAnAnsweredFormKeepsAQuietTurn() async {
+        let rig = wired([quietAutomation("watch-x", quiet: "ALL_CLEAR")])
+        run(rig, minutes: 10)
+        await settle()
+        chat.items.append(.init(kind: .form(ElicitationRecord(message: "Which?", skipped: true, lines: []))))
+        deliver[0](.assistant("ALL_CLEAR"))
+        deliver[0](.finished(error: nil))
+        await settle()
+        XCTAssertFalse(chat.items.isEmpty)
+    }
+
+    func testAnApprovalKeepsAQuietTurn() async {
+        let rig = wired([quietAutomation("watch-x", quiet: "ALL_CLEAR")])
+        run(rig, minutes: 10)
+        await settle()
+        chat.handlePermission(ACPToolCall(id: "p1", title: "Run rm -rf x", kind: "execute", rawInput: nil)) { _ in }
+        deliver[0](.assistant("ALL_CLEAR"))
+        deliver[0](.finished(error: nil))
+        await settle()
+        XCTAssertFalse(chat.items.isEmpty)
+    }
+
+    func testAMessageTypedDuringTheTurnIsNeverRemoved() async {
+        let rig = wired([quietAutomation("watch-x", quiet: "ALL_CLEAR")])
+        run(rig, minutes: 10)
+        await settle()
+        chat.input = "hello"
+        chat.send()
+        deliver[0](.assistant("ALL_CLEAR"))
+        deliver[0](.finished(error: nil))
+        await settle()
+        // The automation turn is gone, and the queued message started as the next turn.
+        XCTAssertEqual(chat.items.compactMap { if case .user(let t) = $0.kind { t } else { nil } }, ["hello"])
+    }
+
     func testWithoutQuietNothingIsHidden() async {
         let rig = wired([quietAutomation("watch-x", quiet: nil)])
         run(rig, minutes: 10)

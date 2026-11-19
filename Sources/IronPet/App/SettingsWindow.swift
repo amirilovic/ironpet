@@ -158,7 +158,9 @@ struct SettingsView: View {
         HStack(spacing: 0) {
             List(selection: Binding(get: { model.tab }, set: { if let tag = $0 { model.tab = tag } })) {
                 ForEach(Self.pages, id: \.tag) { page in
-                    Label(page.title, systemImage: page.symbol).tag(page.tag)
+                    Label(page.title, systemImage: page.symbol)
+                        .labelStyle(.ironPetSidebar)
+                        .tag(page.tag)
                 }
             }
             .listStyle(.sidebar)
