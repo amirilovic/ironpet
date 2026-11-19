@@ -449,8 +449,8 @@ final class JobTests: XCTestCase {
         XCTAssertNil(store.sessions[key])
     }
 
-    func testAMessageTypedInARunningJobsThreadGoesToTheJobAndStaysVisible() {
-        let chat = ChatSession(restore: false)
+    func testAMessageTypedInARunningJobsThreadGoesToTheJobAndStaysVisible() async {
+        let h = ChatHarness(); let chat = h.session
         func thread(_ prompts: [String]) -> ChatThread {
             ChatThread(id: "session-1", title: "Fix", workspace: folder.path, updatedAt: Date(),
                        items: prompts.map { .init(kind: .user($0), origin: ChatSession.jobOrigin) }, agent: AgentCatalog.all[0].id, job: "job-1")
@@ -461,11 +461,11 @@ final class JobTests: XCTestCase {
             routed.append((thread, text))
             return true
         }
-        chat.input = "Also update the README"
-        chat.send()
+        h.model.input = "Also update the README"
+        await h.model.sendNow()
         XCTAssertEqual(routed.map(\.1), ["Also update the README"])
         XCTAssertEqual(routed.map(\.0), ["session-1"])
-        XCTAssertEqual(chat.input, "")
+        XCTAssertEqual(h.model.input, "")
 
         func prompts() -> [String] { chat.items.compactMap { if case .user(let text) = $0.kind { text } else { nil } } }
         chat.threadSaved(thread(["Fix it"]))
@@ -474,8 +474,8 @@ final class JobTests: XCTestCase {
         XCTAssertEqual(prompts(), ["Fix it", "Also update the README"], "not shown twice")
     }
 
-    func testRepliesAndAttachmentsInAJobThreadGoToTheJobToo() {
-        let chat = ChatSession(restore: false)
+    func testRepliesAndAttachmentsInAJobThreadGoToTheJobToo() async {
+        let h = ChatHarness(); let chat = h.session
         chat.open(ChatThread(id: "session-1", title: "Fix", workspace: folder.path, updatedAt: Date(), items: [],
                              agent: AgentCatalog.all[0].id, job: "job-1"))
         var routed: [String] = []
@@ -484,11 +484,11 @@ final class JobTests: XCTestCase {
             return true
         }
         let shot = folder.appendingPathComponent("shot.png")
-        chat.attachments = [shot]
-        chat.input = "Use this design"
-        chat.send()
+        h.model.attachments = [shot]
+        h.model.input = "Use this design"
+        await h.model.sendNow()
         XCTAssertEqual(routed, ["Use this design\n\nAttached files:\n- \(shot.path)"])
-        XCTAssertTrue(chat.attachments.isEmpty)
+        XCTAssertTrue(h.model.attachments.isEmpty)
         XCTAssertFalse(chat.isRunning, "the chat starts no agent of its own on the job's session")
         chat.threadSaved(ChatThread(id: "session-1", title: "Fix", workspace: folder.path, updatedAt: Date(),
                                     items: [.init(kind: .user(routed[0]), origin: ChatSession.jobOrigin)], agent: AgentCatalog.all[0].id, job: "job-1"))

@@ -65,7 +65,7 @@ private struct SetupView: View {
     let installer: HookInstaller
     let finish: (SetupWindow.Choices?) -> Void
 
-    @State private var name = ConfigStore.shared.config.pet.name
+    @State private var name = SettingsAPI.live.config.pet.name
     @State private var agents: Set<HookInstaller.Agent>
     @State private var launchAtLogin = true
     @State private var reminders = true

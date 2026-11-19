@@ -5,12 +5,13 @@ import XCTest
 @MainActor
 final class AutomationChatTests: AutomationTestCase {
     private var chat: ChatSession!
+    private var h: ChatHarness!
     private var turns: [ACPTurn] = []
     private var deliver: [(AgentEvent) -> Void] = []
 
     override func setUp() async throws {
         try await super.setUp()
-        chat = ChatSession(restore: false)
+        h = ChatHarness(); chat = h.session
         turns = []
         deliver = []
         chat.workspace = FileManager.default.temporaryDirectory
@@ -61,22 +62,22 @@ final class AutomationChatTests: AutomationTestCase {
     // S2
     func testItWaitsBehindTheUsersTurnAndLeavesTheDraftAlone() async {
         let (rig, _) = wired([loop()])
-        chat.input = "first"
-        chat.send()
+        h.model.input = "first"
+        await h.model.sendNow()
         await settle()
-        chat.input = "my draft"
-        chat.attachments = [URL(fileURLWithPath: "/tmp/shot.png")]
+        h.model.input = "my draft"
+        h.model.attachments = [URL(fileURLWithPath: "/tmp/shot.png")]
         run(rig, minutes: 5)
         await settle()
         XCTAssertEqual(turns.count, 1)
         XCTAssertEqual(chat.queue.count, 1)
-        XCTAssertEqual(chat.input, "my draft")
-        XCTAssertEqual(chat.attachments, [URL(fileURLWithPath: "/tmp/shot.png")])
+        XCTAssertEqual(h.model.input, "my draft")
+        XCTAssertEqual(h.model.attachments, [URL(fileURLWithPath: "/tmp/shot.png")])
         deliver[0](.finished(error: nil))
         await settle()
         XCTAssertEqual(turns.count, 2)
         XCTAssertEqual(userTexts.last, "Automation \"Loop\" (every 5 min):\n\nCheck my tasks")
-        XCTAssertEqual(chat.input, "my draft")
+        XCTAssertEqual(h.model.input, "my draft")
     }
 
     // S3
@@ -97,8 +98,8 @@ final class AutomationChatTests: AutomationTestCase {
 
     func testAtMostOneMessagePerAutomationIsQueued() async {
         let (rig, _) = wired([loop()])
-        chat.input = "busy"
-        chat.send()
+        h.model.input = "busy"
+        await h.model.sendNow()
         await settle()
         run(rig, minutes: 5)
         run(rig, minutes: 5)

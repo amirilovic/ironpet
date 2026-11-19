@@ -114,7 +114,7 @@ struct MemorySettings: View {
 
 struct MemorySettingsBody: View {
     @ObservedObject var memory: MemorySettingsModel
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var installedAgents: [ACPAgent] = []
     @State private var query = ""
     @State private var hits: [MemoryIndex.Hit] = []
@@ -156,7 +156,7 @@ struct MemorySettingsBody: View {
 
     /// The models the agent reported in the chat, plus the saved id, so a model that is not listed still shows.
     private var modelChoices: [ChatModel] {
-        var list = config.reflectAgent.flatMap { AgentCatalog.agent(id: $0) }.map(ChatSession.cachedModels(for:)) ?? []
+        var list = config.reflectAgent.map { ChatAPI.cachedModels(forAgent: $0).map { ChatModel(id: $0.id, name: $0.name) } } ?? []
         if let saved = config.reflectModel, !list.contains(where: { $0.id == saved }) { list.append(ChatModel(id: saved, name: saved)) }
         return list
     }

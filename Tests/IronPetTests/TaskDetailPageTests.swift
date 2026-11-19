@@ -4,9 +4,11 @@ import XCTest
 @MainActor
 final class TaskDetailPageTests: XCTestCase {
     private var store: TaskStore!
+    private var api: TasksAPI!
 
     override func setUp() async throws {
         store = TaskStore(database: Database.open(path: nil, migrations: AppMigrations.all).database)
+        api = TasksAPI(store: store)
     }
 
     override func tearDown() async throws { store = nil }
@@ -59,7 +61,7 @@ final class TaskDetailPageTests: XCTestCase {
     func testSavingNotesStoresRawMarkdown() throws {
         let id = try make()
         let raw = "## Steps\n\n- one **two**\n- [three](https://example.com)"
-        try TaskEdits.setNotes(raw, of: id, in: store)
+        try TaskEdits.setNotes(raw, of: id, in: api)
         XCTAssertEqual(store.task(id)?.notes, raw)
         XCTAssertEqual(TaskDetail(task: store.task(id)!, history: []).notes, raw)
     }
@@ -84,9 +86,9 @@ final class TaskDetailPageTests: XCTestCase {
     func testAddingAndRemovingALabel() throws {
         _ = try make("Other", labels: ["merge": "auto"])
         let id = try make()
-        XCTAssertNil(TaskLabelEditing.add(key: " merge ", value: "manual", to: id, in: store))
+        XCTAssertNil(TaskLabelEditing.add(key: " merge ", value: "manual", to: id, in: api))
         XCTAssertEqual(store.task(id)?.labels, ["merge": "manual"])
-        XCTAssertNil(TaskLabelEditing.add(key: "merge", value: "auto", to: id, in: store))
+        XCTAssertNil(TaskLabelEditing.add(key: "merge", value: "auto", to: id, in: api))
         XCTAssertEqual(store.task(id)?.labels, ["merge": "auto"])
         _ = try store.update(id, removeLabels: ["merge"], by: "user")
         XCTAssertEqual(store.task(id)?.labels, [:])
@@ -95,9 +97,9 @@ final class TaskDetailPageTests: XCTestCase {
     func testInvalidKeyShowsAMessageAndAddsNothing() throws {
         let id = try make()
         for key in ["two words", "a=b", "a,b", ""] {
-            XCTAssertNotNil(TaskLabelEditing.add(key: key, value: "x", to: id, in: store), key)
+            XCTAssertNotNil(TaskLabelEditing.add(key: key, value: "x", to: id, in: api), key)
         }
-        XCTAssertNotNil(TaskLabelEditing.add(key: "ok", value: "", to: id, in: store))
+        XCTAssertNotNil(TaskLabelEditing.add(key: "ok", value: "", to: id, in: api))
         XCTAssertEqual(store.task(id)?.labels, [:])
     }
 
@@ -126,10 +128,10 @@ final class TaskDetailPageTests: XCTestCase {
 
     func testStatusChangeRecordsANote() throws {
         let id = try make()
-        try TaskEdits.setStatus(.inProgress, of: id, in: store)
+        try TaskEdits.setStatus(.inProgress, of: id, in: api)
         XCTAssertEqual(store.task(id)?.status, .inProgress)
         XCTAssertTrue(store.history(id).contains { $0.kind == .note && $0.detail == "Moved to In progress by the user." })
-        try TaskEdits.setStatus(.done, of: id, in: store, note: "  Report sent  ")
+        try TaskEdits.setStatus(.done, of: id, in: api, note: "  Report sent  ")
         XCTAssertEqual(store.task(id)?.status, .done)
         XCTAssertNotNil(store.task(id)?.closed)
         XCTAssertTrue(store.history(id).contains { $0.kind == .note && $0.detail == "Report sent" })
@@ -137,22 +139,22 @@ final class TaskDetailPageTests: XCTestCase {
 
     func testDoneWithoutANoteUsesAFixedText() throws {
         let id = try make()
-        try TaskEdits.setStatus(.done, of: id, in: store, note: "   ")
+        try TaskEdits.setStatus(.done, of: id, in: api, note: "   ")
         XCTAssertTrue(store.history(id).contains { $0.kind == .note && $0.detail == TaskEdits.closedByUser })
     }
 
     func testDueAndWaitingOnPersist() throws {
         let id = try make()
         let due = Date(timeIntervalSince1970: 1_800_000_000)
-        try TaskEdits.setDue(due, of: id, in: store)
+        try TaskEdits.setDue(due, of: id, in: api)
         XCTAssertEqual(store.task(id)?.due, due)
-        try TaskEdits.setDue(nil, of: id, in: store)
+        try TaskEdits.setDue(nil, of: id, in: api)
         XCTAssertNil(store.task(id)?.due)
-        try TaskEdits.setWaitingOn(" Ana ", of: id, in: store)
+        try TaskEdits.setWaitingOn(" Ana ", of: id, in: api)
         XCTAssertEqual(store.task(id)?.waitingOn, "Ana")
-        try TaskEdits.setWaitingOn("  ", of: id, in: store)
+        try TaskEdits.setWaitingOn("  ", of: id, in: api)
         XCTAssertNil(store.task(id)?.waitingOn)
-        try TaskEdits.setTitle("New title", of: id, in: store)
+        try TaskEdits.setTitle("New title", of: id, in: api)
         XCTAssertEqual(store.task(id)?.title, "New title")
     }
 }

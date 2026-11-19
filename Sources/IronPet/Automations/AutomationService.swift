@@ -274,6 +274,7 @@ final class AutomationService {
         engine.state.setApproved(id, AutomationState.hash(risk))
         engine.state.setRejected(id, nil)
         dismissNotice(Self.approvalID(id))
+        store.events?.publish(.automationsChanged, id: id)
         engine.syncStreams()
         if let fire = pending.removeValue(forKey: id) { handle(fire) }
     }
@@ -284,6 +285,7 @@ final class AutomationService {
         pending[id] = nil
         dismissNotice(Self.approvalID(id))
         try? store.update(id) { $0.enabled = false }
+        store.events?.publish(.automationsChanged, id: id)
         record(id, "skipped", "rejected by the user, turned off")
     }
 
@@ -701,13 +703,13 @@ final class AutomationService {
         }
     }
 
-    private func find(_ args: [String: Any]) throws -> Automation {
+    func find(_ args: [String: Any]) throws -> Automation {
         guard let id = args["id"] as? String else { throw AutomationError(message: "id is required") }
         guard let a = store.automations.first(where: { $0.id == id }) else { throw AutomationError(message: "no automation with id \"\(id)\"") }
         return a
     }
 
-    private func create(_ args: [String: Any], by: String) throws -> Automation {
+    func create(_ args: [String: Any], by: String) throws -> Automation {
         var raw = (args["automation"] as? [String: Any]) ?? args
         let name = raw["name"] as? String ?? ""
         if raw["id"] == nil { raw["id"] = AutomationValidator.slug(name, taken: Set(store.automations.map(\.id))) }
@@ -722,7 +724,7 @@ final class AutomationService {
         return a
     }
 
-    private func update(_ args: [String: Any], by: String) throws -> Automation {
+    func update(_ args: [String: Any], by: String) throws -> Automation {
         let existing = try find(args)
         let changes = (args["changes"] as? [String: Any]) ?? args.filter { $0.key != "id" }
         guard !changes.isEmpty else { throw AutomationError(message: "changes is empty") }

@@ -3,7 +3,7 @@ import Foundation
 /// An open item that deserves a look: CI that failed, a review waiting on you, a production error. Automations create
 /// them with `alert` actions. The alerts list shows them until they are dismissed or the automation resolves them,
 /// and the most urgent one sets Ghost's mood and badge.
-struct Signal: Identifiable, Equatable {
+struct Signal: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let subtitle: String
@@ -23,7 +23,11 @@ struct Signal: Identifiable, Equatable {
 
 @MainActor
 final class SignalStore: ObservableObject {
-    @Published private(set) var signals: [Signal] = []
+    @Published private(set) var signals: [Signal] = [] {
+        didSet { events?.publish(.alertsChanged) }
+    }
+    /// Where changes are published for API clients.
+    weak var events: APIEventBus?
 
     /// Called for signals that should notify (not for state found on the first run).
     var onNew: ((Signal) -> Void)?
@@ -37,9 +41,11 @@ final class SignalStore: ObservableObject {
     }
 
     func add(_ signal: Signal, notify: Bool) {
-        signals.removeAll { $0.id == signal.id }
-        signals.insert(signal, at: 0)
-        if signals.count > 50 { signals.removeLast(signals.count - 50) }
+        // One assignment, so one `alerts.changed` event.
+        var next = signals.filter { $0.id != signal.id }
+        next.insert(signal, at: 0)
+        if next.count > 50 { next.removeLast(next.count - 50) }
+        signals = next
         if notify { onNew?(signal) }
     }
 
@@ -63,5 +69,12 @@ final class SignalStore: ObservableObject {
         let ranked: [PetMood] = [.done, .failed, .needsInput]
         guard let top = signals.map(\.mood).max(by: { ranked.firstIndex(of: $0)! < ranked.firstIndex(of: $1)! }) else { return nil }
         return (top, signals.filter { $0.mood == top }.count)
+    }
+}
+
+extension SignalStore {
+    /// Adds the unavailable-database alert, with a bubble, when the database is the in-memory stand-in.
+    func reportIfUnavailable(_ database: Database) {
+        if let signal = DatabaseNotice.signal(for: database) { add(signal, notify: true) }
     }
 }

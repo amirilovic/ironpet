@@ -55,7 +55,7 @@ final class TaskStoreTests: XCTestCase {
 
     private func call(_ op: String, _ args: [String: Any] = [:], by: String = "agent:mcp",
                       file: StaticString = #filePath, line: UInt = #line) throws -> [String: Any] {
-        switch store.call(op, args, by: by) {
+        switch TaskJSON.call(TasksAPI(store: store), op, args, by: by) {
         case .success(let value): return try XCTUnwrap(value as? [String: Any], file: file, line: line)
         case .failure(let error):
             XCTFail("\(op) failed: \(error.message)", file: file, line: line)
@@ -64,7 +64,7 @@ final class TaskStoreTests: XCTestCase {
     }
 
     private func callError(_ op: String, _ args: [String: Any] = [:]) -> String? {
-        if case .failure(let error) = store.call(op, args, by: "agent:mcp") { return error.message }
+        if case .failure(let error) = TaskJSON.call(TasksAPI(store: store), op, args, by: "agent:mcp") { return error.message }
         return nil
     }
 
@@ -482,7 +482,7 @@ final class TaskStoreTests: XCTestCase {
         func suggest(_ args: [String: Any], origin: [String: Any]? = nil) throws -> Any {
             var args = args
             args["origin"] = origin ?? self.suggestOrigin
-            switch store.call("suggest", args, by: "agent:cli") {
+            switch TaskJSON.call(TasksAPI(store: store), "suggest", args, by: "agent:cli") {
             case .success(let value): return value
             case .failure(let error): throw error
             }

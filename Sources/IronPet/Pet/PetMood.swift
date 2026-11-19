@@ -1,4 +1,4 @@
-enum PetMood: String, CaseIterable {
+enum PetMood: String, CaseIterable, Codable {
     case idle, working, needsInput, done, failed, listening, sleeping, drinking, stretching, attentive
 
     var row: AtlasRow {

@@ -5,6 +5,7 @@ import XCTest
 @MainActor
 final class HeartbeatTests: AutomationTestCase {
     private var chat: ChatSession!
+    private var h: ChatHarness!
     private var turns: [ACPTurn] = []
     private var deliver: [(AgentEvent) -> Void] = []
     private var checklistReady = true
@@ -16,7 +17,7 @@ final class HeartbeatTests: AutomationTestCase {
         try await super.setUp()
         heartbeatDir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-heartbeat-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: heartbeatDir, withIntermediateDirectories: true)
-        chat = ChatSession(restore: false)
+        h = ChatHarness(); chat = h.session
         turns = []
         deliver = []
         checklistReady = true
@@ -187,8 +188,8 @@ final class HeartbeatTests: AutomationTestCase {
         let rig = wired([quietAutomation("watch-x", quiet: "ALL_CLEAR")])
         run(rig, minutes: 10)
         await settle()
-        chat.input = "hello"
-        chat.send()
+        h.model.input = "hello"
+        await h.model.sendNow()
         deliver[0](.assistant("ALL_CLEAR"))
         deliver[0](.finished(error: nil))
         await settle()

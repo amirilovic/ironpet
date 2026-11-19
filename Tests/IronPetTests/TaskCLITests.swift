@@ -110,7 +110,7 @@ final class TaskCLIServerTests: XCTestCase {
         store = TaskStore(database: Database.open(path: nil, migrations: AppMigrations.all).database, keepDoneDays: { 30 })
         server = EventServer(token: "test-token") { _ in }
         server.onAgentAPI = { [weak self] request, respond in
-            MCPEndpoint.route(request, automations: { nil }, tasks: { self?.store }, respond: respond)
+            MCPEndpoint.route(request, automations: { nil }, tasks: { self?.store.map { TasksAPI(store: $0) } }, respond: respond)
         }
         try server.start(preferredPort: 47440)
         let port = String(server.port)

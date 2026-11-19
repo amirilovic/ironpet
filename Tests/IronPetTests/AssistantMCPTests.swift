@@ -33,8 +33,8 @@ final class AssistantMCPTests: XCTestCase {
 
     private func rpc(_ method: String, _ params: [String: Any] = [:], jobScope: Bool = false, caller: String? = nil) async throws -> [String: Any] {
         let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": method, "params": params])
-        let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, memory: memory, assistant: context, caller: caller,
-                                                 jobScope: jobScope)
+        let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, memory: memory.map { services in MemoryAPI(services: { services }) },
+                                                 assistant: context.map { AssistantAPI(context: $0) }, caller: caller, jobScope: jobScope)
         return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
@@ -127,7 +127,7 @@ final class AssistantMCPTests: XCTestCase {
     func testStatusOverviewGathersSessionsAlertsAndTasks() async throws {
         let tasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
         _ = try tasks.create(title: "Review Sara's PR", status: .needsYou, source: .user, by: "user")
-        context.tasks = { tasks }
+        context.tasks = { TasksAPI(store: tasks) }
         var waiting = AgentSession(id: "claude:1", source: .claude, status: .needsInput, prompt: "Migrate the db")
         waiting.origin.workspace = "/Users/me/kokous"
         context.sessions = { [waiting] }

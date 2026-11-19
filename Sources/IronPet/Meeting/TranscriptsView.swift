@@ -3,19 +3,12 @@ import SwiftUI
 
 /// The Transcripts section: past meetings newest first, and the summary or transcript of the one selected.
 struct TranscriptsView: View {
-    @ObservedObject var library: MeetingLibrary
-    @ObservedObject private var regenerator: MeetingRegenerator
-    /// The folder of the meeting being recorded or summarized; it cannot be deleted.
-    let activeFolder: () -> URL?
-    let onAsk: ([URL]) -> Void
+    @ObservedObject var meetings: MeetingsAPI
     /// A meeting to select, set by the Today page. Cleared once selected.
     let focus: Binding<String?>
 
-    init(library: MeetingLibrary, activeFolder: @escaping () -> URL?, onAsk: @escaping ([URL]) -> Void, focus: Binding<String?> = .constant(nil)) {
-        self.library = library
-        self.regenerator = library.regenerator
-        self.activeFolder = activeFolder
-        self.onAsk = onAsk
+    init(meetings: MeetingsAPI, focus: Binding<String?> = .constant(nil)) {
+        self.meetings = meetings
         self.focus = focus
     }
 
@@ -29,9 +22,9 @@ struct TranscriptsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if library.meetings.isEmpty {
+            if meetings.meetings.isEmpty {
                 EmptyState(symbol: "waveform", title: "No meetings yet",
-                           detail: "Start one from \(ConfigStore.shared.config.pet.name)'s right-click menu; its transcript and summary show up here.")
+                           detail: "Start one from \(SettingsAPI.live.config.pet.name)'s right-click menu; its transcript and summary show up here.")
             } else {
                 HStack(spacing: 0) {
                     list
@@ -41,7 +34,7 @@ struct TranscriptsView: View {
             }
         }
         .pageHeader(IronPetSection.transcripts.title) {
-            if let progress = regenerator.progress {
+            if let progress = meetings.regenerationProgress {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
                     Text(progress.label).font(.caption).foregroundStyle(.secondary)
@@ -49,8 +42,8 @@ struct TranscriptsView: View {
             }
         }
         .onAppear {
-            library.reload()
-            if selection == nil || !library.meetings.contains(where: { $0.id == selection }) { selection = library.meetings.first?.id }
+            meetings.reload()
+            if selection == nil || !meetings.meetings.contains(where: { $0.id == selection }) { selection = meetings.meetings.first?.id }
             selectFocus()
             load()
         }
@@ -58,8 +51,8 @@ struct TranscriptsView: View {
         .onChange(of: selection) { load() }
         .onChange(of: page) { load() }
         // A run changed files on disk: the list previews and the open text may be new.
-        .onChange(of: regenerator.completed) {
-            library.reload()
+        .onChange(of: meetings.regenerationsCompleted) {
+            meetings.reload()
             load()
         }
     }
@@ -67,26 +60,26 @@ struct TranscriptsView: View {
     private func selectFocus() {
         guard let id = focus.wrappedValue else { return }
         focus.wrappedValue = nil
-        guard library.meetings.contains(where: { $0.id == id }) else { return }
+        guard meetings.meetings.contains(where: { $0.id == id }) else { return }
         page = .summary
         selection = id
     }
 
-    private var selected: MeetingRecord? { library.meetings.first { $0.id == selection } }
+    private var selected: MeetingRecord? { meetings.meetings.first { $0.id == selection } }
 
     private var list: some View {
         List(selection: $selection) {
-            ForEach(library.meetings) { meeting in
+            ForEach(meetings.meetings) { meeting in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(meeting.date.formatted(date: .abbreviated, time: .shortened))
                         .font(.system(size: 12.5, weight: .medium))
-                    if regenerator.activeID == meeting.id, let progress = regenerator.progress {
+                    if meetings.regenerationID == meeting.id, let progress = meetings.regenerationProgress {
                         HStack(spacing: 5) {
                             ProgressView().controlSize(.mini)
                             Text(progress.label).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                     } else {
-                        Text(meeting.preview.isEmpty ? (meeting.folder == activeFolder() ? "Recording…" : "No transcript") : meeting.preview)
+                        Text(meeting.preview.isEmpty ? (meeting.folder == meetings.activeFolder ? "Recording…" : "No transcript") : meeting.preview)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
@@ -127,7 +120,7 @@ struct TranscriptsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
                 }
-                if let message = error ?? regenerator.errors[meeting.id] {
+                if let message = error ?? meetings.regenerationErrors[meeting.id] {
                     Text(message).font(.caption).foregroundStyle(.red).padding(8)
                 }
             }
@@ -148,11 +141,11 @@ struct TranscriptsView: View {
             .labelsHidden()
             .fixedSize()
             Spacer()
-            Button { onAsk(meeting.chatFiles) } label: {
+            Button { try? meetings.ask(meeting.id) } label: {
                 if askLabel {
-                    Label("Ask \(ConfigStore.shared.config.pet.name)", systemImage: "sparkles")
+                    Label("Ask \(SettingsAPI.live.config.pet.name)", systemImage: "sparkles")
                 } else {
-                    Label("Ask \(ConfigStore.shared.config.pet.name)", systemImage: "sparkles").labelStyle(.iconOnly)
+                    Label("Ask \(SettingsAPI.live.config.pet.name)", systemImage: "sparkles").labelStyle(.iconOnly)
                 }
             }
             .disabled(meeting.chatFiles.isEmpty)
@@ -162,13 +155,13 @@ struct TranscriptsView: View {
                 NSWorkspace.shared.activateFileViewerSelecting([meeting.folder])
             }
             IconButton(symbol: "trash", help: "Move to Trash") { confirmDelete = true }
-                .disabled(meeting.folder == activeFolder() || regenerator.activeID == meeting.id)
+                .disabled(meeting.folder == meetings.activeFolder || meetings.regenerationID == meeting.id)
         }
     }
 
     /// Click for a new transcript and summary, or pick "Summary only" to keep the transcript, for example after naming a speaker.
     private func regenerateMenu(_ meeting: MeetingRecord) -> some View {
-        let reason = regenerator.unavailableReason(for: meeting, activeFolder: activeFolder())
+        let reason = meetings.regenerationBlocked(meeting.id)
         return Menu {
             Button("Transcript and summary") { regenerate(meeting, .full) }
             Button("Summary only") { regenerate(meeting, .summaryOnly) }
@@ -184,19 +177,17 @@ struct TranscriptsView: View {
         .help(reason ?? "Transcribe the saved audio again and write a new summary, with today's model, speaker names and summary agent. The old files are kept as .prev.md")
     }
 
-    private func regenerate(_ meeting: MeetingRecord, _ mode: RegenerationMode) {
+    private func regenerate(_ meeting: MeetingRecord, _ mode: MeetingRegeneration) {
         error = nil
-        let folder = activeFolder()
-        Task { await regenerator.regenerate(meeting, mode: mode, activeFolder: folder) }
+        Task { try? await meetings.regenerate(RegenerateMeetingRequest(id: meeting.id, mode: mode)) }
     }
 
     private func load() {
         guard let meeting = selected else { text = nil; return }
-        let url = page == .summary ? meeting.summaryURL : meeting.transcriptURL
         let id = meeting.id, wanted = page
         text = nil
         Task {
-            let loaded = await Task.detached { try? String(contentsOf: url, encoding: .utf8) }.value
+            let loaded = (try? await meetings.text(MeetingTextRequest(id: id, kind: wanted == .summary ? .summary : .transcript))) ?? nil
             // A slow read for a meeting the user already left must not replace the newer one.
             guard selection == id, page == wanted else { return }
             text = loaded
@@ -205,11 +196,11 @@ struct TranscriptsView: View {
 
     private func delete(_ meeting: MeetingRecord) {
         do {
-            try library.delete(meeting.id)
+            try meetings.delete(meeting.id)
             error = nil
-            selection = library.meetings.first?.id
+            selection = meetings.meetings.first?.id
         } catch {
-            self.error = "Could not move it to the Trash: \(error.localizedDescription)"
+            self.error = (error as? APIError)?.message ?? error.localizedDescription
         }
     }
 }

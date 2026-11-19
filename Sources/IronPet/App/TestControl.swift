@@ -47,11 +47,15 @@ final class TestControl {
     }
 
     private let chat: ChatSession
+    /// The Mac chat window's draft and microphone, which these endpoints drive like the user would.
+    var chatModel: ChatViewModel!
     private let actions: Actions
     private(set) var attention: [[String: String]] = []
     /// What the app does with a finished meeting summary (mine action items, suggest them, show the bubble), so
     /// `/test/tasks/suggest` runs that path. Without it the endpoint only mines and suggests.
     var onMeetingSummaryText: ((String, URL) -> Void)?
+    /// The task store, for the `/test/tasks/*` endpoints. It is the app's own store, set by the app delegate.
+    var tasks: TaskStore?
     /// Screen capture, for the `/test/screen/*` endpoints. They feed synthetic captures in, so no test reads the real screen.
     var screen: CaptureService?
     /// Opens the Screen section and returns its window number.
@@ -90,7 +94,7 @@ final class TestControl {
         case ("POST", "/test/show-chat"):
             if body["newChat"] as? Bool == true {
                 chat.newChat()
-                chat.input = ""
+                chatModel.input = ""
             }
             actions.showChat()
         case ("POST", "/test/chat"):
@@ -101,8 +105,8 @@ final class TestControl {
             if body["noProject"] as? Bool == true { chat.useNoProject() }
             if let path = body["workspace"] as? String { chat.use(URL(fileURLWithPath: path)) }
             if let auto = body["auto"] as? Bool { chat.autoMode = auto }
-            chat.input = body["prompt"] as? String ?? ""
-            chat.send()
+            chatModel.input = body["prompt"] as? String ?? ""
+            chatModel.send()
         case ("POST", "/test/build-pet"):
             let description = (body["description"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !description.isEmpty else { return Self.encode(["ok": false, "error": "description is required"]) }
@@ -142,13 +146,13 @@ final class TestControl {
             actions.showChat()
             if body["newChat"] as? Bool == true {
                 chat.newChat()
-                chat.input = ""
+                chatModel.input = ""
             }
-            if let auto = body["autoSend"] as? Bool { chat.sendAfterDictation = auto }
+            if let auto = body["autoSend"] as? Bool { chatModel.sendAfterDictation = auto }
             if let workspace = body["workspace"] as? String { chat.use(URL(fileURLWithPath: workspace)) }
-            chat.voice.start(.file(URL(fileURLWithPath: path)))
+            chatModel.voice.start(.file(URL(fileURLWithPath: path)))
         case ("POST", "/test/voice/stop"):
-            chat.voice.stop()
+            chatModel.voice.stop()
         case ("POST", "/test/speech/speak"):
             // Reads the last reply aloud, like its speaker button.
             guard let reply = chat.items.last(where: { if case .assistant = $0.kind { true } else { false } }) else {
@@ -203,9 +207,9 @@ final class TestControl {
         case ("POST", "/test/retry"):
             chat.retryAfterFix()
         case ("POST", "/test/voice/cancel"):
-            chat.voice.cancel()
+            chatModel.voice.cancel()
         case ("POST", "/test/voice/retry"):
-            chat.retryVoice()
+            chatModel.retryVoice()
         case ("GET", "/test/meeting"):
             return meetingSnapshot()
         case ("POST", "/test/meeting/picker"):
@@ -318,14 +322,14 @@ final class TestControl {
         case ("GET", "/test/tasks"):
             return tasksSnapshot()
         case ("POST", "/test/tasks/reset"):
-            guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+            guard let store = tasks else { return Self.encode(["ok": false, "error": "no task store"]) }
             for item in store.tasks { try? store.delete(item.id, by: "test") }
             for suggestion in store.suggestions { store.skip(suggestion.id) }
             return tasksSnapshot()
         case ("POST", "/test/tasks/suggest"):
             return suggestTasks(body)
         case ("POST", "/test/tasks/accept-all"):
-            guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+            guard let store = tasks else { return Self.encode(["ok": false, "error": "no task store"]) }
             // The Tasks tab's Add all. The suggestions bubble has no buttons.
             store.acceptAll()
             return tasksSnapshot()
@@ -543,12 +547,12 @@ final class TestControl {
     }
 
     private func tasksSnapshot() -> Data {
-        guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+        guard let store = tasks else { return Self.encode(["ok": false, "error": "no task store"]) }
         return Self.encode([
             "ok": true,
             "tasks": store.ordered.map { item -> [String: Any] in
-                var object = TaskStore.json(item)
-                object["history"] = store.history(item.id).map(TaskStore.json)
+                var object = TaskJSON.json(item)
+                object["history"] = store.history(item.id).map(TaskJSON.json)
                 return object
             },
             "suggestions": store.suggestions.map(Self.json),
@@ -557,7 +561,7 @@ final class TestControl {
 
     /// `summary` is the markdown of a meeting summary and `meeting` its folder.
     private func suggestTasks(_ body: [String: Any]) -> Data {
-        guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+        guard let store = tasks else { return Self.encode(["ok": false, "error": "no task store"]) }
         guard let summary = body["summary"] as? String, let path = body["meeting"] as? String, !path.isEmpty else {
             return Self.encode(["ok": false, "error": "summary and meeting are required"])
         }
@@ -671,12 +675,12 @@ final class TestControl {
             "pid": chat.processID.map { Int($0) } ?? 0,
             "runtimeOffer": chat.runtimeOffer ?? "",
             "signIn": chat.signInOptions.map(\.name),
-            "attachments": chat.attachments.map(\.path),
-            "input": chat.input,
+            "attachments": chatModel.attachments.map(\.path),
+            "input": chatModel.input,
             "windowId": actions.chatWindowID(),
             "frame": { let f = actions.chatFrame(); return [f.minX, f.minY, f.width, f.height] }(),
-            "voice": chat.voice.phase.rawValue,
-            "voiceRetry": chat.voiceRetryItem != nil,
+            "voice": chatModel.voice.phase.rawValue,
+            "voiceRetry": chatModel.voiceRetryItem != nil,
             "speech": chat.speech.phase.rawValue,
         ])
     }

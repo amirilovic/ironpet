@@ -4,7 +4,7 @@ import Foundation
 /// Gathers a brief's input from the app's stores and `~/.ironpet/meetings`, and builds it.
 @MainActor
 final class BriefSource {
-    private let tasks: TaskStore
+    private let tasks: TasksAPI
     private let sessions: SessionStore
     private let signals: SignalStore
     private let meetingsRoot: URL
@@ -16,7 +16,7 @@ final class BriefSource {
     /// Each summary's open action items, keyed by folder, kept until the file changes.
     private var summaries: [String: (modified: Date, items: [String])] = [:]
 
-    init(tasks: TaskStore, sessions: SessionStore, signals: SignalStore, meetingsRoot: URL = Paths.meetings,
+    init(tasks: TasksAPI, sessions: SessionStore, signals: SignalStore, meetingsRoot: URL = Paths.meetings,
          activity: BriefActivitySource? = nil) {
         self.tasks = tasks
         self.sessions = sessions
@@ -37,7 +37,7 @@ final class BriefSource {
         let since = BriefBuilder.meetingsSince(weekdays: weekdays, now: now, calendar: calendar)
         let today = DateInterval(start: min(calendar.startOfDay(for: day ?? now), now), end: now)
         let live = Array(sessions.sessions.values)
-        let input = BriefInput(now: now, calendar: calendar, day: day, tasks: tasks.tasks, sessions: live, alerts: signals.signals,
+        let input = BriefInput(now: now, calendar: calendar, day: day, tasks: tasks.items, sessions: live, alerts: signals.signals,
                                meetings: meetings(since: min(since, today.start), until: now),
                                activity: activity?.briefActivity(in: today) ?? Self.finishedSessions(live, in: today))
         return BriefBuilder.build(kind, input, meetingsSince: since)
@@ -103,13 +103,13 @@ extension BriefActivity {
 @MainActor
 final class BriefModel: ObservableObject {
     @Published private(set) var briefs: [Brief.Kind: Brief] = [:]
-    private let source: BriefSource?
+    private let source: TodayAPI?
     /// The brief automation's weekdays.
     var weekdays: () -> [String]? = { nil }
     private var visible = false
     private var cancellable: AnyCancellable?
 
-    init(source: BriefSource) {
+    init(source: TodayAPI) {
         self.source = source
         cancellable = source.changes
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
@@ -134,7 +134,7 @@ final class BriefModel: ObservableObject {
         guard let source else { return }
         let weekdays = weekdays()
         briefs = Dictionary(uniqueKeysWithValues: Brief.Kind.allCases.map {
-            ($0, source.build($0, weekdays: weekdays, day: $0 == .recap ? recapDay : nil))
+            ($0, source.brief(BriefRequest(kind: $0, weekdays: weekdays, day: $0 == .recap ? recapDay : nil)))
         })
     }
 

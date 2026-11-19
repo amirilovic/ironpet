@@ -1,14 +1,14 @@
 import Foundation
 
 /// One choice in a select field: the value sent back, the label shown, and optional secondary text.
-struct ElicitationOption: Equatable {
+struct ElicitationOption: Equatable, Codable {
     let value: String
     let title: String
     let detail: String
 }
 
-struct ElicitationField: Identifiable, Equatable {
-    enum Kind: Equatable {
+struct ElicitationField: Identifiable, Equatable, Codable {
+    enum Kind: Equatable, Codable {
         case single([ElicitationOption])
         case multi([ElicitationOption])
         case text
@@ -25,7 +25,7 @@ struct ElicitationField: Identifiable, Equatable {
 }
 
 /// What the user has entered so far, per field id.
-enum ElicitationValue: Equatable {
+enum ElicitationValue: Equatable, Codable {
     case one(String)
     case many([String])
     case text(String)
@@ -67,7 +67,7 @@ enum ElicitationReply: Equatable {
 }
 
 /// A form request from the agent: the message and a flat list of fields, parsed from `requestedSchema`.
-struct ElicitationForm: Equatable {
+struct ElicitationForm: Equatable, Codable {
     let message: String
     let fields: [ElicitationField]
 

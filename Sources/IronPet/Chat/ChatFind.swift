@@ -1,6 +1,6 @@
 import Foundation
 
-/// Matching logic for the chat's Cmd-F search. Pure functions over `ChatSession.Item`, so it is unit tested
+/// Matching logic for the chat's Cmd-F search. Pure functions over `ChatItem`, so it is unit tested
 /// without a view. Search is plain text, case and diacritic insensitive.
 enum ChatFind {
     /// One occurrence of the query. `segment` numbers the pieces of text one item renders (a markdown block,
@@ -38,7 +38,7 @@ enum ChatFind {
 
     /// The text of each piece an item shows, in reading order. These are the strings that are drawn,
     /// so markdown markers are not searchable and a match always has something to highlight.
-    static func segments(of item: ChatSession.Item) -> [String] {
+    static func segments(of item: ChatItem) -> [String] {
         switch item.kind {
         case .user(let text), .error(let text):
             return [text]
@@ -59,7 +59,7 @@ enum ChatFind {
     }
 
     /// Every match across the transcript in reading order.
-    static func matches(query: String, in items: [ChatSession.Item]) -> [Match] {
+    static func matches(query: String, in items: [ChatItem]) -> [Match] {
         guard !query.isEmpty else { return [] }
         var result: [Match] = []
         for item in items {

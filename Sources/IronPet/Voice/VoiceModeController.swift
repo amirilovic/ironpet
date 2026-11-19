@@ -53,7 +53,7 @@ final class VoiceModeController {
 
     /// Turns voice mode on once the server has transcribed the test clip and spoken one line through `player`, so a
     /// server that can't do either shows up now rather than in the first conversation.
-    static func enable(using player: SpeechPlayer) async -> Enabling {
+    static func enable(using player: VoiceAPI) async -> Enabling {
         let voice = ConfigStore.shared.config.voice
         let transcriber = Transcriber(baseURL: voice.baseUrl, model: voice.model, apiKey: VoiceKey.load(), timeout: 30)
         do {
@@ -62,7 +62,7 @@ final class VoiceModeController {
             return .failed("Not turned on. Transcription failed: \(error.localizedDescription)")
         }
         do {
-            try await player.preview("Voice mode is on. Press the voice mode shortcut to talk to me.", using: SpeechPlayer.synthesizer())
+            try await player.preview("Voice mode is on. Press the voice mode shortcut to talk to me.")
         } catch is CancellationError {
             return .cancelled
         } catch {

@@ -23,6 +23,8 @@ final class PetGalleryModel: ObservableObject {
 
     private let library: URL
     private let bundled: URL?
+    /// The pet API the gallery selects and imports through. `AppDelegate` sets the app's; the default works on `library`.
+    lazy var api = PetAPI(settings: .live, library: library, bundled: bundled)
     private let spriteOverride: (() -> String?)?
     private var animationTimer: Timer?
     private var pollTimer: Timer?
@@ -38,7 +40,7 @@ final class PetGalleryModel: ObservableObject {
         self.spriteOverride = sprite
     }
 
-    private var sprite: String? { spriteOverride.map { $0() } ?? ConfigStore.shared.config.pet.sprite }
+    private var sprite: String? { spriteOverride.map { $0() } ?? SettingsAPI.live.config.pet.sprite }
 
     var isActive: Bool { viewShown && windowShown }
 
@@ -102,21 +104,17 @@ final class PetGalleryModel: ObservableObject {
     }
 
     func select(_ entry: PetEntry) {
-        ConfigStore.shared.update { PetLibrary.select(entry, in: &$0) }
+        api.select(entry)
     }
 
     /// Copies a sheet the user picked into the pets folder and makes it the pet.
     func add(_ url: URL) {
         do {
-            let copy = try PetLibrary.importSheet(url, into: library)
+            try api.importPet(url)
             importError = nil
-            guard let atlas = Atlas.load(copy) else { return }
-            let name = PetLibrary.displayName(forStem: copy.deletingPathExtension().lastPathComponent)
-            let entry = PetEntry(id: PetLibrary.standardized(copy.path), name: name, url: copy, atlas: atlas)
-            select(entry)
             reload()
         } catch {
-            importError = error.localizedDescription
+            importError = (error as? APIError)?.message ?? error.localizedDescription
         }
     }
 }
@@ -124,7 +122,7 @@ final class PetGalleryModel: ObservableObject {
 struct PetGallery: View {
     @ObservedObject var gallery: PetGalleryModel
     var buildPet: (String) -> Void
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var asking = false
 
     private let columns = [GridItem(.adaptive(minimum: 92, maximum: 120), spacing: 10)]

@@ -110,6 +110,7 @@ func telegramMessage(_ text: String?, from id: Int64, name: String = "Ann", user
 final class TelegramTests: XCTestCase {
     private var client: FakeTelegram!
     private var session: ChatSession!
+    private var chatAPI: ChatAPI!
     private var bridge: TelegramBridge!
     private var store: UserStore!
     private var tokens: MemoryTokenStore!
@@ -123,6 +124,7 @@ final class TelegramTests: XCTestCase {
         TestMemory.isolate()
         client = FakeTelegram()
         session = ChatSession(restore: false)
+        chatAPI = ChatAPI(session: session)
         store = UserStore()
         tokens = MemoryTokenStore()
         runs = []
@@ -136,7 +138,7 @@ final class TelegramTests: XCTestCase {
     private func makeBridge(sleep: @escaping (TimeInterval) async throws -> Void = { _ in try await Task.sleep(nanoseconds: 60_000_000_000) }) -> TelegramBridge {
         let store = store!
         return TelegramBridge(
-            client: client, host: session, tokens: tokens,
+            client: client, host: chatAPI, tokens: tokens,
             storage: .init(users: { store.users }, add: { store.users.append($0) },
                            remove: { id in store.users.removeAll { $0.id == id } },
                            offset: { store.offset }, setOffset: { store.offset = $0 }),
@@ -258,7 +260,7 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(session.workspace, folder)
         XCTAssertNil(session.sessionID)
         guard case .user("hello") = session.items.first?.kind else { return XCTFail("no user item") }
-        XCTAssertEqual(session.items.first?.origin, ChatSession.telegramOrigin)
+        XCTAssertEqual(session.items.first?.origin, ChatOrigin.telegramClient)
         XCTAssertEqual(client.sent, [.init(chat: 10, text: "Hi <b>there</b>", html: true)])
         XCTAssertGreaterThanOrEqual(client.typing, 0)
     }
@@ -287,11 +289,11 @@ final class TelegramTests: XCTestCase {
                 emit(.finished(error: nil))
             }
         }
-        session.input = "from the mac"
-        session.send()
+        session.submitLocal("from the mac", files: [], reply: nil)
         XCTAssertTrue(session.isRunning)
         bridge.handle(telegramMessage("from telegram", from: 10))
-        XCTAssertEqual(session.telegramQueueCount, 1)
+        await bridge.flush()
+        XCTAssertEqual(session.userQueueCount, 1)
         XCTAssertEqual(runs, [])
         for _ in 0..<50 where release == nil { try? await Task.sleep(nanoseconds: 20_000_000) }
         release?.resume()
@@ -316,16 +318,16 @@ final class TelegramTests: XCTestCase {
             await MainActor.run { emit(.finished(error: nil)) }
         }
         session.autoMode = true
-        session.input = "busy"
-        session.send()
+        session.submitLocal("busy", files: [], reply: nil)
         for _ in 0..<50 where release == nil { try? await Task.sleep(nanoseconds: 20_000_000) }
         session.isVisible = false
         let before = session.items.map(\.id)
         bridge.handle(telegramMessage("while busy", from: 10))
         bridge.handle(telegramMessage("/status", from: 10, update: 2))
-        XCTAssertEqual(session.telegramQueueCount, 1)
+        await bridge.flush()
+        XCTAssertEqual(session.userQueueCount, 1)
         XCTAssertEqual(session.items.map(\.id), before)
-        session.cancelTelegram(chat: 10)
+        session.cancel(from: .telegram(chat: 10))
         XCTAssertEqual(session.items.map(\.id), before)
         XCTAssertEqual(session.threadID, "thread-1")
         XCTAssertTrue(session.autoMode)
@@ -344,7 +346,7 @@ final class TelegramTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(runs, [])
         XCTAssertTrue(session.items.isEmpty)
-        XCTAssertEqual(session.telegramQueueCount, 0)
+        XCTAssertEqual(session.userQueueCount, 0)
     }
 
     func testStatusCommandReportsBusyOrIdle() async {
@@ -380,7 +382,7 @@ final class TelegramTests: XCTestCase {
         client.me = { throw TelegramError.api(code: 401, description: "Unauthorized") }
         let fixed = Date(timeIntervalSince1970: 1_000)
         let bridge = TelegramBridge(
-            client: client, host: session, tokens: tokens,
+            client: client, host: chatAPI, tokens: tokens,
             storage: .init(users: { [] }, add: { _ in }, remove: { _ in }, offset: { 0 }, setOffset: { _ in }),
             sleep: { try await sleeps.sleep($0) }, now: { fixed })
         bridge.start()
@@ -505,12 +507,14 @@ final class TelegramTests: XCTestCase {
     func testRemovedUserLosesQueuedMessagesAndAnswers() async {
         allow(10)
         session.turnRunner = { _, _ in await withCheckedContinuation { _ in } }
-        session.input = "from the mac"
-        session.send()
+        session.submitLocal("from the mac", files: [], reply: nil)
         bridge.handle(telegramMessage("queued", from: 10))
-        XCTAssertEqual(session.telegramQueueCount, 1)
+        await bridge.flush()
+        XCTAssertEqual(session.userQueueCount, 1)
         bridge.removeUser(id: 10)
-        XCTAssertEqual(session.telegramQueueCount, 0)
+        await bridge.flush()
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(session.userQueueCount, 0)
         XCTAssertTrue(store.users.isEmpty)
     }
 
@@ -571,7 +575,7 @@ final class TelegramAutoApprovalTests: XCTestCase {
         session.use(URL(fileURLWithPath: "/tmp/telegram-test-project"))
         session.autoMode = auto
         session.turnRunner = { _, _ in }
-        if telegram { session.submitFromTelegram("hi", chat: 5) } else { session.input = "hi"; session.send() }
+        if telegram { session.submit("hi", from: .telegram(chat: 5)) } else { session.submitLocal("hi", files: [], reply: nil) }
         return session
     }
 
@@ -586,8 +590,8 @@ final class TelegramAutoApprovalTests: XCTestCase {
 
     func testAutoAllowsSafeCommandOnTelegramTurn() {
         let s = session(auto: true, telegram: true)
-        var events: [ChatSession.TelegramEvent] = []
-        s.onTelegram = { _, e in events.append(e) }
+        var events: [ChatSession.TurnEvent] = []
+        s.onTurn = { _, e in events.append(e) }
         XCTAssertNotNil(decision(s, ps))
         XCTAssertTrue(s.approvals.isEmpty)
         XCTAssertTrue(events.isEmpty)
@@ -596,7 +600,7 @@ final class TelegramAutoApprovalTests: XCTestCase {
     func testAutoStillAsksForDestructiveCommandOnTelegramTurn() {
         let s = session(auto: true, telegram: true)
         var asked = false
-        s.onTelegram = { _, e in if case .approval = e { asked = true } }
+        s.onTurn = { _, e in if case .approval = e { asked = true } }
         XCTAssertNil(decision(s, rm))
         XCTAssertEqual(s.approvals.count, 1)
         XCTAssertTrue(asked)
@@ -605,7 +609,7 @@ final class TelegramAutoApprovalTests: XCTestCase {
     func testAutoOffAsksOnTelegramTurn() {
         let s = session(auto: false, telegram: true)
         var asked = false
-        s.onTelegram = { _, e in if case .approval = e { asked = true } }
+        s.onTurn = { _, e in if case .approval = e { asked = true } }
         XCTAssertNil(decision(s, ps))
         XCTAssertEqual(s.approvals.count, 1)
         XCTAssertTrue(asked)

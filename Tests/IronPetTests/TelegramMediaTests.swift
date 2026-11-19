@@ -31,6 +31,8 @@ private final class VoiceServer: URLProtocol, @unchecked Sendable {
 final class TelegramMediaTests: XCTestCase {
     private var client: FakeTelegram!
     private var session: ChatSession!
+    private var h: ChatHarness!
+    private var chatAPI: ChatAPI!
     private var bridge: TelegramBridge!
     private var directory: URL!
     private var turns: [ACPTurn] = []
@@ -41,7 +43,8 @@ final class TelegramMediaTests: XCTestCase {
     override func setUp() async throws {
         TestMemory.isolate()
         client = FakeTelegram()
-        session = ChatSession(restore: false)
+        h = ChatHarness(); session = h.session
+        chatAPI = ChatAPI(session: session)
         session.use(URL(fileURLWithPath: "/tmp/telegram-media-project"))
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("tg-media-\(UUID().uuidString)")
         users = UserStore()
@@ -51,7 +54,7 @@ final class TelegramMediaTests: XCTestCase {
         transcribe = { _, _ in "turn the lights on" }
         let store = users
         bridge = TelegramBridge(
-            client: client, host: session, tokens: MemoryTokenStore(),
+            client: client, host: chatAPI, tokens: MemoryTokenStore(),
             storage: .init(users: { store.users }, add: { store.users.append($0) },
                            remove: { id in store.users.removeAll { $0.id == id } },
                            offset: { 0 }, setOffset: { _ in }),
@@ -108,14 +111,14 @@ final class TelegramMediaTests: XCTestCase {
         }
         XCTAssertEqual(try Data(contentsOf: turn.images[0]), Data([0xFF, 0xD8, 0xFF, 2]))
         let attached = session.items.compactMap { item -> String? in
-            if case .screenshot(let path) = item.kind, item.origin == ChatSession.telegramOrigin { return path }
+            if case .screenshot(let path) = item.kind, item.origin == ChatOrigin.telegramClient { return path }
             return nil
         }
         XCTAssertEqual(Set(attached), Set((turn.images + turn.files).map(\.path)))
         guard case .user("what is in these?") = session.items.last(where: { if case .user = $0.kind { return true } else { return false } })?.kind else {
             return XCTFail("caption is not the message text")
         }
-        XCTAssertTrue(session.attachments.isEmpty, "the Mac draft must stay untouched")
+        XCTAssertTrue(h.model.attachments.isEmpty, "the Mac draft must stay untouched")
     }
 
     func testSeparatePhotoMessagesStayTwoMessages() async {
@@ -163,7 +166,7 @@ final class TelegramMediaTests: XCTestCase {
         client.files = [:]
         let failing = FailingFile()
         let bridge = TelegramBridge(
-            client: failing, host: session, tokens: MemoryTokenStore(),
+            client: failing, host: chatAPI, tokens: MemoryTokenStore(),
             storage: .init(users: { [.init(id: 10, name: "Ann", username: nil)] }, add: { _ in }, remove: { _ in },
                            offset: { 0 }, setOffset: { _ in }),
             filesDirectory: directory, voiceEnabled: { true }, transcribe: { _, _ in "" })

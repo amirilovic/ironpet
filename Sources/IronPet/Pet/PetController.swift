@@ -13,6 +13,14 @@ final class PetController: NSObject {
     private(set) var view: PetView
     private let store: SessionStore
     private let signals: SignalStore
+    /// The alerts the window shows. Falls back to one over `signals`.
+    var alerts: AlertsAPI?
+    /// The sessions the window shows. Falls back to one over `store`.
+    var agents: AgentsAPI?
+    private lazy var fallbackAgents = AgentsAPI(store: store)
+    private var agentList: AgentsAPI { agents ?? fallbackAgents }
+    private lazy var fallbackAlerts = AlertsAPI(store: signals)
+    private var alertList: AlertsAPI { alerts ?? fallbackAlerts }
     private let windowModel = IronPetWindowModel()
     private var builtWindow: IronPetPanel?
     /// Built on first use, so it gets the stores the app hands over after `init`.
@@ -41,8 +49,8 @@ final class PetController: NSObject {
     var notifications: NotificationsModel? {
         didSet { notifications?.opener = notificationOpener() }
     }
-    /// The Tasks section's list. Falls back to `TaskStore.shared`, then to an empty list.
-    var tasks: TaskStore?
+    /// The Tasks section's list. Falls back to an empty list.
+    var tasks: TasksAPI?
     /// The Automations section. Set before the window first opens.
     var settings: SettingsModel?
     /// The Settings row at the bottom of the sidebar: opens the Settings window.
@@ -56,12 +64,12 @@ final class PetController: NSObject {
     var onVoiceSettings: (() -> Void)?
     /// The Chat section's session and the Transcripts section's meetings. Set before the window first opens.
     var chat: ChatSession?
-    var meetings: MeetingLibrary?
+    /// The chat API the window draws. Set with `chat`.
+    var chatModel: ChatViewModel?
+    var meetingsAPI: MeetingsAPI?
     /// The Today section's content. Set before the window first opens.
     var brief: BriefModel?
     /// "Ask Ghost" on a meeting: attach these files in the chat.
-    var onAskMeeting: (([URL]) -> Void)?
-    var meetingInProgress: () -> URL? = { nil }
     /// The Chat section came on screen or left it (another section, or the window closed).
     var onChatShown: ((Bool) -> Void)?
     /// The window closed, by Esc, a close button or ⌘W, or because ironpet lost focus off Chat.
@@ -216,6 +224,19 @@ final class PetController: NSObject {
         }
     }
 
+    /// What the pet shows now, for `PetAPI.state` and the `pet.mood` event.
+    private(set) var state = PetState(mood: PetMood.idle.rawValue, badge: 0)
+    /// Where `pet.mood` is published for API clients.
+    weak var events: APIEventBus?
+
+    private func shown(_ mood: PetMood, badge: Int) {
+        view.show(mood, badge: badge)
+        let next = PetState(mood: mood.rawValue, badge: badge)
+        guard next != state else { return }
+        state = next
+        events?.publish(.petMood, id: next.mood)
+    }
+
     func refreshMood() {
         if let voice = voiceMood() {
             lastActivity = Date()
@@ -224,7 +245,7 @@ final class PetController: NSObject {
             return
         }
         if let nudge, nudge.until > Date() {
-            view.show(nudge.mood, badge: 0)
+            shown(nudge.mood, badge: 0)
             onRefresh?(view.mood)
             return
         }
@@ -236,10 +257,10 @@ final class PetController: NSObject {
         if chat != nil { lastActivity = Date() }
         if let mood = [watched, alerts?.mood, chat].compactMap({ $0 }).max(by: { Self.urgency($0) < Self.urgency($1) }) {
             let badge = (mood == watched ? summary.count : 0) + (mood == alerts?.mood ? alerts?.count ?? 0 : 0)
-            view.show(mood, badge: badge)
+            shown(mood, badge: badge)
         } else {
             let sleepy = Date().timeIntervalSince(lastActivity) > Self.sleepAfter
-            view.show(sleepy ? .sleeping : .idle, badge: 0)
+            shown(sleepy ? .sleeping : .idle, badge: 0)
         }
         onRefresh?(view.mood)
     }
@@ -271,7 +292,7 @@ final class PetController: NSObject {
     /// already open.
     func showWindow(_ section: IronPetSection?) {
         lastActivity = Date()
-        windowModel.section = section ?? IronPetSection.needingAttention(store: store, signals: signals, tasks: taskList)
+        windowModel.section = section ?? IronPetSection.needingAttention(agents: agentList, alerts: alertList, tasks: taskList)
         settings?.refresh()
         NSApp.activate()
         window.show(near: panel.frame)
@@ -306,11 +327,10 @@ final class PetController: NSObject {
         onChatShown?(chatShown)
     }
 
-    private var taskList: TaskStore { tasks ?? TaskStore.shared ?? Self.noTasks }
+    private var taskList: TasksAPI { tasks ?? Self.noTasks }
 
     private func makeWindow() -> IronPetPanel {
         let actions = SessionActions(
-            onJump: { [weak self] session in self?.jump(to: session) },
             onAsk: { [weak self] prompt in self?.onAsk?(prompt) },
             onTrick: { [weak self] trick in
                 // Bubbles are hidden while this window is open.
@@ -324,8 +344,6 @@ final class PetController: NSObject {
                 if let session = store.sessions[id] { return jump(to: session) }
                 onOpenSession?(id)
             },
-            onAskMeeting: { [weak self] files in self?.onAskMeeting?(files) },
-            meetingInProgress: { [weak self] in self?.meetingInProgress() },
             onSettings: { [weak self] in
                 guard let self else { return }
                 // The Settings window is a normal window, so it would open behind this floating one.
@@ -344,9 +362,9 @@ final class PetController: NSObject {
                 if !isChatVisible { builtWindow?.close() }
                 onVoiceSettings?()
             })
-        let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(
-            model: windowModel, store: store, signals: signals, tasks: taskList, notifications: notifications ?? .empty, chat: chat,
-            meetings: meetings, settings: settings, brief: brief, voice: voiceConversation, actions: actions))
+        let window = IronPetPanel(model: windowModel, session: chatModel, content: IronPetWindowView(
+            model: windowModel, agents: agentList, alerts: alertList, tasks: taskList, notifications: notifications ?? .empty, chat: chatModel,
+            meetings: meetingsAPI, settings: settings, brief: brief, voice: voiceConversation, actions: actions))
         window.hasVoice = voiceConversation != nil
         window.onVisibilityChange = { [weak self] visible in
             guard let self else { return }
@@ -356,7 +374,7 @@ final class PetController: NSObject {
             brief?.setVisible(visible && windowModel.section == .today)
         }
         window.onClose = { [weak self] in self?.onWindowClosed?() }
-        window.autoHideEnabled = { ConfigStore.shared.config.window.autoHide }
+        window.autoHideEnabled = { SettingsAPI.live.config.window.autoHide }
         window.isCapturing = { [weak self] in self?.isCapturing ?? false }
         windowModel.$section
             .receive(on: RunLoop.main)
@@ -369,7 +387,7 @@ final class PetController: NSObject {
     }
 
     /// Stands in until the app hands over its store, so the tab shows its empty state instead of failing.
-    private static let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
+    private static let noTasks = TasksAPI(store: TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database))
 
     /// Reloads the sprite sheet after `pet.sprite` changes.
     func reloadAtlas() {
@@ -383,7 +401,7 @@ final class PetController: NSObject {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        let config = ConfigStore.shared.config
+        let config = SettingsAPI.live.config
         for (title, shortcut, action) in [("Chat with \(config.pet.name)", config.hotkeys.chat, #selector(showChat(_:))),
                                           ("Ask about front window", config.hotkeys.captureWindow, #selector(captureWindow(_:))),
                                           ("Ask about a region", config.hotkeys.captureRegion, #selector(captureRegion(_:)))] {

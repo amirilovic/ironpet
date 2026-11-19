@@ -817,7 +817,7 @@ final class AutomationServerTests: AutomationTestCase {
         rig = makeRig([bubble("water", minutes: 45)])
         let service = rig.service
         server = EventServer(token: "test-token") { _ in }
-        server.onAgentAPI = { request, respond in MCPEndpoint.route(request, automations: { service }, tasks: { nil }, respond: respond) }
+        server.onAgentAPI = { request, respond in MCPEndpoint.route(request, automations: { AutomationsAPI(service: service) }, tasks: { nil }, respond: respond) }
         try server.start(preferredPort: 47400)
         let port = String(server.port)
         AutomationCLI.endpoint = { (port, "test-token") }

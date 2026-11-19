@@ -63,7 +63,7 @@ struct UsageSettings: View {
 
     var body: some View {
         Form {
-            if let reason = UsageStore.shared?.unavailable {
+            if let reason = UsageAPI.live?.unavailable {
                 Section { DatabaseBanner(reason: reason) }
             }
             Section {
@@ -90,7 +90,7 @@ struct UsageSettings: View {
             }
             Section("By feature and model") {
                 if summary.rows.isEmpty {
-                    Text(UsageStore.shared?.unavailable != nil ? "Usage is not being saved." : "Nothing recorded in this range yet.").foregroundStyle(.secondary)
+                    Text(UsageAPI.live?.unavailable != nil ? "Usage is not being saved." : "Nothing recorded in this range yet.").foregroundStyle(.secondary)
                 } else {
                     table
                 }
@@ -102,12 +102,12 @@ struct UsageSettings: View {
     }
 
     private func reload() {
-        guard sample == nil, let store = UsageStore.shared else { return }
+        guard sample == nil, let store = UsageAPI.live else { return }
         let days = range
         // The read waits for queued writes, so it stays off the main thread.
-        Task.detached {
-            let result = store.summary(days: days, hourly: days == Self.todayRange)
-            await MainActor.run { if days == range { summary = result } }
+        Task { @MainActor in
+            let result = (try? store.summary(UsageRequest(days: days, hourly: days == Self.todayRange)))
+            await MainActor.run { if days == range, let result { summary = result } }
         }
     }
 

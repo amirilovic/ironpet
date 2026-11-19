@@ -1,8 +1,8 @@
 import Foundation
 
 /// The agent-facing endpoints on the loopback server: MCP over HTTP (`POST /mcp`) for every tool ironpet offers, and the
-/// plain CLI endpoints (`POST /automations`, `POST /tasks`). Tools are routed by prefix to `AutomationService.call`,
-/// `TaskStore.call`, `ScreenMCP.call` and `MemoryMCP.call`, which validate.
+/// plain CLI endpoints (`POST /automations`, `POST /tasks`). Tools are routed by prefix to `AutomationsAPI.callJSON`,
+/// `TaskJSON.call`, `ScreenAPI`, `MemoryAPI` and the other namespaces, which validate.
 @MainActor
 enum MCPEndpoint {
     static var tools: [[String: Any]] { AutomationMCP.tools + TaskMCP.tools + NotificationMCP.tools + ScreenMCP.tools + DesktopMCP.tools + MemoryMCP.tools + AssistantMCP.tools }
@@ -55,8 +55,8 @@ enum MCPEndpoint {
         """
 
     /// Handles one MCP JSON-RPC message. Returns the HTTP status line and body.
-    static func handle(_ body: Data, automations: AutomationService?, tasks: TaskStore?, screen: CaptureStore? = nil,
-                       desktop: DesktopService? = nil, memory: MemoryMCP.Services? = nil, assistant: AssistantContext? = nil,
+    static func handle(_ body: Data, automations: AutomationsAPI?, tasks: TasksAPI?, screen: ScreenAPI? = nil,
+                       desktop: DesktopAPI? = nil, memory: MemoryAPI? = nil, assistant: AssistantAPI? = nil,
                        caller: String? = nil, jobScope: Bool = false, voiceScope: Bool = false,
                        notifications: NotificationStore? = nil) async -> (status: String, body: Data) {
         guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let method = message["method"] as? String else {
@@ -88,21 +88,21 @@ enum MCPEndpoint {
             }
             if AssistantMCP.handles(name) {
                 guard let assistant else { return toolResult("ironpet's assistant tools are not available right now", isError: true) }
-                switch AssistantMCP.call(name, arguments, context: assistant, fromVoice: voiceScope) {
+                switch assistant.callTool(name, arguments, fromVoice: voiceScope) {
                 case .success(let value): return toolResult(text(value), isError: false)
                 case .failure(let error): return toolResult(error.message, isError: true)
                 }
             }
             if name.hasPrefix("automations_") {
                 guard let automations else { return toolResult("ironpet's automations are not available right now", isError: true) }
-                switch await automations.call(String(name.dropFirst("automations_".count)), arguments, by: "agent:mcp") {
+                switch await automations.callJSON(String(name.dropFirst("automations_".count)), arguments, by: "agent:mcp") {
                 case .success(let value): return toolResult(text(value), isError: false)
                 case .failure(let error): return toolResult(error.message, isError: true)
                 }
             }
             if name.hasPrefix("tasks_") {
                 guard let tasks else { return toolResult("ironpet's task list is not available right now", isError: true) }
-                switch tasks.call(String(name.dropFirst("tasks_".count)), arguments, by: "agent:mcp") {
+                switch TaskJSON.call(tasks, String(name.dropFirst("tasks_".count)), arguments, by: "agent:mcp") {
                 case .success(let value): return toolResult(text(value), isError: false)
                 case .failure(let error): return toolResult(error.message, isError: true)
                 }
@@ -116,14 +116,14 @@ enum MCPEndpoint {
             }
             if ScreenMCP.names.contains(name) {
                 guard let screen else { return toolResult("ironpet's screen captures are not available right now", isError: true) }
-                switch ScreenMCP.call(name, arguments, store: screen) {
+                switch screen.callTool(name, arguments) {
                 case .success(let value): return toolResult(text(value), isError: false)
                 case .failure(let error): return toolResult(error.message, isError: true)
                 }
             }
             if DesktopMCP.names.contains(name) {
                 guard let desktop else { return toolResult("ironpet's desktop control is not available right now", isError: true) }
-                switch await desktop.call(name, arguments) {
+                switch await desktop.callTool(name, arguments) {
                 case .success(.value(let value)): return toolResult(text(value), isError: false)
                 case .success(.image(let data, let caption)): return imageResult(data, caption: caption)
                 case .failure(let error): return toolResult(error.message, isError: true)
@@ -131,7 +131,7 @@ enum MCPEndpoint {
             }
             if MemoryMCP.names.contains(name) {
                 guard let memory else { return toolResult("Ghost's memory is not available right now", isError: true) }
-                switch MemoryMCP.call(name, arguments, services: memory, caller: caller) {
+                switch memory.callTool(name, arguments, caller: caller) {
                 case .success(let value): return toolResult(text(value), isError: false)
                 case .failure(let error): return toolResult(error.message, isError: true)
                 }
@@ -143,11 +143,11 @@ enum MCPEndpoint {
     }
 
     /// Connects `EventServer.onAgentAPI` to the services. Called on the server's queue; the work runs on the main actor.
-    nonisolated static func route(_ request: HTTPRequest, automations: @escaping @MainActor () -> AutomationService?,
-                                  tasks: @escaping @MainActor () -> TaskStore?, screen: @escaping @MainActor () -> CaptureStore? = { nil },
-                                  desktop: @escaping @MainActor () -> DesktopService? = { nil },
-                                  memory: @escaping @MainActor () -> MemoryMCP.Services? = { nil },
-                                  assistant: @escaping @MainActor () -> AssistantContext? = { nil },
+    nonisolated static func route(_ request: HTTPRequest, automations: @escaping @MainActor () -> AutomationsAPI?,
+                                  tasks: @escaping @MainActor () -> TasksAPI?, screen: @escaping @MainActor () -> ScreenAPI? = { nil },
+                                  desktop: @escaping @MainActor () -> DesktopAPI? = { nil },
+                                  memory: @escaping @MainActor () -> MemoryAPI? = { nil },
+                                  assistant: @escaping @MainActor () -> AssistantAPI? = { nil },
                                   notifications: @escaping @MainActor () -> NotificationStore? = { nil },
                                   respond: @escaping (String, Data) -> Void) {
         let path = request.path, body = request.body, caller = request.header(callerHeader)
@@ -162,11 +162,11 @@ enum MCPEndpoint {
                 guard let store = notifications() else { return respond("503 Service Unavailable", Data()) }
                 result = NotificationMCP.handleCLI(body, store: store)
             case "/tasks":
-                guard let store = tasks() else { return respond("503 Service Unavailable", Data()) }
-                result = TaskMCP.handleCLI(body, store: store)
+                guard let tasks = tasks() else { return respond("503 Service Unavailable", Data()) }
+                result = TaskMCP.handleCLI(body, tasks: tasks)
             default:
-                guard let service = automations() else { return respond("503 Service Unavailable", Data()) }
-                result = await AutomationMCP.handleCLI(body, service: service)
+                guard let api = automations() else { return respond("503 Service Unavailable", Data()) }
+                result = await AutomationMCP.handleCLI(body, api: api)
             }
             respond(result.status, result.body)
         }

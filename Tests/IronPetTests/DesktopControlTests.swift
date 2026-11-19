@@ -520,7 +520,7 @@ final class DesktopControlTests: XCTestCase {
     func testTheEndpointReturnsAnImageAndErrors() async throws {
         func rpc(_ name: String, _ args: [String: Any], desktop: DesktopService?) async throws -> [String: Any] {
             let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": name, "arguments": args]])
-            let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, desktop: desktop)
+            let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, desktop: desktop.map { DesktopAPI(service: $0, settings: .live) })
             return try XCTUnwrap(try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])["result"] as? [String: Any])
         }
         let picture = try await rpc("desktop_screenshot", ["app": "Notes"], desktop: service)

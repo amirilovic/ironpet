@@ -17,7 +17,7 @@ final class MCPEndpointTests: XCTestCase {
 
     private func rpc(_ method: String, _ params: [String: Any] = [:], tasks: TaskStore?) async throws -> [String: Any] {
         let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 7, "method": method, "params": params])
-        let (status, data) = await MCPEndpoint.handle(body, automations: nil, tasks: tasks)
+        let (status, data) = await MCPEndpoint.handle(body, automations: nil, tasks: tasks.map { TasksAPI(store: $0) })
         XCTAssertEqual(status, "200 OK")
         let reply = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(reply["id"] as? Int, 7)
@@ -156,10 +156,10 @@ final class MCPEndpointTests: XCTestCase {
     }
 
     func testNotificationsParseErrorsAndUnknownMethods() async throws {
-        let notification = await MCPEndpoint.handle(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8), automations: nil, tasks: tasks)
+        let notification = await MCPEndpoint.handle(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8), automations: nil, tasks: tasks.map { TasksAPI(store: $0) })
         XCTAssertEqual(notification.status, "202 Accepted")
         XCTAssertTrue(notification.body.isEmpty)
-        let garbage = await MCPEndpoint.handle(Data("not json".utf8), automations: nil, tasks: tasks)
+        let garbage = await MCPEndpoint.handle(Data("not json".utf8), automations: nil, tasks: tasks.map { TasksAPI(store: $0) })
         XCTAssertEqual(garbage.status, "400 Bad Request")
         let unknown = try await rpc("resources/list", tasks: tasks)
         XCTAssertEqual((unknown["error"] as? [String: Any])?["code"] as? Int, -32601)

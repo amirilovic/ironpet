@@ -36,24 +36,27 @@ final class SlashCommandTests: XCTestCase {
         XCTAssertEqual(state.selection, 0)
     }
 
-    func testSessionCompletionAndEscape() {
-        let session = ChatSession(restore: false)
+    func testSessionCompletionAndEscape() async {
+        let h = ChatHarness(); let session = h.session
         session.receiveCommands(list)
-        session.input = "/co"
-        XCTAssertEqual(session.slashMatches.map(\.name), ["compact"])
-        XCTAssertTrue(session.completeSlash())
-        XCTAssertEqual(session.input, "/compact ")
-        XCTAssertTrue(session.slashMatches.isEmpty)
-        XCTAssertFalse(session.completeSlash())
+        await h.model.settle()
+        h.model.input = "/co"
+        await h.model.settle()
+        XCTAssertEqual(h.model.slashMatches.map(\.name), ["compact"])
+        XCTAssertTrue(h.model.completeSlash())
+        XCTAssertEqual(h.model.input, "/compact ")
+        XCTAssertTrue(h.model.slashMatches.isEmpty)
+        XCTAssertFalse(h.model.completeSlash())
 
-        session.input = "/"
-        XCTAssertTrue(session.dismissSlash())
-        XCTAssertEqual(session.input, "/")
-        XCTAssertTrue(session.slashMatches.isEmpty)
-        XCTAssertFalse(session.dismissSlash())
-        session.inputChanged(from: "/", to: "/r")
-        session.input = "/r"
-        XCTAssertEqual(session.slashMatches.map(\.name), ["review"])
+        h.model.input = "/"
+        XCTAssertTrue(h.model.dismissSlash())
+        XCTAssertEqual(h.model.input, "/")
+        XCTAssertTrue(h.model.slashMatches.isEmpty)
+        XCTAssertFalse(h.model.dismissSlash())
+        h.model.inputChanged(from: "/", to: "/r")
+        h.model.input = "/r"
+        await h.model.settle()
+        XCTAssertEqual(h.model.slashMatches.map(\.name), ["review"])
     }
 
     func testPerAgentCache() {

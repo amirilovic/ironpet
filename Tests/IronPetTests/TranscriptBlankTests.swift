@@ -163,7 +163,7 @@ final class TranscriptBlankTests: XCTestCase {
             wheel(panel, toFraction: f, samples: &failures)
             expectContent(panel, "at \(f)", &failures)
             session.items.append(.init(kind: .assistant("streamed \(f) " + String(repeating: "word ", count: 200))))
-            session.items.append(.init(kind: .user(paste()), origin: ChatSession.telegramOrigin))
+            session.items.append(.init(kind: .user(paste()), origin: ChatOrigin.telegramClient))
             for k in 0..<6 { spin(0.2); expectContent(panel, "at \(f) after arrivals \(k)", &failures) }
         }
         panel.close()

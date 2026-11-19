@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = SessionStore()
     private let signals = SignalStore()
     private let chat = ChatSession()
-    private lazy var recordingKeys = RecordingKeys(voice: chat.voice, heldModifiers: {
+    private lazy var recordingKeys = RecordingKeys(voice: chatModel.voice, heldModifiers: {
         Shortcut(ConfigStore.shared.config.hotkeys.voice)?.modifiers ?? 0
     })
     private let notifier = Notifier()
@@ -31,8 +31,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var welcomeBack: WelcomeBack?
     /// Replaces the system idle time in test mode (`POST /test/presence`). Nil otherwise.
     private var testIdleSeconds: TimeInterval?
-    private var brief: BriefSource?
-    private lazy var logWindow = AutomationLogWindow(service: { [weak self] in self?.automations })
+    private var brief: TodayAPI?
+    /// The task store, for the meeting suggestions and the test endpoints. Everything else uses `api.tasks`.
+    private var taskStore: TaskStore?
+    /// The Mac chat window's state, on top of `ChatAPI`. Built with the API.
+    private var chatModel: ChatViewModel!
+    private lazy var logWindow = AutomationLogWindow(api: { [weak self] in self?.api?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
     private lazy var announcer = Announcer(notifier: notifier)
@@ -61,15 +65,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timers: [Timer] = []
     private var cancellables: Set<AnyCancellable> = []
     private let config = ConfigStore.shared
+    /// Stores publish their changes here. It exists before the API, which needs the database.
+    private let events = APIEventBus()
+    /// The in-process API, built once the database is open.
+    private var api: IronPetAPI!
     private var setupWindow: SetupWindow?
     private lazy var telegram = TelegramBridge(
-        client: TelegramAPI(token: { TelegramToken.shared.load() }), host: chat, tokens: TelegramToken.shared,
+        client: TelegramAPI(token: { TelegramToken.shared.load() }), host: api.chat, tokens: TelegramToken.shared,
         storage: .init(
             users: { ConfigStore.shared.config.telegram.allowedUsers },
             add: { user in ConfigStore.shared.update { $0.telegram.allowedUsers.append(user) } },
             remove: { id in ConfigStore.shared.update { $0.telegram.allowedUsers.removeAll { $0.id == id } } },
             offset: { UserDefaults.standard.integer(forKey: "telegramOffset") },
             setOffset: { UserDefaults.standard.set($0, forKey: "telegramOffset") }),
+        voiceEnabled: { ConfigStore.shared.config.voice.enabled },
+        transcribe: { [weak self] audio, name in
+            guard let self else { throw APIError.unavailable("ironpet is not ready") }
+            return try await self.api.voice.transcribe(TranscribeRequest(audio: audio, fileName: name, mime: TelegramVoice.mime(for: name)))
+        },
         petName: { ConfigStore.shared.config.pet.name })
     private lazy var settingsWindow = SettingsWindow(model: settingsModel)
     private lazy var settingsModel = SettingsModel(actions: .init(
@@ -79,6 +92,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
+        config.events = events
+        store.events = events
+        signals.events = events
+        announcer.bubbles.events = events
+        meeting.events = events
 
         announcer.openSession = { [weak self] id in self?.openSession(id) }
         announcer.openChat = { [weak self] in self?.showChat() }
@@ -119,22 +137,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.onChatToggle = { [weak self] in self?.toggleChat() }
         pet.onCapture = { [weak self] region in self?.captureScreen(region: region) }
         pet.chat = chat
-        pet.meetings = meetings
-        pet.onAskMeeting = { [weak self] files in self?.openMeetingInChat(files) }
-        pet.meetingInProgress = { [weak self] in
-            guard let meeting = self?.meeting, [.recording, .finishing, .summarizing].contains(meeting.phase) else { return nil }
-            return meeting.folder
-        }
         pet.show()
         dockIcon.update(sprite: config.config.pet.sprite)
 
-        wispr.onDictation = { [weak self] text in self?.chat.receiveDictation(text) }
+        wispr.onDictation = { [weak self] text in self?.chatModel.receiveDictation(text) }
         pet.onChatShown = { [weak self] shown in self?.chatShown(shown) }
         pet.onWindowClosed = { [weak self] in self?.restorePreviousApp() }
-        meetingPanel = MeetingPanel(controller: meeting)
-        meeting.onChange = { [weak self] in self?.syncMeetingPanel() }
-        settingsModel.meeting = meeting
-        settingsModel.speech = chat.speech
         meeting.onLabelSpeakers = { [weak self] in self?.showSettings(tab: "meetings") }
         announcer.bubbles.onDismissed = { [weak self] id in self?.meetingBubbleClosed(id) }
         pet.onRecordingClick = { [weak self] in self?.showMeetingBubble() }
@@ -175,12 +183,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.activity?.record(.chatFinished(title))
             self?.announcer.chat(title)
         }
-        telegram.onPairingRequest = { [weak self] request in
-            self?.announcer.telegramPairing(request, allow: { self?.telegram.allow(request.id) },
-                                            deny: { self?.telegram.deny(request.id) })
-        }
-        telegram.onPairingResolved = { [weak self] id in self?.announcer.clearTelegramPairing(id: id) }
-        if config.config.telegram.enabled { telegram.setEnabled(true) }
         chat.onApprovalNeeded = { [weak self] approval in
             self?.announcer.approval(id: approval.id, title: approval.title, detail: approval.detail)
         }
@@ -190,8 +192,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.pet.refreshMood() }
             .store(in: &cancellables)
-        registerHotKeys()
-        _ = recordingKeys // Starts following the recording phase.
         config.$config
             .removeDuplicates()
             .scan((Config(), config.config)) { ($0.1, $1) }
@@ -200,6 +200,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         setUpAutomations()
+        // After the API exists: the hotkeys read the settings model, which builds the Telegram bridge over `api.chat`.
+        registerHotKeys()
+        _ = recordingKeys // Starts following the recording phase.
+        // These read `api`, which `setUpAutomations()` builds.
+        settingsModel.voice = api.voice
+        telegram.onPairingRequest = { [weak self] request in
+            self?.announcer.telegramPairing(request, allow: { self?.telegram.allow(request.id) },
+                                            deny: { self?.telegram.deny(request.id) })
+        }
+        telegram.onPairingResolved = { [weak self] id in self?.announcer.clearTelegramPairing(id: id) }
+        if config.config.telegram.enabled { telegram.setEnabled(true) }
         do {
             try startServer()
         } catch {
@@ -252,13 +263,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let log = ActivityLog(database: database)
         activity = log
         let tasks = TaskStore(database: database)
-        TaskStore.shared = tasks
-        pet.tasks = tasks
+        taskStore = tasks
+        let service = AutomationService(store: store, engine: engine, database: database)
+        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, sessions: self.store, chat: chat, meeting: meeting, meetingLibrary: meetings, config: config, usage: UsageStore.shared), events: events)
+        pet.tasks = api.tasks
         let notificationStore = NotificationStore(database: database)
         NotificationStore.shared = notificationStore
         pet.notifications = NotificationsModel(store: notificationStore)
         announcer.notifications = notificationStore
         announcer.openNotification = { [weak self] id in self?.pet.openNotification(id) }
+        pet.alerts = api.alerts
+        api.attach(assistant: assistant)
+        api.attach(memory: { [weak self] in self?.memoryServices })
+        pet.agents = api.agents
+        chatModel = ChatViewModel(api: api.chat, voiceAPI: api.voice, events: events)
+        pet.chatModel = chatModel
+        pet.meetingsAPI = api.meetings
+        pet.events = events
+        api.pet.stateProvider = { [weak pet] in pet?.state ?? PetState(mood: PetMood.idle.rawValue, badge: 0) }
+        api.pet.trickNames = { PetController.Trick.allCases.map(\.rawValue) }
+        api.pet.trickHandler = { [weak pet] name in
+            guard let trick = PetController.Trick(rawValue: name), let pet else { return false }
+            pet.perform(trick)
+            return true
+        }
+        settingsModel.pets.api = api.pet
+        api.meetings.askHandler = { [weak self] files in self?.openMeetingInChat(files) }
+        meetingPanel = MeetingPanel(controller: api.meetings)
+        meeting.onChange = { [weak self] in self?.syncMeetingPanel() }
+        settingsModel.meeting = api.meetings
+        api.agents.focusHandler = { [weak pet] session in pet?.jump(to: session) }
+        api.agents.askHandler = { [weak self] prompt in self?.ask(prompt) }
+        api.alerts.askHandler = { [weak self] prompt in self?.ask(prompt) }
         setUpDueReminders(tasks)
         setUpWelcomeBack(log, tasks: tasks)
         pet.settings = settingsModel
@@ -272,7 +308,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setUpDesktopControl()
         setUpMemory(database)
         setUpJobs(database, tasks: tasks)
-        let service = AutomationService(store: store, engine: engine, database: database)
         service.notifications = notificationStore
         service.latestThread = { ThreadStore.latest(automation: $0)?.id }
         service.notice = { [weak self] notice in
@@ -317,7 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         service.chatRunPending = { [weak self] id in self?.chat.hasAutomationRun(id) ?? false }
         chat.onAutomation = { [weak service] id, event in service?.chatOutcome(id, event) }
         automations = service
-        settingsModel.automations = service
+        settingsModel.automations = api.automations
         settingsModel.showLogs = { [weak self] id in
             // The log is a normal window, so it would open behind the floating ironpet window.
             self?.pet.closeWindow()
@@ -335,7 +370,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         service.start()
         timers.append(Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.automations.engine.tick() }
+            MainActor.assumeIsolated {
+                self?.automations.engine.tick()
+                // Pet sheets and the custom background change on disk: tell clients that cache them.
+                self?.api.pet.checkAssets()
+            }
         })
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.automations.engine.tick() }
         // Update installed skills, and offer the others once the first-run window is out of the way.
@@ -419,9 +458,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let context = AssistantContext()
         context.jobs = { [weak self] in self?.jobs }
         context.sessions = { [weak self] in self?.store.ordered.filter { $0.source != .job } ?? [] }
-        context.tasks = { TaskStore.shared }
+        context.tasks = { [weak self] in self?.api?.tasks }
         context.alerts = { [weak self] in self?.signals.signals ?? [] }
-        context.brief = { [weak self] kind in self?.brief?.build(kind) }
+        context.brief = { [weak self] kind in self?.brief?.brief(BriefRequest(kind: kind)) }
         context.meetings = { [weak self] in
             guard let self else { return [] }
             if meetings.meetings.isEmpty { meetings.reload() }
@@ -464,7 +503,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The morning brief and the recap: built from the stores for `digest` automations and the Today page. The Today row is
     /// listed while one of those automations is on.
     private func setUpBrief(_ service: AutomationService, tasks: TaskStore) {
-        let source = BriefSource(tasks: tasks, sessions: store, signals: signals, activity: activity)
+        let source = api.today
+        source.activity = activity
         source.now = { [weak self] in Date().addingTimeInterval(self?.testClockOffset ?? 0) }
         let model = BriefModel(source: source)
         let automations = service.store
@@ -473,7 +513,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         brief = source
         pet.brief = model
-        service.digest = { kind, a, slot in source.build(kind, weekdays: kind == .brief ? a.trigger.weekdays : nil, day: slot) }
+        service.digest = { kind, a, slot in source.brief(BriefRequest(kind: kind, weekdays: kind == .brief ? a.trigger.weekdays : nil, day: slot)) }
         service.showDigest = { [weak self] brief, a, _ in
             self?.announcer.brief(brief, automation: a) { [weak self] in
                 self?.announcer.bubbles.dismiss(Announcer.briefID(brief.kind))
@@ -539,7 +579,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let service = CaptureService(store: captureStore, config: { ConfigStore.shared.config.screenCapture }, dependencies: dependencies)
         capture = service
-        settingsModel.capture = service
+        api.attach(capture: service)
+        settingsModel.capture = api.screen
         service.refreshModel()
         service.apply()
     }
@@ -568,6 +609,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let service = DesktopService(dependencies)
         desktop = service
+        api.attach(desktop: service)
         settingsModel.desktopLog = { [weak self] in
             self?.activity?.events(in: DateInterval(start: Date().addingTimeInterval(-ActivityLog.retention), end: Date().addingTimeInterval(60)), kinds: [.desktopAction]).reversed() ?? []
         }
@@ -688,7 +730,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || new.meetings.enabled != old.meetings.enabled || new.voiceMode.enabled != old.voiceMode.enabled { registerHotKeys() }
         if !new.voiceMode.enabled { voiceMode.conversation.end() }
         if new.telegram.enabled != old.telegram.enabled { telegram.setEnabled(new.telegram.enabled) }
-        if !new.voice.enabled { chat.voice.cancel() }
+        if !new.voice.enabled { chatModel.voice.cancel() }
         if old.speech.enabled, !new.speech.enabled { chat.speech.stop() }
         if !new.meetings.enabled { meeting.dismiss() }
         startCallMonitor()
@@ -724,13 +766,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The mode is read on every press, so flipping the switch in Settings applies to the next one.
             let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, id: 4, onRelease: { [weak self] in
                 MainActor.assumeIsolated {
-                    self?.chat.voice.shortcutReleased(holdToTalk: ConfigStore.shared.config.voice.holdToTalk)
+                    self?.chatModel.voice.shortcutReleased(holdToTalk: ConfigStore.shared.config.voice.holdToTalk)
                 }
             }, handler: { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.showChat()
-                    self.chat.voice.shortcutPressed()
+                    self.chatModel.voice.shortcutPressed()
                 }
             })
             if hotKey.isRegistered { hotKeys.append(hotKey) } else { failed.insert(text) }
@@ -952,6 +994,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ))
             control.onMeetingSummaryText = { [weak self] text, meeting in self?.suggestTasks(fromSummary: text, meeting: meeting) }
             control.screen = capture
+            control.tasks = taskStore
+            control.chatModel = chatModel
             control.welcomeBack = welcomeBack
             control.setIdleSeconds = { [weak self] seconds in self?.testIdleSeconds = seconds }
             control.showInspector = { [weak self] in
@@ -960,7 +1004,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             control.buildBrief = { [weak self] kind in
                 let weekdays = self?.automations.store.automations.first { $0.action.digest == kind.rawValue }?.trigger.weekdays
-                return self?.brief?.build(kind, weekdays: kind == .brief ? weekdays : nil)
+                return self?.brief?.brief(BriefRequest(kind: kind, weekdays: kind == .brief ? weekdays : nil))
             }
             control.windowState = { [weak self] in self?.pet.windowState ?? [:] }
             control.openBrief = { [weak self] target in self?.pet.openBrief(target) }
@@ -986,8 +1030,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         }
         server.onAgentAPI = { [weak self] request, respond in
-            MCPEndpoint.route(request, automations: { self?.automations }, tasks: { TaskStore.shared }, screen: { self?.capture?.store },
-                              desktop: { self?.desktop }, memory: { self?.memoryServices }, assistant: { self?.assistant },
+            MCPEndpoint.route(request, automations: { self?.api?.automations }, tasks: { self?.api?.tasks }, screen: { self?.api?.screen },
+                              desktop: { self?.api?.desktop }, memory: { self?.api?.memory }, assistant: { self?.api?.assistant },
                               notifications: { NotificationStore.shared }, respond: respond)
         }
         try server.start()
@@ -1065,7 +1109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             defer { pet.isCapturing = false }
             let shot = region ? await ScreenCapture.captureRegion() : await ScreenCapture.captureWindow(of: target)
-            if let shot { chat.attach(shot) }
+            if let shot { chatModel.attach(shot) }
             if shot != nil || chat.isVisible { showChat() }
         }
     }
@@ -1104,10 +1148,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// was typing stays below the prompt, separated by a blank line.
     private func ask(_ prompt: String) {
         showChat()
-        let draft = chat.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let draft = chatModel.input.trimmingCharacters(in: .whitespacesAndNewlines)
         // A second press on the same Ask leaves the input as it is.
         if draft.hasPrefix(prompt) { return }
-        chat.prefill(draft.isEmpty ? prompt : prompt + "\n\n" + draft)
+        chatModel.prefill(draft.isEmpty ? prompt : prompt + "\n\n" + draft)
     }
 
     /// Sends `prompt` in the current session and folder. A draft the user was typing and any attachments come back
@@ -1115,17 +1159,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the draft, and prefill keeps the dictation auto-send from firing on it.
     @discardableResult
     private func sendInCurrentChat(_ prompt: String) -> Bool {
-        let draft = chat.input
-        let staged = chat.attachments
-        chat.attachments = []
-        chat.input = prompt
-        chat.send()
-        chat.attachments = staged
-        if chat.input.isEmpty {
-            chat.input = draft
+        // The prompt goes in as its own message, so the draft and its attachments are never touched when it is taken.
+        switch chat.submitLocal(prompt, files: [], reply: nil) {
+        case .sent, .queued, .toJob:
             return true
-        } else {
-            chat.prefill(draft.isEmpty ? chat.input : draft + "\n\n" + chat.input)
+        case .needsFolder, .ignored:
+            let draft = chatModel.input
+            chatModel.prefill(draft.isEmpty ? prompt : prompt + "\n\n" + draft)
             return false
         }
     }
@@ -1152,7 +1192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func offerTasks(_ items: [(title: String, due: String?, waitingOn: String?)], meeting: URL) {
-        guard config.config.tasks.meetingSuggestions, let tasks = TaskStore.shared, !items.isEmpty else { return }
+        guard config.config.tasks.meetingSuggestions, let tasks = taskStore, !items.isEmpty else { return }
         offerSuggestions(tasks.suggest(items, meeting: meeting))
     }
 
@@ -1252,7 +1292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             meetingPanel.dismiss()
             if !meetingBubbleHidden, !bubbles.bubbles.contains(where: { $0.id == Self.meetingBubbleID }) {
                 bubbles.show(Bubble(id: Self.meetingBubbleID, symbol: "record.circle", tint: .red, title: "Meeting",
-                                    content: AnyView(MeetingView(controller: meeting, embedded: true))))
+                                    content: AnyView(MeetingView(controller: api.meetings, embedded: true))))
             }
         }
         pet.setRecording(meeting.phase == .recording || meeting.phase == .finishing || meeting.phase == .summarizing
@@ -1398,7 +1438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Adds the transcript, and the summary if there is one, to the current chat. Never changes the chat's
     /// session or folder.
     private func openMeetingInChat(_ files: [URL]) {
-        chat.attach(files)
+        chatModel.attach(files)
         showChat()
     }
 

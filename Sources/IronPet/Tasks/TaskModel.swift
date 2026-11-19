@@ -48,7 +48,7 @@ struct TaskLink: Equatable, Codable {
     var label: String?
 }
 
-struct TaskItem: Identifiable, Equatable {
+struct TaskItem: Identifiable, Equatable, Codable {
     let id: String
     var title: String
     var notes: String
@@ -72,8 +72,8 @@ struct TaskItem: Identifiable, Equatable {
 
 /// One line of a task's history: created, a status change, a note, closed. Nothing is overwritten, so a task the agent
 /// rewrote can still be traced.
-struct TaskEvent: Equatable {
-    enum Kind: String { case created, status, edited, note, closed, deleted }
+struct TaskEvent: Equatable, Codable {
+    enum Kind: String, Codable { case created, status, edited, note, closed, deleted }
     var at: Date
     /// `user`, `agent:mcp`, `agent:cli`, `meeting`.
     var by: String
@@ -83,8 +83,8 @@ struct TaskEvent: Equatable {
 
 /// An action item from a meeting summary, or a task a watcher automation proposed, that waits for Add or Skip.
 /// It is text only and never sent to an agent.
-struct TaskSuggestion: Identifiable, Equatable {
-    enum Origin: Equatable {
+struct TaskSuggestion: Identifiable, Equatable, Codable {
+    enum Origin: Equatable, Codable {
         /// The meeting folder.
         case meeting(URL)
         case automation(id: String, name: String)
@@ -92,7 +92,7 @@ struct TaskSuggestion: Identifiable, Equatable {
 
     /// One suggestion before it is stored: a meeting action item, or what a watcher returned in a `suggest_task` action
     /// (cleaned by `init?(action:)`).
-    struct Draft: Equatable {
+    struct Draft: Equatable, Codable {
         /// The action's `id`, unique within its automation.
         var key: String
         var title: String
@@ -202,6 +202,21 @@ private func describeWaiting(_ owner: String) -> String {
 struct TaskError: Error, LocalizedError, Equatable {
     let message: String
     var errorDescription: String? { message }
+}
+
+/// Labels as one line, `a=1, b=2`, keys sorted.
+enum TaskLabels {
+    static func describe(_ labels: [String: String]) -> String {
+        labels.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
+    }
+}
+
+/// A task's source reference: a JSON object kept as text, keys sorted.
+enum TaskRef {
+    static func text(_ object: [String: Any]) -> String? {
+        guard !object.isEmpty, let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
 }
 
 /// Checks agent and CLI input before it reaches the database.

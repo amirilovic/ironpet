@@ -6,7 +6,7 @@ final class AssistantContext {
     var jobs: () -> JobService? = { nil }
     /// The agent sessions ironpet watches through hooks, background jobs left out.
     var sessions: () -> [AgentSession] = { [] }
-    var tasks: () -> TaskStore? = { nil }
+    var tasks: () -> TasksAPI? = { nil }
     var alerts: () -> [Signal] = { [] }
     var brief: (Brief.Kind) -> Brief? = { _ in nil }
     var meetings: () -> [MeetingRecord] = { [] }
@@ -170,7 +170,7 @@ enum AssistantMCP {
         let sessions = context.sessions()
         let jobs = context.jobs()?.jobs ?? []
         let cutoff = context.now().addingTimeInterval(-86_400)
-        let tasks = context.tasks()?.tasks.filter { $0.status != .done } ?? []
+        let tasks = context.tasks()?.items.filter { $0.status != .done } ?? []
         var object: [String: Any] = [
             "sessions": [
                 "need_you": sessions.filter { $0.status == .needsInput || $0.status == .failed }.map(sessionJSON),

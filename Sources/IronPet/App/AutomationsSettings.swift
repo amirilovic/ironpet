@@ -4,11 +4,11 @@ import SwiftUI
 /// The Automations tab: every reminder and watcher with a switch, when it runs next, and how its last run went.
 struct AutomationsSettings: View {
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var config = ConfigStore.shared
+    @ObservedObject private var config = SettingsAPI.live
 
     var body: some View {
         if let service = model.automations {
-            AutomationList(service: service, store: service.store, config: config, showLogs: model.showLogs, createWithAgent: model.createWithAgent)
+            AutomationList(api: service, config: config, showLogs: model.showLogs, createWithAgent: model.createWithAgent)
         } else {
             Text("Automations are not ready yet.").foregroundStyle(.secondary)
         }
@@ -16,9 +16,8 @@ struct AutomationsSettings: View {
 }
 
 private struct AutomationList: View {
-    let service: AutomationService
-    @ObservedObject var store: AutomationStore
-    @ObservedObject var config: ConfigStore
+    @ObservedObject var api: AutomationsAPI
+    @ObservedObject var config: SettingsAPI
     let showLogs: (String?) -> Void
     let createWithAgent: (String) -> Void
     @State private var asking = false
@@ -35,12 +34,12 @@ private struct AutomationList: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Automations") {
-                if store.automations.isEmpty { Text("None yet. Ask an agent, or add one.").foregroundStyle(.secondary) }
-                ForEach(store.automations) { automation in row(automation) }
+                if api.automations.isEmpty { Text("None yet. Ask an agent, or add one.").foregroundStyle(.secondary) }
+                ForEach(api.automations) { automation in row(automation) }
                 HStack {
                     Button("New automation…") { asking = true }
                     Button("Show logs") { showLogs(nil) }
-                    Button("Open automations.json") { NSWorkspace.shared.open(store.paths.file) }
+                    Button("Open automations.json") { NSWorkspace.shared.open(api.file) }
                     Spacer()
                 }
             }
@@ -49,7 +48,7 @@ private struct AutomationList: View {
                     get: { config.config.automations.autoApprove },
                     set: { on in
                         config.update { $0.automations.autoApprove = on }
-                        if on { service.reviewApprovals() }
+                        if on { api.reviewApprovals() }
                     }))
             } footer: {
                 Text("Agent-written scripts can run shell commands without review.")
@@ -79,8 +78,8 @@ private struct AutomationList: View {
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .sheet(isPresented: $asking) { NewAutomationSheet { text in asking = false; if let text { createWithAgent(text) } } }
-        .sheet(item: $reviewing) { automation in ReviewSheet(service: service, opened: automation) { reviewing = nil } }
-        .sheet(item: $editing) { automation in EditSheet(service: service, automation: automation) { editing = nil } }
+        .sheet(item: $reviewing) { automation in ReviewSheet(api: api, opened: automation) { reviewing = nil } }
+        .sheet(item: $editing) { automation in EditSheet(api: api, automation: automation) { editing = nil } }
         .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in tick += 1 }
     }
 
@@ -89,27 +88,27 @@ private struct AutomationList: View {
         // row every 5 s. It must not become the row's id: that rebuilds the time picker and drops its focus mid-edit.
         let _ = tick
         return HStack(alignment: .top, spacing: 10) {
-            Toggle(a.name, isOn: Binding(get: { a.enabled }, set: { on in try? store.update(a.id) { $0.enabled = on } }))
+            Toggle(a.name, isOn: Binding(get: { a.enabled }, set: { on in try? api.setEnabled(a.id, on) }))
                 .labelsHidden().toggleStyle(.switch)
             VStack(alignment: .leading, spacing: 2) {
                 Text(a.name)
                 Text(subtitle(a)).font(.caption).foregroundStyle(.secondary)
                 if DailySchedule.time(of: a.trigger) != nil { schedule(a) }
-                if let last = service.lastRun(a.id) {
+                if let last = (try? api.status(a.id))?.lastRun {
                     Text("Last: \(last.outcome)\(last.output.isEmpty ? "" : ", \(last.output)")")
                         .font(.caption).foregroundStyle(last.outcome == "failed" ? Color.red : Color.secondary).lineLimit(2)
                 }
                 if let hint = setupHint(a) {
                     Label(hint, systemImage: "info.circle").font(.caption).foregroundStyle(.orange)
                 }
-                if service.needsApproval(a) {
-                    let rejected = service.isRejected(a)
+                if let approval = (try? api.status(a.id))?.approval {
+                    let rejected = approval == .rejected
                     Label(rejected ? "Rejected" : "Waiting for your approval", systemImage: rejected ? "xmark.circle.fill" : "hand.raised.fill")
                         .font(.caption).foregroundStyle(rejected ? Color.red : Color.orange)
                     HStack(spacing: 6) {
                         Button("Review…") { reviewing = a }
-                        Button("Approve") { service.approve(a.id); tick += 1 }.buttonStyle(.borderedProminent)
-                        if !rejected { Button("Reject") { service.reject(a.id); tick += 1 } }
+                        Button("Approve") { try? api.approve(a.id); tick += 1 }.buttonStyle(.borderedProminent)
+                        if !rejected { Button("Reject") { try? api.reject(a.id); tick += 1 } }
                     }
                     .controlSize(.small).padding(.top, 2)
                 }
@@ -117,10 +116,10 @@ private struct AutomationList: View {
             Spacer()
             Menu {
                 Button("Show logs…") { showLogs(a.id) }
-                Button("Run now") { Task { _ = await service.call("run_now", ["id": a.id], by: "user") } }
+                Button("Run now") { Task { _ = try? await api.runNow(a.id) } }
                 Button("Edit…") { editing = a }
                 Divider()
-                Button("Delete", role: .destructive) { try? store.replace(store.automations.filter { $0.id != a.id }) }
+                Button("Delete", role: .destructive) { try? api.delete(a.id) }
             } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize()
         }
@@ -131,14 +130,17 @@ private struct AutomationList: View {
         HStack(spacing: 12) {
             DatePicker("Time", selection: Binding(
                 get: { DailySchedule.time(of: a.trigger) ?? Date() },
-                set: { date in try? store.update(a.id) { $0.trigger.times = [DailySchedule.format(date)] } }),
+                set: { date in try? api.setSchedule(SetAutomationScheduleRequest(id: a.id, times: [DailySchedule.format(date)])) }),
                        displayedComponents: .hourAndMinute)
                 .labelsHidden()
                 .accessibilityLabel("\(a.name) time")
             if let weekdaysOnly = DailySchedule.weekdaysOnly(a.trigger) {
                 Toggle("Weekdays only", isOn: Binding(
                     get: { weekdaysOnly },
-                    set: { on in try? store.update(a.id) { $0.trigger.weekdays = DailySchedule.weekdays(only: on) } }))
+                    set: { on in
+                        let days = DailySchedule.weekdays(only: on)
+                        try? api.setSchedule(SetAutomationScheduleRequest(id: a.id, weekdays: days, everyDay: days == nil))
+                    }))
                     .toggleStyle(.checkbox)
                     .accessibilityLabel("\(a.name) weekdays only")
             }
@@ -158,13 +160,14 @@ private struct AutomationList: View {
     }
 
     private func subtitle(_ a: Automation) -> String {
-        var text = service.describe(a.trigger)
-        if a.enabled, let next = service.engine.nextRun(a) {
+        let status = try? api.status(a.id)
+        var text = status?.trigger ?? ""
+        if a.enabled, let next = status?.nextRun {
             text += " · next " + (a.trigger.type == "interval" && a.trigger.clock != "wall" ? "after about " : "") + Self.relative.localizedString(for: next, relativeTo: Date())
         }
         if a.trigger.type == "stream", a.enabled {
-            text += " · " + service.engine.streams.status(a.id).rawValue
-            if let last = service.engine.streams.lastEvent(a.id) { text += ", last event " + Self.relative.localizedString(for: last, relativeTo: Date()) }
+            text += " · " + (status?.stream ?? "")
+            if let last = status?.lastEvent { text += ", last event " + Self.relative.localizedString(for: last, relativeTo: Date()) }
         }
         if a.createdBy != "user" { text += " · by \(a.createdBy)" }
         return text
@@ -190,12 +193,12 @@ private struct AutomationList: View {
 
 /// Shows what an automation would run, so the user reads it before pressing Approve.
 private struct ReviewSheet: View {
-    let service: AutomationService
+    @ObservedObject var api: AutomationsAPI
     let opened: Automation
     let done: () -> Void
 
     /// The stored automation, so an edit made while the sheet is open is what the user reads and approves.
-    private var automation: Automation { service.store.automations.first { $0.id == opened.id } ?? opened }
+    private var automation: Automation { api.automations.first { $0.id == opened.id } ?? opened }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -203,7 +206,7 @@ private struct ReviewSheet: View {
             Text("Created by \(automation.createdBy). It wants to run this \(automation.action.type == "prompt" ? "prompt" : "command"):")
                 .font(.caption).foregroundStyle(.secondary)
             ScrollView {
-                Text(service.approvalDetail(automation))
+                Text((try? api.approvalDetail(automation.id)) ?? "")
                     .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(6)
             }
@@ -212,8 +215,8 @@ private struct ReviewSheet: View {
             HStack {
                 Spacer()
                 Button("Close", action: done)
-                if !service.isRejected(automation) { Button("Reject") { service.reject(automation.id); done() } }
-                Button("Approve") { service.approve(automation.id); done() }.keyboardShortcut(.defaultAction)
+                if (try? api.status(automation.id))?.approval != .rejected { Button("Reject") { try? api.reject(automation.id); done() } }
+                Button("Approve") { try? api.approve(automation.id); done() }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(16)
@@ -222,7 +225,7 @@ private struct ReviewSheet: View {
 }
 
 private struct EditSheet: View {
-    let service: AutomationService
+    let api: AutomationsAPI
     let automation: Automation
     let done: () -> Void
     @State private var text = ""
@@ -242,13 +245,13 @@ private struct EditSheet: View {
                 Spacer()
                 Button("Cancel", action: done)
                 Button("Save") {
-                    if let problem = service.saveEdited(id: automation.id, json: text) { error = problem } else { done() }
+                    do { try api.replace(id: automation.id, definition: text); done() } catch { self.error = (error as? APIError)?.message ?? error.localizedDescription }
                 }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(16)
         .frame(width: 460)
-        .onAppear { text = service.json(for: automation) }
+        .onAppear { text = (try? api.definition(automation.id)) ?? "" }
     }
 }
 

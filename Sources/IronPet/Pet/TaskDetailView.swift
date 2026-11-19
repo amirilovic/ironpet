@@ -17,7 +17,7 @@ struct TaskDetail: Equatable {
     static func originFields(_ sourceRef: String?) -> [Field] {
         guard let text = sourceRef?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return [] }
         func rank(_ key: String) -> Int { key == "ref" ? 0 : key == "reason" ? 1 : 2 }
-        guard let object = TaskStore.refValue(text) as? [String: Any] else { return [Field(label: "Origin ref", value: text)] }
+        guard let object = TaskJSON.refValue(text) as? [String: Any] else { return [Field(label: "Origin ref", value: text)] }
         let keys = object.keys.sorted { (rank($0), $0) < (rank($1), $1) }
         return keys.compactMap { key in
             let value = (object[key] as? String) ?? "\(object[key] ?? "")"

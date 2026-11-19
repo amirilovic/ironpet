@@ -24,7 +24,7 @@ enum PreviewRenderer {
         for (file, preview) in [("chat", ChatSession.Preview.done), ("chat-approval", .approval), ("chat-markdown", .markdown), ("chat-form", .form)] {
             let session = ChatSession(restore: false)
             session.loadPreview(preview)
-            render(ChatView(session: session).frame(width: 520, height: 640).panel(), to: dir, file)
+            render(ChatView(session: Self.chatModel(session)).frame(width: 520, height: 640).panel(), to: dir, file)
         }
         // The reply markdown sample at the narrow chat width and a wider one, in both appearances, and with find open.
         for width in [420.0, 520.0] {
@@ -45,11 +45,12 @@ enum PreviewRenderer {
         let log = (0..<1_800).map { "0x\(String($0, radix: 16)) frame \($0) in IronPet.crash()" }.joined(separator: "\n")
         let pasteDir = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-preview-paste-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: pasteDir) }
-        pasted.attach(PasteIntake.importPaste(pasteboardHolding(log), imageDirectory: pasteDir, textDirectory: pasteDir))
-        render(ChatView(session: pasted).frame(width: 520, height: 640).panel(), to: dir, "chat-pasted-text")
+        let pastedModel = Self.chatModel(pasted)
+        pastedModel.attach(PasteIntake.importPaste(pasteboardHolding(log), imageDirectory: pasteDir, textDirectory: pasteDir))
+        render(ChatView(session: pastedModel).frame(width: 520, height: 640).panel(), to: dir, "chat-pasted-text")
         let settings = ChatSession(restore: false)
         settings.loadPreview(.done)
-        render(ChatView(session: settings, settingsOnly: true).panel(), to: dir, "chat-settings")
+        render(ChatView(session: Self.chatModel(settings), settingsOnly: true).panel(), to: dir, "chat-settings")
 
         let sessions = SessionStore()
         sessions.loadPreview(sampleSessions)
@@ -58,21 +59,22 @@ enum PreviewRenderer {
         let tasks = sampleTasks()
         let chat = ChatSession(restore: false)
         chat.loadPreview(.done)
-        let meetings = MeetingLibrary(root: sampleMeetings())
-        meetings.reload()
-        func list(_ sessions: SessionStore, tasks: TaskStore, on section: IronPetSection? = nil) -> some View {
+        let meetingLibrary = MeetingLibrary(root: sampleMeetings())
+        meetingLibrary.reload()
+        let meetings = MeetingsAPI(controller: MeetingController(), library: meetingLibrary)
+        func list(_ sessions: SessionStore, tasks: TasksAPI, on section: IronPetSection? = nil) -> some View {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
-            model.section = section ?? IronPetSection.needingAttention(store: sessions, signals: signals, tasks: tasks)
-            return IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: chat,
+            model.section = section ?? IronPetSection.needingAttention(agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks)
+            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: Self.chatModel(chat),
                                      meetings: meetings, actions: .none)
                 .frame(width: 780, height: 560).panel()
         }
         render(list(sessions, tasks: tasks, on: .chat), to: dir, "window-chat")
         render(list(sessions, tasks: tasks, on: .transcripts), to: dir, "transcripts")
         // The same section mid-run: the row and the header show the stage, and Regenerate is disabled for the other meeting.
-        meetings.regenerator.loadPreview(active: "2026-11-16-0930", .transcribing(chunk: 2, of: 5))
+        meetingLibrary.regenerator.loadPreview(active: "2026-11-16-0930", .transcribing(chunk: 2, of: 5))
         render(list(sessions, tasks: tasks, on: .transcripts), to: dir, "transcripts-regenerating")
-        meetings.regenerator.clearPreview()
+        meetingLibrary.regenerator.clearPreview()
         render(list(sessions, tasks: tasks), to: dir, "agents")
         // The window opens on Alerts when no agent needs you or is working.
         render(list(SessionStore(), tasks: tasks), to: dir, "alerts")
@@ -92,7 +94,7 @@ enum PreviewRenderer {
         func notificationsWindow(scheme: ColorScheme) -> some View {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.section = .notifications
-            return IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, notifications: notificationsModel, chat: chat,
+            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, notifications: notificationsModel, chat: Self.chatModel(chat),
                                      meetings: meetings, actions: .none)
                 .frame(width: 780, height: 560).panel()
         }
@@ -117,7 +119,7 @@ enum PreviewRenderer {
         captureOn.screenCapture.enabled = true
         ConfigStore.shared.usePreview(captureOn)
         for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {
-            render(ScreenSection(model: screenStatus, store: capturesStore).frame(width: 900, height: 560).panel(), to: dir, "screen-captures" + suffix, scheme: scheme)
+            render(ScreenSection(model: screenStatus, screen: ScreenAPI(service: CaptureService(store: capturesStore, config: { ConfigStore.shared.config.screenCapture }))).frame(width: 900, height: 560).panel(), to: dir, "screen-captures" + suffix, scheme: scheme)
         }
         var captureOff = screenConfig
         captureOff.screenCapture.enabled = false
@@ -126,19 +128,19 @@ enum PreviewRenderer {
         ConfigStore.shared.usePreview(screenConfig)
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks")
         render(list(sessions, tasks: tasks, on: .tasks), to: dir, "tasks-light", scheme: .light)
-        if let sample = tasks.ordered.first {
+        if let sample = tasks.all.first {
             render(TaskDetailPage(tasks: tasks, id: sample.id, onBack: {}, onOpen: { _ in }).frame(width: 760, height: 640).panel(), to: dir, "task-detail")
             render(TaskDetailPage(tasks: tasks, id: sample.id, onBack: {}, onOpen: { _ in }).frame(width: 760, height: 640).panel(), to: dir, "task-detail-light", scheme: .light)
         }
         render(LabelPopover(others: [["merge": "auto", "repo": "app"], ["merge": "manual"]], own: [:], onAdd: { _, _ in nil }, onDone: {})
             .frame(width: 260).padding(8).panel(), to: dir, "task-label-popover")
-        let noTasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
+        let noTasks = TasksAPI(store: TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database))
         render(list(sessions, tasks: noTasks, on: .tasks), to: dir, "tasks-empty")
 
         // Today, from the same sample stores plus a meeting on the last weekday and a few agent turns from today.
         let briefSource = BriefSource(tasks: tasks, sessions: sessions, signals: signals, meetingsRoot: sampleBriefMeetings(),
                                       activity: FixedBriefActivity(events: sampleActivity))
-        let brief = BriefModel(source: briefSource)
+        let brief = BriefModel(source: TodayAPI(source: briefSource))
         brief.weekdays = { AutomationDefaults.weekdays }
         brief.refresh()
         func today(_ kind: Brief.Kind, _ content: BriefModel) -> some View {
@@ -146,7 +148,7 @@ enum PreviewRenderer {
             model.todayShown = true
             model.briefKind = kind
             model.section = .today
-            return IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: chat,
+            return IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: Self.chatModel(chat),
                                      meetings: meetings, brief: content, actions: .none)
                 .frame(width: 780, height: 560).panel()
         }
@@ -162,7 +164,7 @@ enum PreviewRenderer {
         // The same pages in a real window, so the screenshots show the title bar, selection and glass as they are.
         // Automations needs the app's settings model; this one is built from sample automations in a temp folder.
         let settingsModel = sampleSettings(chat: chat, config: patterned)
-        settingsModel.capture = CaptureService(store: capturesStore, config: { ConfigStore.shared.config.screenCapture })
+        settingsModel.capture = ScreenAPI(service: CaptureService(store: capturesStore, config: { ConfigStore.shared.config.screenCapture }))
         patterned.voiceMode.enabled = true
         ConfigStore.shared.usePreview(patterned)
         let idleVoice = VoiceConversation(frontDesk: FrontDesk())
@@ -175,7 +177,7 @@ enum PreviewRenderer {
                     model.sidebarCollapsed = collapsed
                     model.todayShown = true
                     model.section = section
-                    let view = IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: chat,
+                    let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: Self.chatModel(chat),
                                                  meetings: meetings, settings: settingsModel, brief: brief, voice: idleVoice,
                                                  voiceThreads: { voiceThreads }, actions: .none)
                     renderWindow(model: model, session: chat, content: view, to: dir,
@@ -198,7 +200,7 @@ enum PreviewRenderer {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.sidebarCollapsed = true
             model.section = .chat
-            let view = IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: markdownChat,
+            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: Self.chatModel(markdownChat),
                                          meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
             renderWindow(model: model, session: markdownChat, content: view, to: dir, "real-chat-markdown-\(suffix)", scheme: scheme)
         }
@@ -278,7 +280,7 @@ enum PreviewRenderer {
             let model = IronPetWindowModel(defaults: UserDefaults(suiteName: "ironpet-previews") ?? .standard)
             model.sidebarCollapsed = true
             model.section = .chat
-            let view = IronPetWindowView(model: model, store: sessions, signals: signals, tasks: tasks, chat: speaking,
+            let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions), alerts: AlertsAPI(store: signals), tasks: tasks, chat: Self.chatModel(speaking),
                                          meetings: meetings, settings: settingsModel, brief: brief, actions: .none)
             renderWindow(model: model, session: speaking, content: view, to: dir, "real-chat-speaking-\(suffix)", scheme: scheme)
         }
@@ -438,12 +440,18 @@ enum PreviewRenderer {
         let store = AutomationStore(paths: paths, defaults: { AutomationMigration.defaults(from: config, sentryConfigured: false) },
                                     builtIns: AutomationDefaults.builtIns, watch: false)
         let telegram = TelegramBridge(
-            client: TelegramAPI(token: { nil }), host: chat, tokens: TelegramToken.shared,
+            client: TelegramAPI(token: { nil }), host: ChatAPI(session: chat), tokens: TelegramToken.shared,
             storage: .init(users: { [] }, add: { _ in }, remove: { _ in }, offset: { 0 }, setOffset: { _ in }))
         let model = SettingsModel(actions: .init(suspendHotKeys: { _ in }, buildPet: { _ in }),
                                   announcer: Announcer(notifier: Notifier()), telegram: telegram)
-        model.automations = AutomationService(store: store, engine: AutomationEngine(env: .init()))
+        model.automations = AutomationsAPI(service: AutomationService(store: store, engine: AutomationEngine(env: .init())))
         return model
+    }
+
+    /// The Mac chat state over a sample session, built the way the app builds it, from the API's own snapshot.
+    @MainActor
+    static func chatModel(_ session: ChatSession) -> ChatViewModel {
+        ChatViewModel(api: ChatAPI(session: session), voiceAPI: .standalone(settings: .live), events: APIEventBus(), persists: false)
     }
 
     /// Draws the ironpet window in a real `IronPetPanel` (traffic lights, sidebar selection and the blur of its
@@ -452,7 +460,7 @@ enum PreviewRenderer {
     /// Falls back to nil when the window server gives no image (no display), and the caller skips the file.
     static func renderWindow(model: IronPetWindowModel, session: ChatSession?, content: some View, to dir: URL,
                              _ name: String, scheme: ColorScheme) {
-        let panel = IronPetPanel(model: model, session: session, content: content)
+        let panel = IronPetPanel(model: model, session: session.map { Self.chatModel($0) }, content: content)
         panel.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
         panel.setContentSize(CGSize(width: 780, height: 560))
         panel.setFrameOrigin(CGPoint(x: 60, y: 60))
@@ -620,7 +628,7 @@ enum PreviewRenderer {
         return root
     }
 
-    private static func sampleTasks() -> TaskStore {
+    private static func sampleTasks() -> TasksAPI {
         var clock = Date()
         let store = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database, now: { clock })
         let day: TimeInterval = 86_400
@@ -656,7 +664,7 @@ enum PreviewRenderer {
                                             url: URL(string: "https://mail.google.com/mail/u/0/#inbox/1"))],
                       automation: "gmail-watch", name: "Gmail watcher")
         clock = Date()
-        return store
+        return TasksAPI(store: store)
     }
 
     private static var sampleSignals: [Signal] {
@@ -707,7 +715,7 @@ private struct PetScene: View {
     var body: some View {
         let size = CGSize(width: Atlas.cell.width * 0.9, height: Atlas.cell.height * 0.9)
         HStack(alignment: .bottom, spacing: -30) {
-            BubbleStackView(store: store)
+            BubbleStackView(api: BubblesAPI(store: store))
                 .padding(.bottom, size.height * 0.62 - BubbleStackView.tailFromBottom)
             Group {
                 if let image = atlas?.frame(row, frame) {

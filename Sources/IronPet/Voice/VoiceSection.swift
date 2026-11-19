@@ -8,13 +8,13 @@ struct VoiceSection: View {
     var onOpenThread: (String) -> Void
     var onOpenSettings: () -> Void
     /// Past conversations; `ThreadStore.voice` in the app, sample threads in previews.
-    var loadThreads: @Sendable () -> [ChatThread] = { ThreadStore.voice() }
+    var loadThreads: @Sendable () -> [ChatThread] = { VoiceHistory.threads() }
 
-    @ObservedObject private var config = ConfigStore.shared
+    @ObservedObject private var config = SettingsAPI.live
     @State private var threads: [ChatThread] = []
     @State private var enabling = false
     @State private var enableError: String?
-    @StateObject private var player = SpeechPlayer()
+    @StateObject private var player = VoiceAPI.standalone(settings: .live)
 
     private var settings: Config.VoiceMode { config.config.voiceMode }
     private var petName: String { config.config.pet.name }

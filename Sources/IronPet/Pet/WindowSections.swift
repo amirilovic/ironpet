@@ -9,7 +9,7 @@ struct ActionsSection: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Make \(ConfigStore.shared.config.pet.name) do something")
+                    Text("Make \(SettingsAPI.live.config.pet.name) do something")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)
@@ -29,17 +29,16 @@ struct ActionsSection: View {
 
 /// The Agents section: watched sessions, grouped by what they need.
 struct AgentsSection: View {
-    @ObservedObject var store: SessionStore
-    let onJump: (AgentSession) -> Void
+    @ObservedObject var agents: AgentsAPI
 
     var body: some View {
         VStack(spacing: 0) {
-            agents
+            list
         }
         .pageHeader(IronPetSection.agents.title) {
             HStack(spacing: 4) {
                 ForEach([AgentStatus.needsInput, .running, .failed, .done], id: \.self) { status in
-                    let count = store.ordered.filter { $0.status == status }.count
+                    let count = agents.sessions.filter { $0.status == status }.count
                     if count > 0 { CountChip(count: count, color: status.tint) }
                 }
             }
@@ -47,7 +46,7 @@ struct AgentsSection: View {
     }
 
     private var sections: [(title: String, sessions: [AgentSession])] {
-        let all = store.ordered
+        let all = agents.sessions
         return [
             ("Needs you", all.filter { $0.status == .needsInput }),
             ("Working", all.filter { $0.status == .running }),
@@ -55,9 +54,9 @@ struct AgentsSection: View {
         ].filter { !$0.sessions.isEmpty }
     }
 
-    private var agents: some View {
+    private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if store.ordered.isEmpty {
+            if agents.sessions.isEmpty {
                 EmptyState(symbol: "moon.zzz", title: "No agents running",
                            detail: "Cursor and Claude Code sessions show up here.")
             } else {
@@ -65,14 +64,14 @@ struct AgentsSection: View {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(sections, id: \.title) { section in
                             if section.title == "Finished" {
-                                SectionHeader(section.title, action: "Clear finished") { store.acknowledgeAll() }
+                                SectionHeader(section.title, action: "Clear finished") { agents.acknowledgeAll() }
                             } else {
                                 SectionTitle(section.title)
                             }
                             ForEach(section.sessions) { session in
                                 SessionRow(session: session,
-                                           onJump: { onJump(session) },
-                                           onDismiss: { store.acknowledge(session.id) })
+                                           onJump: { try? agents.focus(session.id) },
+                                           onDismiss: { try? agents.acknowledge(session.id) })
                             }
                         }
                     }
@@ -87,37 +86,37 @@ struct AgentsSection: View {
 
 /// The Alerts section: what automations reported, newest first.
 struct AlertsSection: View {
-    @ObservedObject var signals: SignalStore
+    @ObservedObject var alerts: AlertsAPI
     let onAsk: (String) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            alerts
+            list
         }
         .pageHeader(IronPetSection.alerts.title) {
-            if !signals.signals.isEmpty {
-                Button("Clear all") { signals.dismissAll() }
+            if !alerts.alerts.isEmpty {
+                Button("Clear all") { alerts.dismissAll() }
                     .buttonStyle(.borderless)
                     .font(.caption)
             }
         }
     }
 
-    @ViewBuilder private var alerts: some View {
-        if signals.signals.isEmpty {
+    @ViewBuilder private var list: some View {
+        if alerts.alerts.isEmpty {
             EmptyState(symbol: "bell.slash", title: "No alerts",
                        detail: "Alerts from your automations show up here, such as CI, reviews and errors.")
         } else {
             ScrollView {
                 VStack(spacing: 2) {
-                    ForEach(signals.signals) { signal in
+                    ForEach(alerts.alerts) { signal in
                         SignalRow(signal: signal,
                                   onOpen: {
                                       if let url = signal.url { NSWorkspace.shared.open(url) }
-                                      signals.dismiss(signal.id)
+                                      try? alerts.dismiss(signal.id)
                                   },
                                   onAsk: signal.ask.map { prompt in { onAsk(prompt) } },
-                                  onDismiss: { signals.dismiss(signal.id) })
+                                  onDismiss: { try? alerts.dismiss(signal.id) })
                     }
                 }
                 .padding(6)
@@ -250,7 +249,7 @@ private struct SignalRow: View {
                 HStack(spacing: 6) {
                     if signal.url != nil { Button("Open", action: onOpen) }
                     if let onAsk {
-                        Button(action: onAsk) { Label("Ask \(ConfigStore.shared.config.pet.name)", systemImage: "sparkles") }
+                        Button(action: onAsk) { Label("Ask \(SettingsAPI.live.config.pet.name)", systemImage: "sparkles") }
                     }
                 }
                 .controlSize(.small)

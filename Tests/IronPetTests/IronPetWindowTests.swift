@@ -27,31 +27,31 @@ final class IronPetWindowTests: XCTestCase {
     func testAnAgentThatNeedsYouWinsOverAlertsAndTasks() throws {
         let list = tasks()
         _ = try list.create(title: "Approve the deploy", status: .needsYou, source: .agent, by: "agent:mcp")
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(.needsInput), signals: signals(2), tasks: list), .agents)
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(.failed), signals: signals(2), tasks: list), .agents)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions(.needsInput)), alerts: AlertsAPI(store: signals(2)), tasks: TasksAPI(store: list)), .agents)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions(.failed)), alerts: AlertsAPI(store: signals(2)), tasks: TasksAPI(store: list)), .agents)
     }
 
     func testAlertsOpenWhenNoAgentIsWorking() {
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(.done), signals: signals(1), tasks: tasks()), .alerts)
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(.running), signals: signals(1), tasks: tasks()), .agents)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks())), .alerts)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions(.running)), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks())), .agents)
     }
 
     func testTasksOpenWhenOneNeedsYouAndNothingElseDoes() throws {
         let list = tasks()
         _ = try list.create(title: "Approve the deploy", status: .needsYou, source: .agent, by: "agent:mcp")
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), signals: signals(0), tasks: list), .tasks)
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), signals: signals(0), tasks: tasks()), .agents)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions()), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: list)), .tasks)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions()), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: tasks())), .agents)
     }
 
     func testTasksWaitingOnSomeoneElseDoNotOpenTasks() throws {
         let list = tasks()
         _ = try list.create(title: "Send the deck", source: .meeting, waitingOn: "Ana", by: "user")
         _ = try list.create(title: "Approve the budget", status: .needsYou, source: .agent, waitingOn: "Them", by: "agent:mcp")
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), signals: signals(0), tasks: list), .agents)
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions()), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: list)), .agents)
         XCTAssertEqual(list.activeCount, 0)
 
         list.suggest([("Share the results", nil, "Priya")], meeting: URL(fileURLWithPath: "/tmp/meeting"))
-        XCTAssertEqual(IronPetSection.needingAttention(store: sessions(), signals: signals(0), tasks: list), .tasks,
+        XCTAssertEqual(IronPetSection.needingAttention(agents: AgentsAPI(store: sessions()), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: list)), .tasks,
                        "a suggestion still waits on the user's Add or Skip")
     }
 
@@ -202,7 +202,7 @@ final class IronPetWindowTests: XCTestCase {
     }
 
     func testEscClosesAnIdleChat() {
-        let session = ChatSession(restore: false)
+        let h = ChatHarness(); let session = h.session
         let panel = IronPetPanel.chat(session)
         var closed = 0
         panel.onClose = { closed += 1 }
@@ -219,7 +219,7 @@ final class IronPetWindowTests: XCTestCase {
         let model = IronPetWindowModel(defaults: freshDefaults())
         model.section = section
         let store = SessionStore()
-        let view = IronPetWindowView(model: model, store: store, signals: SignalStore(), tasks: tasks(), chat: nil,
+        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: store), alerts: AlertsAPI(store: SignalStore()), tasks: TasksAPI(store: tasks()), chat: nil,
                                      meetings: nil, actions: .none)
         return bitmap(of: view, scheme: scheme)
     }
@@ -298,7 +298,7 @@ final class IronPetWindowTests: XCTestCase {
         ConfigStore.shared.usePreview(config)
         let model = IronPetWindowModel(defaults: freshDefaults())
         model.section = .alerts
-        let view = IronPetWindowView(model: model, store: SessionStore(), signals: SignalStore(), tasks: tasks(), chat: nil,
+        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: SessionStore()), alerts: AlertsAPI(store: SignalStore()), tasks: TasksAPI(store: tasks()), chat: nil,
                                      meetings: nil, actions: .none)
         let panel = IronPetPanel(model: model, session: nil, content: view)
         panel.appearance = NSAppearance(named: scheme)
@@ -411,7 +411,7 @@ final class IronPetWindowTests: XCTestCase {
         let model = IronPetWindowModel(defaults: freshDefaults())
         model.sidebarCollapsed = collapsed
         model.section = .agents
-        let view = IronPetWindowView(model: model, store: sessions(.done), signals: signals(alerts), tasks: tasks(), chat: nil,
+        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(alerts)), tasks: TasksAPI(store: tasks()), chat: nil,
                                      meetings: nil, actions: .none)
         return bitmap(of: view, scheme: scheme)
     }
@@ -462,8 +462,8 @@ final class IronPetWindowTests: XCTestCase {
         chat.loadPreview(.done)
         let meetings = MeetingLibrary(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         var seen = PageHeaderFrames()
-        let view = IronPetWindowView(model: model, store: sessions(.done), signals: signals(1), tasks: tasks(), chat: chat,
-                                     meetings: meetings, settings: nil, actions: .none)
+        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(1)), tasks: TasksAPI(store: tasks()), chat: ChatHarness(session: chat).model,
+                                     meetings: MeetingsAPI(controller: MeetingController(), library: meetings), settings: nil, actions: .none)
             .onPreferenceChange(PageHeaderFrames.self) { seen = $0 }
             .frame(width: IronPetPanel.minimumSize.width, height: IronPetPanel.minimumSize.height)
         let host = NSHostingView(rootView: view)
@@ -617,7 +617,7 @@ final class IronPetWindowTests: XCTestCase {
     /// A drag that starts on the edge reaches the handle, in the real window, and collapses or expands the sidebar.
     func testDraggingTheEdgeInTheRealWindowCollapsesAndExpandsTheSidebar() throws {
         let model = IronPetWindowModel(defaults: freshDefaults())
-        let view = IronPetWindowView(model: model, store: sessions(.done), signals: signals(0), tasks: tasks(), chat: nil,
+        let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: tasks()), chat: nil,
                                      meetings: nil, actions: .none)
         let panel = IronPetPanel(model: model, session: nil, content: view)
         panel.setContentSize(IronPetPanel.minimumSize)
@@ -667,14 +667,14 @@ final class WindowAutoHideTests: XCTestCase {
     private var enabled = false
     private var capturing = false
 
-    private func open() -> (ChatSession, IronPetPanel) {
-        let session = ChatSession(restore: false)
-        let panel = IronPetPanel.chat(session)
+    private func open() -> (ChatHarness, IronPetPanel) {
+        let h = ChatHarness()
+        let panel = IronPetPanel.chat(h)
         panel.autoHideEnabled = { self.enabled }
         panel.isCapturing = { self.capturing }
         panel.setFrame(CGRect(x: 100, y: 100, width: 800, height: 600), display: false)
         panel.orderFront(nil)
-        return (session, panel)
+        return (h, panel)
     }
 
     private func resign() { NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp) }
@@ -690,9 +690,9 @@ final class WindowAutoHideTests: XCTestCase {
 
     func testOnHidesAndBringsBackTheSameFrameAndDraft() {
         enabled = true
-        let (session, panel) = open()
+        let (h, panel) = open()
         defer { panel.close() }
-        session.input = "half a thought"
+        h.model.input = "half a thought"
         let frame = panel.frame
         resign()
         XCTAssertFalse(panel.isVisible)
@@ -701,7 +701,7 @@ final class WindowAutoHideTests: XCTestCase {
         XCTAssertTrue(panel.isVisible)
         XCTAssertFalse(panel.autoHidden)
         XCTAssertEqual(panel.frame, frame)
-        XCTAssertEqual(session.input, "half a thought")
+        XCTAssertEqual(h.model.input, "half a thought")
     }
 
     func testAWindowClosedByEscStaysClosed() {
@@ -715,12 +715,12 @@ final class WindowAutoHideTests: XCTestCase {
 
     func testOwnSheetsDragsAndCapturesKeepItOpen() {
         enabled = true
-        let (session, panel) = open()
+        let (h, panel) = open()
         defer { panel.close() }
-        session.fileDragActive = true
+        h.model.fileDragActive = true
         resign()
         XCTAssertTrue(panel.isVisible)
-        session.fileDragActive = false
+        h.model.fileDragActive = false
         capturing = true
         resign()
         XCTAssertTrue(panel.isVisible)
@@ -749,21 +749,21 @@ final class WindowAutoHideTests: XCTestCase {
     /// reply is there on return.
     func testReplyArrivingWhileHiddenIsThereOnReturn() {
         enabled = true
-        let (session, panel) = open()
+        let (h, panel) = open()
         defer { panel.close() }
         resign()
         XCTAssertFalse(panel.isVisible)
-        session.items.append(.init(kind: .assistant("done")))
+        h.session.items.append(.init(kind: .assistant("done")))
         activate()
         XCTAssertTrue(panel.isVisible)
-        XCTAssertEqual(session.items.count, 1)
+        XCTAssertEqual(h.session.items.count, 1)
     }
 }
 
 extension WindowAutoHideTests {
     func testShortcutShowsAHiddenWindowAndABusyVoiceControllerBlocksTheHide() async throws {
         enabled = true
-        let (session, panel) = open()
+        let (h, panel) = open()
         defer { panel.close() }
         resign()
         XCTAssertFalse(panel.isVisible)
@@ -771,9 +771,9 @@ extension WindowAutoHideTests {
         panel.show(near: CGRect(x: 0, y: 0, width: 50, height: 50))
         XCTAssertTrue(panel.isVisible)
 
-        session.voice.isEnabled = { true }
-        session.voice.start(.file(URL(fileURLWithPath: "/nonexistent.m4a")))
-        XCTAssertTrue(session.voice.isBusy)
+        h.model.voice.isEnabled = { true }
+        h.model.voice.start(.file(URL(fileURLWithPath: "/nonexistent.m4a")))
+        XCTAssertTrue(h.model.voice.isBusy)
         resign()
         XCTAssertTrue(panel.isVisible, "recording or transcribing keeps the window")
         XCTAssertFalse(panel.autoHidden)
@@ -781,9 +781,9 @@ extension WindowAutoHideTests {
 
     func testIdleVoiceDoesNotBlockTheHide() {
         enabled = true
-        let (session, panel) = open()
+        let (h, panel) = open()
         defer { panel.close() }
-        XCTAssertFalse(session.voice.isBusy)
+        XCTAssertFalse(h.model.voice.isBusy)
         resign()
         XCTAssertFalse(panel.isVisible)
     }

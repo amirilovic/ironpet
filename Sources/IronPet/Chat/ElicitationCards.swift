@@ -2,8 +2,8 @@ import SwiftUI
 
 /// The card for a form the agent is waiting on. It looks like the approval card.
 struct ElicitationCard: View {
-    @ObservedObject var session: ChatSession
-    let pending: ChatSession.PendingForm
+    @ObservedObject var session: ChatViewModel
+    let pending: ChatFormInfo
     @State private var pager: ElicitationPager?
 
     private var current: ElicitationPager { pager ?? ElicitationPager(pageCount: pending.form.pages.count) }

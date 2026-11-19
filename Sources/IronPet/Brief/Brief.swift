@@ -2,8 +2,8 @@ import Foundation
 
 /// The morning brief or the end-of-day recap: sections of items, each of which opens something. Built by `BriefBuilder`
 /// from data on this Mac only.
-struct Brief: Equatable {
-    enum Kind: String, CaseIterable, Identifiable {
+struct Brief: Equatable, Codable {
+    enum Kind: String, CaseIterable, Identifiable, Codable {
         case brief, recap
         var id: String { rawValue }
         var title: String { self == .brief ? "Morning brief" : "Today's recap" }
@@ -13,7 +13,7 @@ struct Brief: Equatable {
     }
 
     /// What a row opens.
-    enum Target: Equatable {
+    enum Target: Equatable, Codable {
         case task(String)
         /// A watched agent session. `workspace`, `bundleID` and `iterm` reopen it once the session has ended.
         case session(id: String, workspace: String?, bundleID: String?, iterm: String? = nil)
@@ -22,7 +22,7 @@ struct Brief: Equatable {
         case meeting(String)
     }
 
-    struct Item: Identifiable, Equatable {
+    struct Item: Identifiable, Equatable, Codable {
         let id: String
         var symbol: String
         var title: String
@@ -30,7 +30,7 @@ struct Brief: Equatable {
         var target: Target
     }
 
-    struct Section: Identifiable, Equatable {
+    struct Section: Identifiable, Equatable, Codable {
         let id: String
         var title: String
         var items: [Item]

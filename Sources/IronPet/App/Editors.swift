@@ -84,13 +84,13 @@ enum Editors {
     }
 
     @MainActor static func target(for session: AgentSession) -> OpenTarget {
-        let config = ConfigStore.shared.config
+        let config = SettingsAPI.live.config
         return resolve(session: session, openIn: config.openIn, custom: config.editors,
                        isInstalled: isInstalled, appName: appName)
     }
 
     @MainActor static func installed() -> [OpenTarget] {
-        available(custom: ConfigStore.shared.config.editors, isInstalled: isInstalled)
+        available(custom: SettingsAPI.live.config.editors, isInstalled: isInstalled)
     }
 
     @MainActor static func label(for session: AgentSession) -> String {

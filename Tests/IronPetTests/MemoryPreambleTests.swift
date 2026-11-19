@@ -76,12 +76,12 @@ final class MemoryPreambleTests: XCTestCase {
     }
 
     func testAChatTurnLeavesTheMemoryFolderEmpty() async throws {
-        let session = ChatSession(restore: false)
+        let h = ChatHarness(); let session = h.session
         session.workspace = workspace
         var preamble: String?
         session.turnRunner = { turn, _ in preamble = turn.preamble }
-        session.input = "hello"
-        session.send()
+        h.model.input = "hello"
+        await h.model.sendNow()
         for _ in 0..<50 where preamble == nil { try await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertTrue(preamble?.contains("What you remember") == true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: FileMemoryStore.directory.appendingPathComponent("projects").path))

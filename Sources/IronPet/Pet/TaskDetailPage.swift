@@ -3,7 +3,7 @@ import SwiftUI
 
 /// A task in full: large title, status, due date and waiting-on controls, notes as markdown, links, labels and, collapsed, the origin and history.
 struct TaskDetailPage: View {
-    @ObservedObject var tasks: TaskStore
+    @ObservedObject var tasks: TasksAPI
     let id: String
     let onBack: () -> Void
     let onOpen: (TaskLink) -> Void
@@ -236,7 +236,7 @@ struct TaskDetailPage: View {
                 ForEach(task.labels.sorted { $0.key < $1.key }, id: \.key) { key, value in
                     HStack(spacing: 4) {
                         Text("\(key)=\(value)").textSelection(.enabled)
-                        Button { attempt { _ = try tasks.update(id, removeLabels: [key], by: "user") } } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .bold)) }
+                        Button { attempt { _ = try tasks.update(UpdateTaskRequest(id: id, removeLabels: [key])) } } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .bold)) }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Remove label \(key)")
                             .help("Remove \(key)")
@@ -245,7 +245,7 @@ struct TaskDetailPage: View {
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().fill(Color.primary.opacity(0.08)))
                 }
-                AddLabelButton(others: tasks.tasks.filter { $0.id != id }.map(\.labels), own: task.labels) { key, value in
+                AddLabelButton(others: tasks.items.filter { $0.id != id }.map(\.labels), own: task.labels) { key, value in
                     TaskLabelEditing.add(key: key, value: value, to: id, in: tasks)
                 }
             }

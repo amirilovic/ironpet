@@ -14,13 +14,13 @@ final class SettingsModel: ObservableObject {
 
     let actions: Actions
     /// Set once the app has built it, before the window can open.
-    var automations: AutomationService?
+    var automations: AutomationsAPI?
     /// The meeting controller, for labelling the voices of the last meeting.
-    var meeting: MeetingController?
+    var meeting: MeetingsAPI?
     /// The chat's reply reader, so Preview and a reply never talk over each other. Nil in preview renders.
-    var speech: SpeechPlayer?
+    var voice: VoiceAPI?
     /// Screen capture, built with the database. Nil only before the app has started.
-    var capture: CaptureService?
+    var capture: ScreenAPI?
     /// The desktop actions agents took, newest first.
     var desktopLog: () -> [ActivityEvent] = { [] }
     /// Ghost's memory, built with the database. Nil only before the app has started.
@@ -63,7 +63,7 @@ final class SettingsModel: ObservableObject {
 
     func refresh() {
         launchAtLogin = LoginItem.isEnabled
-        ConfigStore.shared.reloadIfChanged()
+        SettingsAPI.live.reloadIfChanged()
     }
 }
 
@@ -155,7 +155,7 @@ struct SettingsView: View {
     static func page(_ tag: String) -> Page? { pages.first { $0.tag == tag } }
 
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
 
     var body: some View {
         // The chat background, as in the main window: the sidebar is glass over it and the pages' forms let it show.
@@ -243,8 +243,8 @@ struct SettingsHeader: View {
 
 private struct GeneralSettings: View {
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
-    @State private var name = ConfigStore.shared.config.pet.name
+    @ObservedObject private var store = SettingsAPI.live
+    @State private var name = SettingsAPI.live.config.pet.name
 
     private var welcomeBackFooter: String {
         let minutes = Int(store.config.reminders.idleResetMinutes)
@@ -345,7 +345,7 @@ private struct ShortcutRow: View {
     let title: String
     let path: WritableKeyPath<Config.Hotkeys, String>
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var recording = false
     @State private var monitor: Any?
     @State private var message: String?
@@ -419,10 +419,10 @@ private struct ShortcutRow: View {
 
 struct VoiceSettings: View {
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
-    @State private var baseUrl = ConfigStore.shared.config.voice.baseUrl
-    @State private var modelName = ConfigStore.shared.config.voice.model
-    @State private var speechModel = ConfigStore.shared.config.speech.model
+    @ObservedObject private var store = SettingsAPI.live
+    @State private var baseUrl = SettingsAPI.live.config.voice.baseUrl
+    @State private var modelName = SettingsAPI.live.config.voice.model
+    @State private var speechModel = SettingsAPI.live.config.speech.model
     @State private var key = ""
     @State private var keySaved = VoiceKey.isSet
     @State private var keyError = false
@@ -448,7 +448,7 @@ struct VoiceSettings: View {
                 Text("Hold the shortcut or the chat's microphone button, speak, and let go. The text lands in the chat box, or is sent at once when \"Send voice notes automatically\" is on in the chat's menu. With Hold to talk off, press once to start and again to stop. Esc cancels.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            SpokenReplySettings(speech: model.speech)
+            SpokenReplySettings(voiceAPI: model.voice)
             VoiceModeSettings(model: model)
             Section {
                 TextField("Base URL", text: $baseUrl)
@@ -540,13 +540,13 @@ struct VoiceSettings: View {
 
 /// The spoken replies section of the Voice page: the switch, the voice and Preview. The speech model is under Server.
 private struct SpokenReplySettings: View {
-    let speech: SpeechPlayer?
-    @ObservedObject private var store = ConfigStore.shared
+    let voiceAPI: VoiceAPI?
+    @ObservedObject private var store = SettingsAPI.live
     @State private var voices: [String] = []
     @State private var previewing = false
     @State private var result: (ok: Bool, text: String)?
     /// Used when Settings is rendered without the app, so Preview still has something to play through.
-    @StateObject private var fallback = SpeechPlayer()
+    @State private var fallback = VoiceAPI.standalone(settings: .live)
 
     private var voice: Binding<String> {
         Binding(get: { store.config.speech.voice }, set: { name in store.update { $0.speech.voice = name } })
@@ -580,7 +580,7 @@ private struct SpokenReplySettings: View {
                 HStack {
                     if previewing {
                         ProgressView().controlSize(.small)
-                        Button("Stop") { (speech ?? fallback).stop() }
+                        Button("Stop") { (voiceAPI ?? fallback).stop() }
                     } else {
                         Button("Preview", action: { preview() })
                     }
@@ -604,7 +604,7 @@ private struct SpokenReplySettings: View {
             guard store.config.speech.enabled else { return }
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { return }
-            let list = await SpeechPlayer.synthesizer().voices()
+            let list = await (voiceAPI ?? fallback).voices()
             if !Task.isCancelled { voices = list }
         }
     }
@@ -614,11 +614,11 @@ private struct SpokenReplySettings: View {
     private func preview(thenEnable enable: Bool = false) {
         previewing = true
         result = nil
-        let player = speech ?? fallback
+        let api = voiceAPI ?? fallback
         let line = "Hi, I'm \(store.config.pet.name). This is how I'll read your replies."
         Task {
             do {
-                try await player.preview(line, using: SpeechPlayer.synthesizer())
+                try await api.preview(line)
                 if enable { store.update { $0.speech.enabled = true } }
                 result = (true, enable ? "Replies will be read aloud." : "The server spoke the preview.")
             } catch is CancellationError {
@@ -643,11 +643,11 @@ private struct SpokenReplySettings: View {
 /// The voice mode section of the Voice page. Turning it on first checks that the server transcribes and speaks.
 private struct VoiceModeSettings: View {
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
-    @State private var modelName = ConfigStore.shared.config.voiceMode.model
+    @ObservedObject private var store = SettingsAPI.live
+    @State private var modelName = SettingsAPI.live.config.voiceMode.model
     @State private var checking = false
     @State private var result: (ok: Bool, text: String)?
-    @StateObject private var player = SpeechPlayer()
+    @StateObject private var player = VoiceAPI.standalone(settings: .live)
 
     private var settings: Config.VoiceMode { store.config.voiceMode }
     private var name: String { store.config.pet.name }
@@ -722,7 +722,7 @@ private struct VoiceModeSettings: View {
 
 private struct MeetingSettings: View {
     @ObservedObject var model: SettingsModel
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var testing = false
     @State private var enableError: String?
     @State private var installedAgents: [ACPAgent] = []
@@ -738,12 +738,12 @@ private struct MeetingSettings: View {
 
     /// Models the agent reported the last time it ran in the chat. An agent that never ran there has none yet.
     private var models: [ChatModel] {
-        AgentCatalog.agent(id: meetings.summaryAgent).map(ChatSession.cachedModels(for:)) ?? []
+        ChatAPI.cachedModels(forAgent: meetings.summaryAgent).map { ChatModel(id: $0.id, name: $0.name) }
     }
 
     var body: some View {
         Form {
-            if let meeting = model.meeting { SpeakerLabelSection(controller: meeting) }
+            if let meeting = model.meeting { SpeakerLabelSection(meetings: meeting) }
             Section {
                 Toggle("Meeting transcripts", isOn: Binding(get: { meetings.enabled }, set: setEnabled))
                     .disabled(testing)
@@ -766,7 +766,7 @@ private struct MeetingSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             MicIgnoreSection()
-            SpeakerSettings()
+            SpeakerSettings(meetings: model.meeting)
             Section("Summary") {
                 Toggle("Summarize automatically when a meeting ends", isOn: Binding(
                     get: { meetings.autoSummary }, set: { on in store.update { $0.meetings.autoSummary = on } }))
@@ -848,7 +848,8 @@ private struct MeetingSettings: View {
 
 /// The "Recognise speakers in meetings" section: the toggle, the one-time model download and the stored voices.
 private struct SpeakerSettings: View {
-    @ObservedObject private var store = ConfigStore.shared
+    let meetings: MeetingsAPI?
+    @ObservedObject private var store = SettingsAPI.live
     @ObservedObject private var models = SpeakerModels.shared
     @State private var voices: [StoredVoice] = []
     @State private var confirmForgetAll = false
@@ -866,14 +867,14 @@ private struct SpeakerSettings: View {
                         Text(voice.name)
                         Text("\(Int(voice.seconds / 60)) min of speech").font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        Button("Forget this voice") { VoiceStore.shared.forget(id: voice.id); reload() }.controlSize(.small)
+                        Button("Forget this voice") { try? meetings?.forgetVoice(voice.id); reload() }.controlSize(.small)
                     }
                 }
             }
             Button("Forget all voices", role: .destructive) { confirmForgetAll = true }
-                .disabled(voices.isEmpty && !VoiceStore.shared.hasFile)
+                .disabled(voices.isEmpty && meetings?.hasVoiceFile != true)
                 .confirmationDialog("Forget all voices?", isPresented: $confirmForgetAll) {
-                    Button("Forget all voices", role: .destructive) { VoiceStore.shared.forgetAll(); reload() }
+                    Button("Forget all voices", role: .destructive) { meetings?.forgetAllVoices(); reload() }
                 }
         } footer: {
             Text("Splits the other side of a call into speakers. After a meeting ironpet asks who each unnamed voice is, and recognises named voices in later meetings. Voiceprints are biometric data. They are stored only on this Mac, encrypted with a key in your Keychain, and nothing is sent anywhere. The people recognised have not consented, so tell them. Turning this on downloads about 21 MB of models once.")
@@ -903,14 +904,14 @@ private struct SpeakerSettings: View {
         if on { models.prepare() }
     }
 
-    private func reload() { voices = VoiceStore.shared.voices() }
+    private func reload() { voices = meetings?.voiceprints() ?? [] }
 }
 
 // MARK: - Integrations
 
 struct IntegrationsSettings: View {
     let telegram: TelegramBridge
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
 
     var body: some View {
         Form {
@@ -953,7 +954,7 @@ struct IntegrationsSettings: View {
 // MARK: - Pasted text
 
 private struct PasteLimitsSection: View {
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
 
     var body: some View {
         Section {
@@ -1011,7 +1012,7 @@ private struct NumberField: View {
 // MARK: - Chat background
 
 private struct ChatBackgroundSection: View {
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @State private var message: String?
 
     private var current: String { store.config.chat.background }
@@ -1058,17 +1059,16 @@ private struct ChatBackgroundSection: View {
 
     private func pick(_ id: String) {
         message = nil
-        guard id == ChatBackground.customID else { store.update { $0.chat.background = id }; return }
+        guard id == ChatBackground.customID else { try? PetAPI.live.selectBackground(SelectBackgroundRequest(id: id)); return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.png, .jpeg]
         panel.allowsMultipleSelection = false
         panel.message = "Choose an image for the chat background"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let name = try ChatBackground.importImage(from: url, replacing: store.config.chat.customImage)
-            store.update { $0.chat.background = ChatBackground.customID; $0.chat.customImage = name }
+            try PetAPI.live.importBackground(url)
         } catch {
-            message = error.localizedDescription
+            message = (error as? APIError)?.message ?? error.localizedDescription
         }
     }
 }
@@ -1076,12 +1076,12 @@ private struct ChatBackgroundSection: View {
 /// The "Never treat as a call" list: apps whose microphone use is dictation or an assistant, not a call. It applies to call
 /// offers and to holding back spoken replies, so it works with meeting transcripts off.
 struct MicIgnoreSection: View {
-    @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var store = SettingsAPI.live
     @StateObject private var model: MicIgnoreModel
     @State private var error: String?
 
     init() {
-        let store = ConfigStore.shared
+        let store = SettingsAPI.live
         _model = StateObject(wrappedValue: MicIgnoreModel(
             entries: { store.config.meetings.ignoredMicApps },
             save: { list in store.update { $0.meetings.ignoredMicApps = list } }))

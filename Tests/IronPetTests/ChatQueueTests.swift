@@ -4,13 +4,14 @@ import XCTest
 @MainActor
 final class ChatQueueTests: XCTestCase {
     private var session: ChatSession!
+    private var h: ChatHarness!
     /// One entry per turn the session started; `deliver` sends events to that turn.
     private var turns: [ACPTurn] = []
     private var deliver: [(AgentEvent) -> Void] = []
 
     override func setUp() async throws {
         TestMemory.isolate()
-        session = ChatSession(restore: false)
+        h = ChatHarness(); session = h.session
         turns = []
         deliver = []
         session.workspace = FileManager.default.temporaryDirectory
@@ -30,8 +31,8 @@ final class ChatQueueTests: XCTestCase {
     }
 
     private func type(_ text: String) async {
-        session.input = text
-        session.send()
+        h.model.input = text
+        await h.model.sendNow()
         await settle()
     }
 
@@ -139,7 +140,7 @@ final class ChatQueueTests: XCTestCase {
         await type("a")
         await type("b")
         XCTAssertEqual(session.queue.map(\.text), ["a", "b"])
-        XCTAssertEqual(session.input, "")
+        XCTAssertEqual(h.model.input, "")
         XCTAssertEqual(turns.count, 1)
     }
 
@@ -163,11 +164,11 @@ final class ChatQueueTests: XCTestCase {
         await type("first")
         await type("a")
         await type("b")
-        session.input = "draft"
+        h.model.input = "draft"
         session.stop()
         await settle()
         XCTAssertTrue(session.queue.isEmpty)
-        XCTAssertEqual(session.input, "draft\n\na\n\nb")
+        XCTAssertEqual(h.model.input, "draft\n\na\n\nb")
         XCTAssertEqual(turns.count, 1)
     }
 
@@ -178,7 +179,7 @@ final class ChatQueueTests: XCTestCase {
         await complete(0, error: "boom")
         XCTAssertEqual(turns.count, 1)
         XCTAssertTrue(session.queue.isEmpty)
-        XCTAssertEqual(session.input, "a\n\nb")
+        XCTAssertEqual(h.model.input, "a\n\nb")
         XCTAssertEqual(session.state, .failed)
     }
 
@@ -186,12 +187,12 @@ final class ChatQueueTests: XCTestCase {
         let shot = URL(fileURLWithPath: "/tmp/shot-a.png")
         let later = URL(fileURLWithPath: "/tmp/shot-b.png")
         await type("first")
-        session.attach(shot)
+        h.model.attach(shot)
         await type("a")
-        session.attach(later)
+        h.model.attach(later)
         await type("b")
         XCTAssertEqual(session.queue.map(\.attachments), [[shot], [later]])
-        XCTAssertTrue(session.attachments.isEmpty)
+        XCTAssertTrue(h.model.attachments.isEmpty)
         await complete(0)
         XCTAssertEqual(turns[1].images + turns[1].files, [shot])
         await complete(1)
@@ -215,6 +216,6 @@ final class ChatQueueTests: XCTestCase {
         XCTAssertTrue(session.queue.isEmpty)
         XCTAssertEqual(turns.count, 1)
         XCTAssertEqual(userTexts, ["hello"])
-        XCTAssertEqual(session.input, "")
+        XCTAssertEqual(h.model.input, "")
     }
 }

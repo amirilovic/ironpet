@@ -31,7 +31,8 @@ final class MemoryMCPTests: XCTestCase {
 
     private func call(_ name: String, _ args: [String: Any], caller: String? = nil) async throws -> (value: [String: Any], isError: Bool, text: String) {
         let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": name, "arguments": args]])
-        let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, screen: screen, memory: services, caller: caller)
+        let (_, data) = await MCPEndpoint.handle(body, automations: nil, tasks: nil, screen: screen.map { ScreenAPI(service: CaptureService(store: $0, config: { Config().screenCapture })) },
+                                                 memory: MemoryAPI(services: { [services] in services }), caller: caller)
         let result = try XCTUnwrap((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["result"] as? [String: Any])
         let text = ((result["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
         let value = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] ?? [:]

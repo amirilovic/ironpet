@@ -42,12 +42,12 @@ enum TaskLabelEditing {
 
     /// Adds the label (overwriting the key). Returns nil on success or the message to show.
     @MainActor
-    static func add(key: String, value: String, to id: String, in store: TaskStore) -> String? {
+    static func add(key: String, value: String, to id: String, in tasks: TasksAPI) -> String? {
         switch validate(key: key, value: value) {
         case .failure(let error): return error.message
         case .success(let pair):
-            do { _ = try store.update(id, addLabels: [pair.key: pair.value], by: "user"); return nil }
-            catch { return (error as? TaskError)?.message ?? error.localizedDescription }
+            do { _ = try tasks.update(UpdateTaskRequest(id: id, labels: [pair.key: pair.value])); return nil }
+            catch { return (error as? APIError)?.message ?? (error as? TaskError)?.message ?? error.localizedDescription }
         }
     }
 }
@@ -96,31 +96,31 @@ enum TaskEdits {
 
     /// Changes the status. Done takes the user's closing note; with none, a fixed text. Other changes record which status they moved to.
     @MainActor @discardableResult
-    static func setStatus(_ status: TaskStatus, of id: String, in store: TaskStore, note: String? = nil) throws -> TaskItem {
+    static func setStatus(_ status: TaskStatus, of id: String, in tasks: TasksAPI, note: String? = nil) throws -> TaskItem {
         let typed = note?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
         let text = status == .done ? (typed ?? closedByUser) : (typed ?? "Moved to \(status.title) by the user.")
-        return try store.update(id, status: status, note: text, by: "user")
+        return try tasks.update(UpdateTaskRequest(id: id, status: status, note: text))
     }
 
     @MainActor @discardableResult
-    static func setDue(_ due: Date?, of id: String, in store: TaskStore) throws -> TaskItem {
-        try store.update(id, due: .some(due), by: "user")
+    static func setDue(_ due: Date?, of id: String, in tasks: TasksAPI) throws -> TaskItem {
+        try tasks.update(UpdateTaskRequest(id: id, due: due, clearDue: due == nil))
     }
 
     /// A blank name clears it.
     @MainActor @discardableResult
-    static func setWaitingOn(_ name: String, of id: String, in store: TaskStore) throws -> TaskItem {
-        try store.update(id, waitingOn: .some(name.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank), by: "user")
+    static func setWaitingOn(_ name: String, of id: String, in tasks: TasksAPI) throws -> TaskItem {
+        try tasks.update(UpdateTaskRequest(id: id, waitingOn: name.trimmingCharacters(in: .whitespacesAndNewlines)))
     }
 
     @MainActor @discardableResult
-    static func setNotes(_ notes: String, of id: String, in store: TaskStore) throws -> TaskItem {
-        try store.update(id, notes: notes, by: "user")
+    static func setNotes(_ notes: String, of id: String, in tasks: TasksAPI) throws -> TaskItem {
+        try tasks.update(UpdateTaskRequest(id: id, notes: notes))
     }
 
     @MainActor @discardableResult
-    static func setTitle(_ title: String, of id: String, in store: TaskStore) throws -> TaskItem {
-        try store.update(id, title: title, by: "user")
+    static func setTitle(_ title: String, of id: String, in tasks: TasksAPI) throws -> TaskItem {
+        try tasks.update(UpdateTaskRequest(id: id, title: title))
     }
 }
 
