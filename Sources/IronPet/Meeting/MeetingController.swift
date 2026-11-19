@@ -747,7 +747,9 @@ final class MeetingController: ObservableObject {
             ## Action items
             A checklist of open action items, one per line, as `- [ ] <task> (owner: <Me, Them, or the name if \
             someone said it>, due: <date, only if one was mentioned>)`. Leave out "due" when no date was mentioned. \
-            Write "None." if there were none.
+            Add ", waiting: yes" inside the parentheses only to an item owned by someone other than Me when that work is for Me, delivers \
+            something to Me, or blocks something Me owns. Otherwise leave out "waiting", and never add it to an item \
+            owned by Me. Write "None." if there were none.
 
             Use only what is in the transcript. Transcripts can contain recognition errors, so do not guess names.
             \(note)
