@@ -177,6 +177,21 @@ final class MeetingsAPI: ObservableObject {
         controller.dismissSpeaker(request.speaker, mixed: request.mixed)
     }
 
+    // MARK: Stored voices
+
+    /// The voices ironpet recognises in later meetings, each with how much speech it holds.
+    func voiceprints() -> [StoredVoice] { controller.voiceStore.voices() }
+
+    /// Whether the encrypted voice file exists, even when it holds no voice ironpet can read.
+    var hasVoiceFile: Bool { controller.voiceStore.hasFile }
+
+    func forgetVoice(_ id: String) throws {
+        guard controller.voiceStore.voices().contains(where: { $0.id == id }) else { throw APIError.notFound("no stored voice with id \"\(id)\"") }
+        controller.voiceStore.forget(id: id)
+    }
+
+    func forgetAllVoices() { controller.voiceStore.forgetAll() }
+
     // MARK: The recording panel
 
     var phase: MeetingController.Phase { controller.phase }

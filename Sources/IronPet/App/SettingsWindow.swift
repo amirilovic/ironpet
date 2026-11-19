@@ -18,7 +18,7 @@ final class SettingsModel: ObservableObject {
     /// The meeting controller, for labelling the voices of the last meeting.
     var meeting: MeetingsAPI?
     /// The chat's reply reader, so Preview and a reply never talk over each other. Nil in preview renders.
-    var speech: SpeechPlayer?
+    var voice: VoiceAPI?
     /// Screen capture, built with the database. Nil only before the app has started.
     var capture: ScreenAPI?
     /// The desktop actions agents took, newest first.
@@ -436,7 +436,7 @@ struct VoiceSettings: View {
                 Text("Hold the shortcut or the chat's microphone button, speak, and let go. The text lands in the chat box, or is sent at once when \"Send voice notes automatically\" is on in the chat's menu. With Hold to talk off, press once to start and again to stop. Esc cancels.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            SpokenReplySettings(speech: model.speech)
+            SpokenReplySettings(voiceAPI: model.voice)
             Section {
                 TextField("Base URL", text: $baseUrl)
                     .onSubmit(saveServer)
@@ -527,13 +527,13 @@ struct VoiceSettings: View {
 
 /// The spoken replies section of the Voice page: the switch, the voice and Preview. The speech model is under Server.
 private struct SpokenReplySettings: View {
-    let speech: SpeechPlayer?
+    let voiceAPI: VoiceAPI?
     @ObservedObject private var store = SettingsAPI.live
     @State private var voices: [String] = []
     @State private var previewing = false
     @State private var result: (ok: Bool, text: String)?
     /// Used when Settings is rendered without the app, so Preview still has something to play through.
-    @StateObject private var fallback = SpeechPlayer()
+    @State private var fallback = VoiceAPI.standalone(settings: .live)
 
     private var voice: Binding<String> {
         Binding(get: { store.config.speech.voice }, set: { name in store.update { $0.speech.voice = name } })
@@ -567,7 +567,7 @@ private struct SpokenReplySettings: View {
                 HStack {
                     if previewing {
                         ProgressView().controlSize(.small)
-                        Button("Stop") { (speech ?? fallback).stop() }
+                        Button("Stop") { (voiceAPI ?? fallback).stop() }
                     } else {
                         Button("Preview", action: { preview() })
                     }
@@ -591,7 +591,7 @@ private struct SpokenReplySettings: View {
             guard store.config.speech.enabled else { return }
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { return }
-            let list = await SpeechPlayer.synthesizer().voices()
+            let list = await (voiceAPI ?? fallback).voices()
             if !Task.isCancelled { voices = list }
         }
     }
@@ -601,11 +601,11 @@ private struct SpokenReplySettings: View {
     private func preview(thenEnable enable: Bool = false) {
         previewing = true
         result = nil
-        let player = speech ?? fallback
+        let api = voiceAPI ?? fallback
         let line = "Hi, I'm \(store.config.pet.name). This is how I'll read your replies."
         Task {
             do {
-                try await player.preview(line, using: SpeechPlayer.synthesizer())
+                try await api.preview(line)
                 if enable { store.update { $0.speech.enabled = true } }
                 result = (true, enable ? "Spoken replies are on." : "The server spoke the preview.")
             } catch is CancellationError {
@@ -647,7 +647,7 @@ private struct MeetingSettings: View {
 
     /// Models the agent reported the last time it ran in the chat. An agent that never ran there has none yet.
     private var models: [ChatModel] {
-        AgentCatalog.agent(id: meetings.summaryAgent).map(ChatSession.cachedModels(for:)) ?? []
+        AgentCatalog.agent(id: meetings.summaryAgent).map(ChatAPI.cachedModels(for:)) ?? []
     }
 
     var body: some View {
@@ -674,7 +674,7 @@ private struct MeetingSettings: View {
                 Text("When another app, such as WhatsApp, Zoom or a browser, uses your microphone for about 10 seconds, Ghost asks whether to record the call. Nothing is recorded until you click Record.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            SpeakerSettings()
+            SpeakerSettings(meetings: model.meeting)
             Section("Summary") {
                 Toggle("Summarize automatically when a meeting ends", isOn: Binding(
                     get: { meetings.autoSummary }, set: { on in store.update { $0.meetings.autoSummary = on } }))
@@ -756,6 +756,7 @@ private struct MeetingSettings: View {
 
 /// The "Recognise speakers in meetings" section: the toggle, the one-time model download and the stored voices.
 private struct SpeakerSettings: View {
+    let meetings: MeetingsAPI?
     @ObservedObject private var store = SettingsAPI.live
     @ObservedObject private var models = SpeakerModels.shared
     @State private var voices: [StoredVoice] = []
@@ -774,14 +775,14 @@ private struct SpeakerSettings: View {
                         Text(voice.name)
                         Text("\(Int(voice.seconds / 60)) min of speech").font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        Button("Forget this voice") { VoiceStore.shared.forget(id: voice.id); reload() }.controlSize(.small)
+                        Button("Forget this voice") { try? meetings?.forgetVoice(voice.id); reload() }.controlSize(.small)
                     }
                 }
             }
             Button("Forget all voices", role: .destructive) { confirmForgetAll = true }
-                .disabled(voices.isEmpty && !VoiceStore.shared.hasFile)
+                .disabled(voices.isEmpty && meetings?.hasVoiceFile != true)
                 .confirmationDialog("Forget all voices?", isPresented: $confirmForgetAll) {
-                    Button("Forget all voices", role: .destructive) { VoiceStore.shared.forgetAll(); reload() }
+                    Button("Forget all voices", role: .destructive) { meetings?.forgetAllVoices(); reload() }
                 }
         } footer: {
             Text("Splits the other side of a call into speakers. After a meeting ironpet asks who each unnamed voice is, and recognises named voices in later meetings. Voiceprints are biometric data. They are stored only on this Mac, encrypted with a key in your Keychain, and nothing is sent anywhere. The people recognised have not consented, so tell them. Turning this on downloads about 21 MB of models once.")
@@ -811,7 +812,7 @@ private struct SpeakerSettings: View {
         if on { models.prepare() }
     }
 
-    private func reload() { voices = VoiceStore.shared.voices() }
+    private func reload() { voices = meetings?.voiceprints() ?? [] }
 }
 
 // MARK: - Integrations

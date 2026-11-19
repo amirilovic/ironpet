@@ -317,7 +317,7 @@ final class PetController: NSObject {
                 onScreenSettings?()
             },
             onBriefOpen: { [weak self] target in self?.openBrief(target) })
-        let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(
+        let window = IronPetPanel(model: windowModel, session: chatAPI, content: IronPetWindowView(
             model: windowModel, agents: agentList, alerts: alertList, tasks: taskList, chat: chatAPI, meetings: meetingsAPI,
             settings: settings, brief: brief, actions: actions))
         window.onVisibilityChange = { [weak self] visible in

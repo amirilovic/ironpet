@@ -87,7 +87,7 @@ final class TelegramBridge: ObservableObject {
         self.tokens = tokens
         self.storage = storage
         self.filesDirectory = filesDirectory
-        self.voiceEnabled = voiceEnabled ?? { ConfigStore.shared.config.voice.enabled }
+        self.voiceEnabled = voiceEnabled ?? { SettingsAPI.live.config.voice.enabled }
         self.transcribe = transcribe ?? TelegramVoice.configuredTranscribe
         self.petName = petName
         self.sleep = sleep

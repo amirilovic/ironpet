@@ -29,6 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Replaces the system idle time in test mode (`POST /test/presence`). Nil otherwise.
     private var testIdleSeconds: TimeInterval?
     private var brief: TodayAPI?
+    /// The task store, for the meeting suggestions and the test endpoints. Everything else uses `api.tasks`.
+    private var taskStore: TaskStore?
     private lazy var logWindow = AutomationLogWindow(api: { [weak self] in self?.api?.automations })
     /// Moves the automation clock in test mode (`POST /test/automations/advance`). Zero otherwise.
     private var testClockOffset: TimeInterval = 0
@@ -132,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wispr.onDictation = { [weak self] text in self?.chat.receiveDictation(text) }
         pet.onChatShown = { [weak self] shown in self?.chatShown(shown) }
         pet.onWindowClosed = { [weak self] in self?.restorePreviousApp() }
-        settingsModel.speech = chat.speech
+        settingsModel.voice = api.voice
         meeting.onLabelSpeakers = { [weak self] in self?.showSettings(tab: "meetings") }
         announcer.bubbles.onDismissed = { [weak self] id in self?.meetingBubbleClosed(id) }
         pet.onRecordingClick = { [weak self] in self?.showMeetingBubble() }
@@ -247,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let log = ActivityLog(database: database)
         activity = log
         let tasks = TaskStore(database: database)
-        TaskStore.shared = tasks
+        taskStore = tasks
         let service = AutomationService(store: store, engine: engine, database: database)
         api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles, sessions: self.store, chat: chat, meeting: meeting, meetingLibrary: meetings, config: config, usage: UsageStore.shared), events: events)
         pet.tasks = api.tasks
@@ -381,7 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let context = AssistantContext()
         context.jobs = { [weak self] in self?.jobs }
         context.sessions = { [weak self] in self?.store.ordered.filter { $0.source != .job } ?? [] }
-        context.tasks = { TaskStore.shared }
+        context.tasks = { [weak self] in self?.api?.tasks }
         context.alerts = { [weak self] in self?.signals.signals ?? [] }
         context.brief = { [weak self] kind in self?.brief?.brief(BriefRequest(kind: kind)) }
         context.meetings = { [weak self] in
@@ -855,6 +857,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ))
             control.onMeetingSummaryText = { [weak self] text, meeting in self?.suggestTasks(fromSummary: text, meeting: meeting) }
             control.screen = capture
+            control.tasks = taskStore
             control.welcomeBack = welcomeBack
             control.setIdleSeconds = { [weak self] seconds in self?.testIdleSeconds = seconds }
             control.showInspector = { [weak self] in
@@ -1049,7 +1052,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func offerTasks(_ items: [(title: String, due: String?, waitingOn: String?)], meeting: URL) {
-        guard config.config.tasks.meetingSuggestions, let tasks = TaskStore.shared, !items.isEmpty else { return }
+        guard config.config.tasks.meetingSuggestions, let tasks = taskStore, !items.isEmpty else { return }
         offerSuggestions(tasks.suggest(items, meeting: meeting))
     }
 

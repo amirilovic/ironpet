@@ -10,8 +10,17 @@ struct ChatOrigin: Codable, Equatable, Hashable {
     var ref: String
 
     static let telegramClient = "telegram"
+    /// Messages an automation sent into the chat.
+    static let automationClient = "automation"
+    /// A prompt or follow-up that a background job ran.
+    static let jobClient = "job"
 
     static func telegram(chat: Int64) -> ChatOrigin { ChatOrigin(client: telegramClient, ref: String(chat)) }
+}
+
+extension ChatAPI {
+    /// The models an agent offered in its last session, kept between runs.
+    static func cachedModels(for agent: ACPAgent) -> [ChatModel] { ChatSession.cachedModels(for: agent) }
 }
 
 typealias ChatItem = ChatSession.Item
@@ -214,6 +223,11 @@ final class ChatAPI: ObservableObject {
     var speech: SpeechPlayer { session.speech }
     /// The chat message being read aloud, so its speaker button shows Stop.
     var speakingID: UUID? { session.speech.speakingID }
+    /// Whether the mic is recording or transcribing.
+    var voiceBusy: Bool { session.voice.isBusy }
+    /// Whether a reply is being read aloud.
+    var isSpeaking: Bool { session.speech.isSpeaking }
+    func stopSpeech() { session.speech.stop() }
     var voiceRetryItem: UUID? { session.voiceRetryItem }
     func toggleSpeech(_ item: ChatItem) { session.toggleSpeech(item) }
     func retryVoice() { session.retryVoice() }

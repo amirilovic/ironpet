@@ -24,7 +24,7 @@ enum TaskJSON {
             return clean
         }
         let ref = try text("ref", limit: 500), reason = try text("reason", limit: 500)
-        return (kind, TaskStore.refText(["ref": ref, "reason": reason]) ?? "")
+        return (kind, TaskRef.text(["ref": ref, "reason": reason]) ?? "")
     }
 
     /// A note an agent must give, such as the evidence for closing a task.

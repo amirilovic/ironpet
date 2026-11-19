@@ -54,6 +54,9 @@ final class VoiceAPI {
         speech.isEnabled = { [weak settings] in settings?.config.speech.enabled ?? false }
     }
 
+    /// A voice API with its own speaker, for Settings rendered without the app, so Preview still has something to play through.
+    static func standalone(settings: SettingsAPI) -> VoiceAPI { VoiceAPI(speech: SpeechPlayer(), settings: settings) }
+
     var status: VoiceStatus {
         VoiceStatus(speechEnabled: settings.config.speech.enabled, transcriptionEnabled: settings.config.voice.enabled, speaking: speech.isSpeaking)
     }
@@ -66,6 +69,15 @@ final class VoiceAPI {
     }
 
     func stop() { speech.stop() }
+
+    /// The voice names the server offers for the saved speech model. Empty when it has no list.
+    func voices() async -> [String] { await SpeechPlayer.synthesizer().voices() }
+
+    /// Speaks one line with the saved settings even with spoken replies off, so Settings can test the server. Throws what the
+    /// server answered, or `CancellationError` when `stop()` or a reply cut it short.
+    func preview(_ text: String) async throws {
+        try await speech.preview(text, using: SpeechPlayer.synthesizer())
+    }
 
     /// The audio for a reply, one chunk at a time, without playing anything here. The first chunk is one sentence, so a client
     /// can start playing early.

@@ -1256,19 +1256,19 @@ private struct UserBubble: View {
                     Image(systemName: "paperplane.fill").font(.system(size: 9))
                     Text("Telegram").font(.system(size: 10))
                 }
-                if source == ChatSession.automationOrigin {
+                if source == ChatOrigin.automationClient {
                     Image(systemName: "clock.arrow.circlepath").font(.system(size: 9))
                     Text("Automation").font(.system(size: 10))
                 }
-                if source == ChatSession.jobOrigin {
+                if source == ChatOrigin.jobClient {
                     Image(systemName: "shippingbox.fill").font(.system(size: 9))
                     Text("Background job").font(.system(size: 10))
                 }
                 if let date { Text(timeFormatter.string(from: date)).font(.system(size: 10)) }
             }
             .foregroundStyle(.tertiary)
-            .help(source == ChatOrigin.telegramClient ? "Sent from Telegram" : source == ChatSession.automationOrigin ? "Sent by an automation"
-                  : source == ChatSession.jobOrigin ? "Sent to a background job" : "")
+            .help(source == ChatOrigin.telegramClient ? "Sent from Telegram" : source == ChatOrigin.automationClient ? "Sent by an automation"
+                  : source == ChatOrigin.jobClient ? "Sent to a background job" : "")
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 50)

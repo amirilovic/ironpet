@@ -202,6 +202,14 @@ struct TaskError: Error, LocalizedError, Equatable {
     var errorDescription: String? { message }
 }
 
+/// A task's source reference: a JSON object kept as text, keys sorted.
+enum TaskRef {
+    static func text(_ object: [String: Any]) -> String? {
+        guard !object.isEmpty, let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
+
 /// Checks agent and CLI input before it reaches the database.
 enum TaskValidator {
     static let maxTitle = 200

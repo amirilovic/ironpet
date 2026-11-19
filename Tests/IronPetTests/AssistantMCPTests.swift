@@ -117,7 +117,7 @@ final class AssistantMCPTests: XCTestCase {
     func testStatusOverviewGathersSessionsAlertsAndTasks() async throws {
         let tasks = TaskStore(database: Database.open(path: nil, migrations: TaskStore.migrations).database)
         _ = try tasks.create(title: "Review Sara's PR", status: .needsYou, source: .user, by: "user")
-        context.tasks = { tasks }
+        context.tasks = { TasksAPI(store: tasks) }
         var waiting = AgentSession(id: "claude:1", source: .claude, status: .needsInput, prompt: "Migrate the db")
         waiting.origin.workspace = "/Users/me/kokous"
         context.sessions = { [waiting] }

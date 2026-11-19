@@ -52,6 +52,8 @@ final class TestControl {
     /// What the app does with a finished meeting summary (mine action items, suggest them, show the bubble), so
     /// `/test/tasks/suggest` runs that path. Without it the endpoint only mines and suggests.
     var onMeetingSummaryText: ((String, URL) -> Void)?
+    /// The task store, for the `/test/tasks/*` endpoints. It is the app's own store, set by the app delegate.
+    var tasks: TaskStore?
     /// Screen capture, for the `/test/screen/*` endpoints. They feed synthetic captures in, so no test reads the real screen.
     var screen: CaptureService?
     /// Opens the Screen section and returns its window number.
@@ -313,14 +315,14 @@ final class TestControl {
         case ("GET", "/test/tasks"):
             return tasksSnapshot()
         case ("POST", "/test/tasks/reset"):
-            guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+            guard let store = tasks else { return Self.encode(["ok": false, "error": "no task store"]) }
             for item in store.tasks { try? store.delete(item.id, by: "test") }
             for suggestion in store.suggestions { store.skip(suggestion.id) }
             return tasksSnapshot()
         case ("POST", "/test/tasks/suggest"):
             return suggestTasks(body)
         case ("POST", "/test/tasks/accept-all"):
-            guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+            guard let store = tasks else { return Self.encode(["ok": false, "error": "no task store"]) }
             // The Tasks tab's Add all. The suggestions bubble has no buttons.
             store.acceptAll()
             return tasksSnapshot()
@@ -448,7 +450,7 @@ final class TestControl {
     }
 
     private func tasksSnapshot() -> Data {
-        guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+        guard let store = tasks else { return Self.encode(["ok": false, "error": "no task store"]) }
         return Self.encode([
             "ok": true,
             "tasks": store.ordered.map { item -> [String: Any] in
@@ -462,7 +464,7 @@ final class TestControl {
 
     /// `summary` is the markdown of a meeting summary and `meeting` its folder.
     private func suggestTasks(_ body: [String: Any]) -> Data {
-        guard let store = TaskStore.shared else { return Self.encode(["ok": false, "error": "no task store"]) }
+        guard let store = tasks else { return Self.encode(["ok": false, "error": "no task store"]) }
         guard let summary = body["summary"] as? String, let path = body["meeting"] as? String, !path.isEmpty else {
             return Self.encode(["ok": false, "error": "summary and meeting are required"])
         }

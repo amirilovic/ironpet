@@ -346,7 +346,7 @@ enum PreviewRenderer {
     /// Falls back to nil when the window server gives no image (no display), and the caller skips the file.
     static func renderWindow(model: IronPetWindowModel, session: ChatSession?, content: some View, to dir: URL,
                              _ name: String, scheme: ColorScheme) {
-        let panel = IronPetPanel(model: model, session: session, content: content)
+        let panel = IronPetPanel(model: model, session: session.map { ChatAPI(session: $0) }, content: content)
         panel.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
         panel.setContentSize(CGSize(width: 780, height: 560))
         panel.setFrameOrigin(CGPoint(x: 60, y: 60))

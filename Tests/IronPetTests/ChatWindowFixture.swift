@@ -7,6 +7,7 @@ extension IronPetPanel {
     static func chat(_ session: ChatSession) -> IronPetPanel {
         let model = IronPetWindowModel()
         model.section = .chat
-        return IronPetPanel(model: model, session: session, content: ChatView(session: ChatAPI(session: session)))
+        let api = ChatAPI(session: session)
+        return IronPetPanel(model: model, session: api, content: ChatView(session: api))
     }
 }

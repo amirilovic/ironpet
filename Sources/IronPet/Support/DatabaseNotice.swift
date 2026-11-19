@@ -32,10 +32,3 @@ struct DatabaseBanner: View {
             .accessibilityLabel("\(DatabaseNotice.bannerText). \(reason)")
     }
 }
-
-extension SignalStore {
-    /// Adds the unavailable-database alert, with a bubble, when the database is the in-memory stand-in.
-    func reportIfUnavailable(_ database: Database) {
-        if let signal = DatabaseNotice.signal(for: database) { add(signal, notify: true) }
-    }
-}

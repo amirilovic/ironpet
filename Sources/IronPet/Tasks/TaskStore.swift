@@ -9,9 +9,6 @@ final class TaskStore: ObservableObject {
     @Published private(set) var tasks: [TaskItem] = []
     @Published private(set) var suggestions: [TaskSuggestion] = []
 
-    /// The app's store, for the parts that have no owner to pass it through (tests set their own).
-    static var shared: TaskStore?
-
     nonisolated static let migrations: [Database.Migration] = [
         .init(200, "tasks: items, links, events, suggestions", sql: """
             CREATE TABLE task_items(id TEXT PRIMARY KEY, title TEXT NOT NULL, notes TEXT NOT NULL, status TEXT NOT NULL,
@@ -97,10 +94,7 @@ final class TaskStore: ObservableObject {
     ]
 
     /// A source reference as stored: a JSON object, keys sorted.
-    nonisolated static func refText(_ object: [String: Any]) -> String? {
-        guard !object.isEmpty, let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
+    nonisolated static func refText(_ object: [String: Any]) -> String? { TaskRef.text(object) }
 
     /// The column names of `table`, empty when it does not exist.
     nonisolated static func columns(_ db: Database.Connection, _ table: String) throws -> Set<String> {

@@ -82,9 +82,9 @@ final class ChatSession: ObservableObject {
 
     enum ApprovalOutcome: Equatable { case allowed, denied, ended }
 
-    static let automationOrigin = "automation"
+    static let automationOrigin = ChatOrigin.automationClient
     /// A prompt or follow-up that a background job ran (`JobService`).
-    static let jobOrigin = "job"
+    static let jobOrigin = ChatOrigin.jobClient
 
     struct Approval: Identifiable {
         let id = UUID()
