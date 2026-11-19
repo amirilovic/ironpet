@@ -81,8 +81,8 @@ struct TaskListView: View {
         if !labels.isEmpty || labelFilter != nil {
             HStack(spacing: 6) {
                 Menu {
-                    ForEach(labels, id: \.0) { key, value in
-                        Button("\(key)=\(value)") { labelFilter = "\(key)=\(value)" }
+                    ForEach(labels.map { "\($0.key)=\($0.value)" }, id: \.self) { label in
+                        Button(label) { labelFilter = label }
                     }
                 } label: {
                     Label(labelFilter == nil ? "Filter by label" : "Label", systemImage: "tag")
