@@ -3,13 +3,14 @@ import SwiftUI
 
 /// A page of the ironpet window, in sidebar order.
 enum IronPetSection: String, CaseIterable, Identifiable {
-    case chat, agents, alerts, tasks, transcripts, screen, actions, automations, today
+    case chat, voice, agents, alerts, tasks, transcripts, screen, actions, automations, today
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .chat: return "Chat"
+        case .voice: return "Voice"
         case .agents: return "Agents"
         case .alerts: return "Alerts"
         case .tasks: return "Tasks"
@@ -24,6 +25,7 @@ enum IronPetSection: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .chat: return "bubble.left.and.bubble.right"
+        case .voice: return "mic"
         case .agents: return "person.2"
         case .alerts: return "bell"
         case .tasks: return "checklist"
@@ -35,10 +37,13 @@ enum IronPetSection: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The sections the sidebar lists, in order. Chat, Transcripts and Automations need their backing object. Today is
-    /// listed only while a brief or recap automation is on, and comes last so the other rows keep their ⌘N.
-    static func shown(chat: Bool, transcripts: Bool, automations: Bool, today: Bool = false) -> [IronPetSection] {
-        allCases.filter { ($0 != .chat || chat) && ($0 != .transcripts || transcripts) && ($0 != .automations || automations) && ($0 != .today || today) }
+    /// The sections the sidebar lists, in order. Chat, Voice, Transcripts and Automations need their backing object. Today
+    /// is listed only while a brief or recap automation is on, and comes last so the other rows keep their ⌘N.
+    static func shown(chat: Bool, voice: Bool = false, transcripts: Bool, automations: Bool, today: Bool = false) -> [IronPetSection] {
+        allCases.filter {
+            ($0 != .chat || chat) && ($0 != .voice || voice) && ($0 != .transcripts || transcripts) && ($0 != .automations || automations)
+                && ($0 != .today || today)
+        }
     }
 
     /// The section ⌘1 to ⌘9 select: the Nth row of `sections`. Nil for ⌘0, any other key, or a digit past the last row.
@@ -198,6 +203,8 @@ final class IronPetPanel: NSPanel {
     private(set) var autoHidden = false
     private let model: IronPetWindowModel
     private let session: ChatSession?
+    /// Whether the window has a Voice page, so ⌘N counts its row.
+    var hasVoice = false
     private var observers: [NSObjectProtocol] = []
 
     init<Content: View>(model: IronPetWindowModel, session: ChatSession?, content: Content) {
@@ -306,7 +313,7 @@ final class IronPetPanel: NSPanel {
 
     /// The rows the sidebar shows; ⌘1 to ⌘9 index into this list.
     private var sidebarSections: [IronPetSection] {
-        IronPetSection.shown(chat: session != nil, transcripts: true, automations: true, today: model.todayShown)
+        IronPetSection.shown(chat: session != nil, voice: hasVoice, transcripts: true, automations: true, today: model.todayShown)
     }
 
     private var onChat: Bool { session != nil && model.section == .chat }
@@ -508,6 +515,10 @@ struct IronPetWindowView: View {
     var settings: SettingsModel?
     /// The Today page's content. Nil in tests that do not show it.
     var brief: BriefModel?
+    /// Voice mode's conversation, for the Voice page. Nil in previews and tests that do not show it; its row is hidden then.
+    var voice: VoiceConversation?
+    /// The Voice page's past conversations. Sample threads in previews.
+    var voiceThreads: @Sendable () -> [ChatThread] = { ThreadStore.voice() }
     let actions: SessionActions
     @ObservedObject private var config = ConfigStore.shared
 
@@ -551,7 +562,8 @@ struct IronPetWindowView: View {
     }
 
     private var shown: [IronPetSection] {
-        IronPetSection.shown(chat: chat != nil, transcripts: meetings != nil, automations: settings != nil, today: model.todayShown)
+        IronPetSection.shown(chat: chat != nil, voice: voice != nil, transcripts: meetings != nil, automations: settings != nil,
+                             today: model.todayShown)
     }
 
     private var collapsed: Bool { model.sidebarCollapsed }
@@ -678,6 +690,11 @@ struct IronPetWindowView: View {
             VStack(spacing: 0) {
                 switch model.section {
                 case .chat: EmptyView()
+                case .voice:
+                    if let voice {
+                        VoiceSection(conversation: voice, onToggle: actions.onVoiceToggle, onOpenThread: actions.onOpenThread,
+                                     onOpenSettings: actions.onVoiceSettings, loadThreads: voiceThreads)
+                    }
                 case .agents: AgentsSection(store: store, onJump: actions.onJump)
                 case .alerts: AlertsSection(signals: signals, onAsk: actions.onAsk)
                 case .tasks:
@@ -730,6 +747,10 @@ struct SessionActions {
     var onScreenSettings: () -> Void = {}
     /// A row of the Today page.
     var onBriefOpen: (Brief.Target) -> Void = { _ in }
+    /// The Voice page's button: starts or ends a conversation.
+    var onVoiceToggle: () -> Void = {}
+    /// Opens Settings on the Voice tab.
+    var onVoiceSettings: () -> Void = {}
 
     static let none = SessionActions(onJump: { _ in }, onAsk: { _ in }, onTrick: { _ in }, onTellGhost: { _ in },
                                      onOpenThread: { _ in }, onOpenSession: { _ in })

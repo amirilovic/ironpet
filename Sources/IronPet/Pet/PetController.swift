@@ -31,6 +31,8 @@ final class PetController: NSObject {
     var extraMenuItems: () -> [NSMenuItem] = { [] }
     var onRefresh: ((PetMood) -> Void)?
     var chatMood: () -> PetMood? = { nil }
+    /// A voice conversation's mood, which wins over agents, alerts and nudges while it runs.
+    var voiceMood: () -> PetMood? = { nil }
     var onChatToggle: (() -> Void)?
     /// "Ask Ghost" on an alert: open the chat with this prompt ready to send.
     var onAsk: ((String) -> Void)?
@@ -43,6 +45,11 @@ final class PetController: NSObject {
     var onSettings: (() -> Void)?
     /// Opens Settings on the Screen tab.
     var onScreenSettings: (() -> Void)?
+    /// Voice mode's conversation for the Voice section, its button, and Settings on the Voice tab. Set before the window
+    /// first opens.
+    var voiceConversation: VoiceConversation?
+    var onVoiceToggle: (() -> Void)?
+    var onVoiceSettings: (() -> Void)?
     /// The Chat section's session and the Transcripts section's meetings. Set before the window first opens.
     var chat: ChatSession?
     var meetings: MeetingLibrary?
@@ -206,6 +213,12 @@ final class PetController: NSObject {
     }
 
     func refreshMood() {
+        if let voice = voiceMood() {
+            lastActivity = Date()
+            view.show(voice, badge: 0)
+            onRefresh?(view.mood)
+            return
+        }
         if let nudge, nudge.until > Date() {
             view.show(nudge.mood, badge: 0)
             onRefresh?(view.mood)
@@ -298,10 +311,17 @@ final class PetController: NSObject {
                 if !isChatVisible { builtWindow?.close() }
                 onScreenSettings?()
             },
-            onBriefOpen: { [weak self] target in self?.openBrief(target) })
+            onBriefOpen: { [weak self] target in self?.openBrief(target) },
+            onVoiceToggle: { [weak self] in self?.onVoiceToggle?() },
+            onVoiceSettings: { [weak self] in
+                guard let self else { return }
+                if !isChatVisible { builtWindow?.close() }
+                onVoiceSettings?()
+            })
         let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(
             model: windowModel, store: store, signals: signals, tasks: taskList, chat: chat, meetings: meetings,
-            settings: settings, brief: brief, actions: actions))
+            settings: settings, brief: brief, voice: voiceConversation, actions: actions))
+        window.hasVoice = voiceConversation != nil
         window.onVisibilityChange = { [weak self] visible in
             guard let self else { return }
             syncChat()

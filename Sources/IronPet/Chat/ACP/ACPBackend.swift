@@ -138,6 +138,9 @@ final class ACPBackend {
     private var promptInFlight = false
     /// Counts prompts, so the cancel watchdog only acts on the prompt it was started for.
     private var promptCount = 0
+    /// Every `runTurn` call is numbered; `cancel()` stops all up to `cancelledThrough`, even one still connecting.
+    private var turnCount = 0
+    private var cancelledThrough = 0
     private var onEvent: ((AgentEvent) -> Void)?
     private var tools: [String: ACPToolCall] = [:]
     private var finishedTools: Set<String> = []
@@ -175,6 +178,8 @@ final class ACPBackend {
         // A cancelled turn can still be winding down. Wait for it, but never longer than the cancel watchdog allows.
         for _ in 0..<60 where promptInFlight { try? await Task.sleep(nanoseconds: 100_000_000) }
         self.onEvent = onEvent
+        turnCount += 1
+        let number = turnCount
         var started: Date?
         do {
             try await connect(turn.workspace)
@@ -182,6 +187,8 @@ final class ACPBackend {
             await applyModel(turn.model)
             let blocks = promptBlocks(turn)
             guard let client, let sessionID else { throw ACPError(code: -1, message: "The agent stopped") }
+            // Stopped while connecting or opening the session: the prompt never goes out.
+            guard number > cancelledThrough else { return }
             promptInFlight = true
             promptCount += 1
             defer { promptInFlight = false }
@@ -233,6 +240,7 @@ final class ACPBackend {
     /// Stop: tells the agent to end the turn and keeps its process for the next message.
     func cancel() {
         onEvent = nil
+        cancelledThrough = turnCount
         guard let client, !client.isClosed else { return }
         let waiting = pendingPermissions
         pendingPermissions = [:]
@@ -269,6 +277,17 @@ final class ACPBackend {
         reportedCost = nil
         costAccounted = nil
         costBaselineMissing = false
+    }
+
+    /// Starts the agent process ahead of the first turn, so that turn does not wait for it. Failures show on the turn.
+    func prepare(_ workspace: URL) async {
+        try? await connect(workspace)
+    }
+
+    /// The next turn starts a new agent session on the same process.
+    func startNewSession() {
+        sessionID = nil
+        sessionReady = false
     }
 
     func authenticate(_ method: AuthMethod) async throws {

@@ -18,6 +18,8 @@ struct ChatThread: Codable, Identifiable {
     var runs: Int? = nil
     /// The id of the background job whose transcript this thread holds (`JobService`).
     var job: String? = nil
+    /// True for a voice-mode conversation (`FrontDesk`).
+    var voice: Bool? = nil
 
     var isAutomationRun: Bool { automation != nil }
 }
@@ -82,6 +84,11 @@ enum ThreadStore {
             }
             .prefix(limit)
             .map { $0 }
+    }
+
+    /// Voice-mode conversations, most recent first.
+    static func voice(limit: Int = 20) -> [ChatThread] {
+        Array(all().filter { $0.voice == true }.prefix(limit))
     }
 
     private static func all() -> [ChatThread] {

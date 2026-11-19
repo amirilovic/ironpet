@@ -252,6 +252,33 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(Config.load(from: file).config.jobs.maxRunning, 5)
     }
 
+    func testVoiceModeIsOffAndIsCleanedUp() throws {
+        let defaults = Config()
+        XCTAssertFalse(defaults.voiceMode.enabled)
+        XCTAssertEqual(defaults.hotkeys.voiceMode, "cmd+opt+ctrl+v")
+        XCTAssertEqual(defaults.voiceMode.silenceSeconds, 20)
+        try write(#"{"voiceMode":{"enabled":true,"listenWith":"siri","silenceSeconds":1,"model":"  haiku  "}}"#)
+        var mode = Config.load(from: file).config.voiceMode
+        XCTAssertTrue(mode.enabled)
+        XCTAssertEqual(mode.listenWith, Config.VoiceMode.ironpet)
+        XCTAssertEqual(mode.silenceSeconds, Config.VoiceMode.silenceRange.lowerBound)
+        XCTAssertEqual(mode.model, "haiku")
+        XCTAssertTrue(mode.speakJobUpdates)
+        try write(#"{"voiceMode":{"listenWith":"wispr","silenceSeconds":900}}"#)
+        mode = Config.load(from: file).config.voiceMode
+        XCTAssertEqual(mode.listenWith, Config.VoiceMode.wispr)
+        XCTAssertEqual(mode.silenceSeconds, Config.VoiceMode.silenceRange.upperBound)
+    }
+
+    func testVoiceModeShortcutIsRegisteredOnlyWhileOn() {
+        var config = Config()
+        XCTAssertNil(VoiceModeController.hotkey(in: config))
+        config.voiceMode.enabled = true
+        XCTAssertEqual(VoiceModeController.hotkey(in: config), "cmd+opt+ctrl+v")
+        config.hotkeys.voiceMode = ""
+        XCTAssertNil(VoiceModeController.hotkey(in: config))
+    }
+
     func testPartialTasksKeepOtherDefaults() throws {
         try write(#"{"tasks":{"meetingSuggestions":false}}"#)
         let (config, error) = Config.load(from: file)

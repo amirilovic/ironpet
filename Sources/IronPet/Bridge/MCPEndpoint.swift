@@ -14,16 +14,32 @@ enum MCPEndpoint {
 
     /// The endpoint a background job's session uses. It has every tool except those that start, steer or open jobs.
     nonisolated static let jobPath = "/mcp/job"
-    /// Set to `job` in the stdio bridge's environment to use `jobPath`.
+    /// The endpoint voice mode's session uses. It has every tool; jobs it starts are marked as started by voice.
+    nonisolated static let voicePath = "/mcp/voice"
+    /// Set to `job` or `voice` in the stdio bridge's environment to use `jobPath` or `voicePath`.
     nonisolated static let scopeVariable = "IRONPET_MCP_SCOPE"
     static let jobOnlyHidden: Set<String> = ["jobs_start", "jobs_followup", "jobs_stop", "jobs_open"]
 
+    /// The path the stdio bridge posts to for the scope in its environment.
+    nonisolated static func path(forScope scope: String?) -> String {
+        switch scope {
+        case "job": return jobPath
+        case "voice": return voicePath
+        default: return "/mcp"
+        }
+    }
+
     /// `servers` with ironpet's own entry switched to the job scope.
-    nonisolated static func jobScoped(_ servers: [JSON]) -> [JSON] {
+    nonisolated static func jobScoped(_ servers: [JSON]) -> [JSON] { scoped(servers, "job") }
+
+    /// `servers` with ironpet's own entry switched to the voice scope.
+    nonisolated static func voiceScoped(_ servers: [JSON]) -> [JSON] { scoped(servers, "voice") }
+
+    private nonisolated static func scoped(_ servers: [JSON], _ scope: String) -> [JSON] {
         servers.map { server in
             guard server["name"] as? String == "ironpet" else { return server }
             var server = server
-            server["env"] = (server["env"] as? [JSON] ?? []) + [["name": scopeVariable, "value": "job"]]
+            server["env"] = (server["env"] as? [JSON] ?? []) + [["name": scopeVariable, "value": scope]]
             return server
         }
     }
@@ -41,7 +57,7 @@ enum MCPEndpoint {
     /// Handles one MCP JSON-RPC message. Returns the HTTP status line and body.
     static func handle(_ body: Data, automations: AutomationService?, tasks: TaskStore?, screen: CaptureStore? = nil,
                        desktop: DesktopService? = nil, memory: MemoryMCP.Services? = nil, assistant: AssistantContext? = nil,
-                       caller: String? = nil, jobScope: Bool = false) async -> (status: String, body: Data) {
+                       caller: String? = nil, jobScope: Bool = false, voiceScope: Bool = false) async -> (status: String, body: Data) {
         guard let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let method = message["method"] as? String else {
             return ("400 Bad Request", encode(["jsonrpc": "2.0", "id": NSNull(), "error": ["code": -32700, "message": "parse error"]]))
         }
@@ -71,7 +87,7 @@ enum MCPEndpoint {
             }
             if AssistantMCP.handles(name) {
                 guard let assistant else { return toolResult("ironpet's assistant tools are not available right now", isError: true) }
-                switch AssistantMCP.call(name, arguments, context: assistant) {
+                switch AssistantMCP.call(name, arguments, context: assistant, fromVoice: voiceScope) {
                 case .success(let value): return toolResult(text(value), isError: false)
                 case .failure(let error): return toolResult(error.message, isError: true)
                 }
@@ -129,9 +145,10 @@ enum MCPEndpoint {
         Task { @MainActor in
             let result: (status: String, body: Data)
             switch path {
-            case "/mcp", jobPath:
+            case "/mcp", jobPath, voicePath:
                 result = await handle(body, automations: automations(), tasks: tasks(), screen: screen(), desktop: desktop(),
-                                      memory: memory(), assistant: assistant(), caller: caller, jobScope: path == jobPath)
+                                      memory: memory(), assistant: assistant(), caller: caller, jobScope: path == jobPath,
+                                      voiceScope: path == voicePath)
             case "/tasks":
                 guard let store = tasks() else { return respond("503 Service Unavailable", Data()) }
                 result = TaskMCP.handleCLI(body, store: store)

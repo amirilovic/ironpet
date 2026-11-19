@@ -158,26 +158,34 @@ struct SettingsView: View {
     @ObservedObject private var store = ConfigStore.shared
 
     var body: some View {
-        HStack(spacing: 0) {
-            List(selection: Binding(get: { model.tab }, set: { if let tag = $0 { model.tab = tag } })) {
-                ForEach(Self.pages, id: \.tag) { page in
-                    Label(page.title, systemImage: page.symbol)
-                        .labelStyle(.ironPetSidebar)
-                        .tag(page.tag)
+        // The chat background, as in the main window: the sidebar is glass over it and the pages' forms let it show.
+        ZStack {
+            ChatBackdrop()
+            HStack(spacing: 0) {
+                List(selection: Binding(get: { model.tab }, set: { if let tag = $0 { model.tab = tag } })) {
+                    ForEach(Self.pages, id: \.tag) { page in
+                        Label(page.title, systemImage: page.symbol)
+                            .labelStyle(.ironPetSidebar)
+                            .tag(page.tag)
+                    }
                 }
-            }
-            .listStyle(.sidebar)
-            .frame(width: Self.sidebarWidth)
-            .padding(.top, SettingsHeader.height - 12)
-            .background(.regularMaterial)
-            Divider()
-            VStack(spacing: 0) {
-                content
-                    .padding(.horizontal, 10)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .safeAreaInset(edge: .top, spacing: 0) { SettingsHeader(title: Self.page(model.tab)?.title ?? "Settings") }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+                .frame(width: Self.sidebarWidth)
+                .padding(.top, SettingsHeader.height - 12)
+                .background { Rectangle().fill(.ultraThinMaterial).opacity(IronPetGlass.strength).ignoresSafeArea() }
                 Divider()
-                footer
+                VStack(spacing: 0) {
+                    content
+                        .scrollContentBackground(.hidden)
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .safeAreaInset(edge: .top, spacing: 0) { SettingsHeader(title: Self.page(model.tab)?.title ?? "Settings") }
+                    Divider()
+                    footer
+                }
+                // A photo behind unfilled rows would hide their text; the built-in patterns are faint enough without it.
+                .background { if store.config.chat.background == ChatBackground.customID { Rectangle().fill(.thinMaterial) } }
             }
         }
         .frame(width: Self.width)
@@ -387,7 +395,7 @@ private struct ShortcutRow: View {
                 message = "Use ⌘, ⌥ or ⌃ (Shift alone isn't enough), or a function key."
                 return nil
             }
-            let others = [\Config.Hotkeys.chat, \.captureWindow, \.captureRegion, \.voice, \.meeting].filter { $0 != path }
+            let others = [\Config.Hotkeys.chat, \.captureWindow, \.captureRegion, \.voice, \.meeting, \.voiceMode].filter { $0 != path }
             if others.contains(where: { Shortcut(store.config.hotkeys[keyPath: $0]) == shortcut }) {
                 message = "\(shortcut.display) is already used for another action."
                 return nil
@@ -441,6 +449,7 @@ struct VoiceSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             SpokenReplySettings(speech: model.speech)
+            VoiceModeSettings(model: model)
             Section {
                 TextField("Base URL", text: $baseUrl)
                     .onSubmit(saveServer)
@@ -628,6 +637,84 @@ private struct SpokenReplySettings: View {
             return
         }
         preview(thenEnable: true)
+    }
+}
+
+/// The voice mode section of the Voice page. Turning it on first checks that the server transcribes and speaks.
+private struct VoiceModeSettings: View {
+    @ObservedObject var model: SettingsModel
+    @ObservedObject private var store = ConfigStore.shared
+    @State private var modelName = ConfigStore.shared.config.voiceMode.model
+    @State private var checking = false
+    @State private var result: (ok: Bool, text: String)?
+    @StateObject private var player = SpeechPlayer()
+
+    private var settings: Config.VoiceMode { store.config.voiceMode }
+    private var name: String { store.config.pet.name }
+
+    var body: some View {
+        Section {
+            Toggle("Voice mode", isOn: Binding(get: { settings.enabled }, set: setEnabled))
+                .disabled(checking)
+            if checking {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking that the server can hear and speak…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if let result {
+                Text(result.text)
+                    .font(.caption)
+                    .foregroundStyle(result.ok ? Color.green : Color.red)
+                    .textSelection(.enabled)
+            }
+            Group {
+                ShortcutRow(title: "Voice mode shortcut", path: \.voiceMode, model: model)
+                Picker("Listen with", selection: Binding(get: { settings.listenWith },
+                                                         set: { value in store.update { $0.voiceMode.listenWith = value } })) {
+                    Text("Microphone").tag(Config.VoiceMode.ironpet)
+                    Text("Wispr Flow").tag(Config.VoiceMode.wispr)
+                }
+                if settings.listenWith == Config.VoiceMode.wispr, !WisprBridge.isAvailable {
+                    Text("Wispr Flow isn't installed, or hasn't dictated anything yet.").font(.caption).foregroundStyle(.orange)
+                }
+                TextField("Model", text: $modelName, prompt: Text("The agent's fastest"))
+                    .onSubmit(saveModel)
+                    .onChange(of: modelName) { saveModel() }
+                Stepper(value: Binding(get: { settings.silenceSeconds }, set: { value in store.update { $0.voiceMode.silenceSeconds = value } }),
+                        in: Config.VoiceMode.silenceRange, step: 5) {
+                    Text("End after \(settings.silenceSeconds) s of silence")
+                }
+                Toggle("Speak job updates", isOn: Binding(get: { settings.speakJobUpdates },
+                                                          set: { on in store.update { $0.voiceMode.speakJobUpdates = on } }))
+            }
+            .disabled(!settings.enabled)
+        } header: {
+            Text("Conversation")
+        } footer: {
+            Text("Press the shortcut and talk. \(name) answers out loud and keeps listening until you say bye, press Esc, or stay quiet for the time above; talking over \(name) cuts it off. The microphone is on only during a conversation. What you say goes to the voice server, then to the chat's agent, and the reply goes back to the voice server to be spoken. Longer work goes to background jobs, which run under Auto: anything destructive still waits for you to click Allow, and a spoken yes never approves it. With Wispr Flow, its dictation is sent as soon as it lands and the app you were in gets focus back at the end. Voice mode doesn't listen or speak during calls and meeting recordings.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func saveModel() {
+        let trimmed = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed != settings.model { store.update { $0.voiceMode.model = trimmed } }
+    }
+
+    /// Turning it on transcribes the test clip and speaks one line, so a server that can't do either shows up now.
+    private func setEnabled(_ on: Bool) {
+        result = nil
+        guard on else { return store.update { $0.voiceMode.enabled = false } }
+        checking = true
+        Task {
+            defer { checking = false }
+            switch await VoiceModeController.enable(using: player) {
+            case .on: result = (true, "Voice mode is on.")
+            case .cancelled: break
+            case .failed(let message): result = (false, message)
+            }
+        }
     }
 }
 

@@ -23,6 +23,8 @@ struct Config: Codable, Equatable {
         /// Starts the meeting picker, or stops a running meeting. No default binding. Only registered while meeting
         /// transcripts are on.
         var meeting = ""
+        /// Starts and ends a voice conversation with the pet. Only registered while voice mode is on.
+        var voiceMode = "cmd+opt+ctrl+v"
     }
 
     /// Voice notes: record the mic and send the audio to an OpenAI-compatible transcription server. The API key is
@@ -57,6 +59,25 @@ struct Config: Codable, Equatable {
         static let defaultVoice = "am_puck"
         static let defaultSpeed = 1.0
         static let speedRange = 0.5...2.0
+    }
+
+    /// Voice mode: a spoken conversation with the pet on a shortcut. It listens through ironpet's microphone (or takes
+    /// Wispr Flow's dictation), answers aloud through spoken replies' voice, and hands longer work to background jobs.
+    struct VoiceMode: Codable, Equatable {
+        /// Off by default: it opens the microphone and sends what was said to the voice server and the agent.
+        var enabled = false
+        /// `ironpet` (the app hears when you stop talking) or `wispr` (Wispr Flow's dictation is sent as it lands).
+        var listenWith = VoiceMode.ironpet
+        /// The model the conversation's agent session uses. Empty: the agent's fastest.
+        var model = ""
+        /// The conversation ends after this long with nothing said.
+        var silenceSeconds = 20
+        /// Speak up when a job started by voice finishes, fails or needs an OK.
+        var speakJobUpdates = true
+
+        static let ironpet = "ironpet"
+        static let wispr = "wispr"
+        static let silenceRange = 5...120
     }
 
     /// Meeting transcripts: the mic and one app's audio go to the voice server in chunks, and an agent summarizes the
@@ -278,6 +299,7 @@ struct Config: Codable, Equatable {
     var welcomeBack = WelcomeBack()
     var voice = Voice()
     var speech = Speech()
+    var voiceMode = VoiceMode()
     var meetings = Meetings()
     var telegram = Telegram()
     var screenCapture = ScreenCapture()
@@ -344,6 +366,9 @@ struct Config: Codable, Equatable {
         if c.speech.voice.isEmpty { c.speech.voice = Speech.defaultVoice }
         c.speech.speed = c.speech.speed.isFinite
             ? min(Speech.speedRange.upperBound, max(Speech.speedRange.lowerBound, c.speech.speed)) : Speech.defaultSpeed
+        if c.voiceMode.listenWith != VoiceMode.wispr { c.voiceMode.listenWith = VoiceMode.ironpet }
+        c.voiceMode.model = c.voiceMode.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        c.voiceMode.silenceSeconds = min(VoiceMode.silenceRange.upperBound, max(VoiceMode.silenceRange.lowerBound, c.voiceMode.silenceSeconds))
         if c.meetings.summaryModel?.trimmingCharacters(in: .whitespaces).isEmpty == true { c.meetings.summaryModel = nil }
         c.meetings.ignoredMicApps = MicIgnoreList.normalized(c.meetings.ignoredMicApps)
         c.screenCapture.retentionDays = min(365, max(1, c.screenCapture.retentionDays))

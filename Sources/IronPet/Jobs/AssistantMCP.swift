@@ -65,10 +65,15 @@ enum AssistantMCP {
     /// Tools that only read ironpet's own state or open a job's thread. They run without an approval, like the task tools.
     nonisolated static let ownTools: Set<String> = ["jobs_list", "jobs_get", "jobs_open", "projects_resolve", "status_overview", "status_sessions",
                                         "status_alerts", "status_today", "status_meetings"]
+    /// Tools that start or steer a job. They ask in a chat without Auto; voice mode runs them, since that is how it hands work off.
+    nonisolated static let jobControl: Set<String> = ["jobs_start", "jobs_followup", "jobs_stop"]
+    static let voiceHoldNote = "It starts \(Int(JobService.voiceHold)) seconds after you have told the user, so they can still say \"cancel that\"."
 
-    static func call(_ name: String, _ args: [String: Any], context: AssistantContext) -> Result<Any, JobError> {
+    /// `fromVoice`: the call came from voice mode's session, whose jobs wait until the pet has answered and
+    /// `JobService.voiceHold` more before they start.
+    static func call(_ name: String, _ args: [String: Any], context: AssistantContext, fromVoice: Bool = false) -> Result<Any, JobError> {
         do {
-            return .success(try run(name, args, context))
+            return .success(try run(name, args, context, fromVoice: fromVoice))
         } catch let error as JobError {
             return .failure(error)
         } catch {
@@ -76,7 +81,7 @@ enum AssistantMCP {
         }
     }
 
-    private static func run(_ name: String, _ args: [String: Any], _ context: AssistantContext) throws -> Any {
+    private static func run(_ name: String, _ args: [String: Any], _ context: AssistantContext, fromVoice: Bool) throws -> Any {
         func string(_ key: String) -> String? { (args[key] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 } }
         func required(_ key: String) throws -> String {
             guard let value = string(key) else { throw JobError(message: "\(key) is required") }
@@ -97,9 +102,12 @@ enum AssistantMCP {
             if candidate.sources.contains(.noProject) {
                 try FileManager.default.createDirectory(at: candidate.url, withIntermediateDirectories: true)
             }
-            let job = try jobs().start(title: try required("title"), prompt: try required("prompt"), folder: candidate.url)
+            let job = try jobs().start(title: try required("title"), prompt: try required("prompt"), folder: candidate.url, fromVoice: fromVoice)
             var object = job.json
             object["project"] = candidate.name
+            if fromVoice {
+                object["note"] = Self.voiceHoldNote
+            }
             return object
         case "jobs_list":
             let cutoff = context.now().addingTimeInterval(-86_400)
@@ -115,7 +123,11 @@ enum AssistantMCP {
             object["recent_steps"] = service.recentSteps(id)
             return object
         case "jobs_followup":
-            return try jobs().followUp(try required("id"), message: try required("message")).json
+            let service = try jobs()
+            let job = try service.followUp(try required("id"), message: try required("message"), fromVoice: fromVoice)
+            var object = job.json
+            if fromVoice, service.isHeld(job.id) { object["note"] = Self.voiceHoldNote }
+            return object
         case "jobs_stop":
             return try jobs().stop(try required("id")).json
         case "jobs_open":

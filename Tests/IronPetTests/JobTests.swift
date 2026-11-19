@@ -120,6 +120,60 @@ final class JobTests: XCTestCase {
         XCTAssertTrue(condition(), "timed out", file: file, line: line)
     }
 
+    func testVoiceJobWaitsForThePetToAnswerThenItsHold() async throws {
+        let jobs = service()
+        jobs.voiceHoldSeconds = 0.1
+        let job = try jobs.start(title: "Fix the flaky test", prompt: "Fix it", folder: folder, fromVoice: true)
+        XCTAssertTrue(jobs.isFromVoice(job.id))
+        XCTAssertEqual(jobs.job(job.id)?.state, .queued)
+        try await Task.sleep(for: .milliseconds(250))
+        // Still held: the pet has not said what it started.
+        XCTAssertTrue(agents.isEmpty)
+        jobs.releaseVoiceHolds()
+        XCTAssertTrue(agents.isEmpty)
+        await until { jobs.job(job.id)?.state == .done }
+        XCTAssertEqual(agents.count, 1)
+    }
+
+    func testAnUnreleasedVoiceJobRunsAfterTheLimit() async throws {
+        let jobs = service()
+        jobs.voiceHoldLimit = 0.1
+        let job = try jobs.start(title: "Fix the flaky test", prompt: "Fix it", folder: folder, fromVoice: true)
+        await until { jobs.job(job.id)?.state == .done }
+        XCTAssertEqual(agents.count, 1)
+    }
+
+    func testAVoiceFollowUpOnAFinishedJobIsHeldToo() async throws {
+        let jobs = service()
+        let job = try jobs.start(title: "Fix the flaky test", prompt: "Fix it", folder: folder)
+        await until { jobs.job(job.id)?.state == .done }
+        XCTAssertFalse(jobs.isFromVoice(job.id))
+        let followed = try jobs.followUp(job.id, message: "Also fix the other one", fromVoice: true)
+        XCTAssertEqual(followed.state, .queued)
+        XCTAssertTrue(jobs.isFromVoice(job.id))
+        let stopped = try XCTUnwrap(jobs.cancelHeldVoiceJob())
+        XCTAssertEqual(stopped.id, job.id)
+        XCTAssertEqual(stopped.state, .stopped)
+        XCTAssertEqual(agents.count, 1)
+    }
+
+    func testCancelThatStopsAHeldVoiceJobBeforeItRuns() async throws {
+        let jobs = service()
+        jobs.voiceHoldSeconds = 0.2
+        let plain = try jobs.start(title: "Plain job", prompt: "Do it", folder: folder)
+        let voice = try jobs.start(title: "Voice job", prompt: "Do it", folder: folder, fromVoice: true)
+        XCTAssertFalse(jobs.isFromVoice(plain.id))
+        let stopped = try XCTUnwrap(jobs.cancelHeldVoiceJob())
+        XCTAssertEqual(stopped.id, voice.id)
+        XCTAssertEqual(stopped.state, .stopped)
+        XCTAssertNil(jobs.cancelHeldVoiceJob())
+        jobs.releaseVoiceHolds()
+        try await Task.sleep(for: .milliseconds(300))
+        // Only the plain job ever got an agent.
+        XCTAssertEqual(agents.count, 1)
+        XCTAssertEqual(jobs.job(voice.id)?.state, .stopped)
+    }
+
     func testAJobsAgentUsesTheJobScopeAndNamesTheJobToMemory() throws {
         let saved = ACPBackend.defaultMCPServers
         defer { ACPBackend.defaultMCPServers = saved }

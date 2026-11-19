@@ -18,7 +18,7 @@ The design is `SPEC.md`. Swift 5.10 tools (Swift 5 language mode), macOS 14 mini
 | `Chat/ACP/` | Agent Client Protocol: JSON-RPC client over stdio (`ACPClient`), one process per chat (`ACPBackend`), runtimes for the bundled adapters and the Bun download (`ACPRuntime`), tool calls and `ApprovalRules` (`ACPToolCall`), the agent catalog (`AgentCatalogData.swift` is generated) |
 | `Memory/` | Ghost's memory: the note format and project keys from the git remote (`MemoryNote`), the `MemoryStore` protocol and the files with `.history` and Undo behind it (`FileMemoryStore`), the search index, reflection cursors and change log in `ironpet.db` (`MemoryIndex`), the preamble (`MemoryPreamble`), the restricted reflection and tidy passes (`MemoryReflector`, `MemoryTidier`) and the `memory_*` MCP tools (`MemoryMCP`). Settings → Memory is `App/MemorySettings.swift` |
 | `Signals/` | GitHub (via `gh`) and Sentry polling and the alert store |
-| `Voice/` | Voice notes: hold-to-talk key, microphone capture and conversion, WAV encoding, the transcription client, the level buffer and waveform bar, the Keychain key. Spoken replies: the speech client, reply-to-speech text and the player |
+| `Voice/` | Voice notes: hold-to-talk key, microphone capture and conversion, WAV encoding, the transcription client, the level buffer and waveform bar, the Keychain key. Spoken replies: the speech client, reply-to-speech text and the player. Voice mode: the conversation state machine (`VoiceConversation`), the echo-cancelled microphone and end-of-speech detection (`ConversationMic`, `VoiceActivity`), the front-desk agent session (`FrontDesk`), the pill and the app wiring (`VoicePill`, `VoiceModeController`) |
 | `Meeting/` | Meeting transcripts: call detection, track sources (mic and ScreenCaptureKit), recorder and chunker, transcript assembly, summary, panel |
 | `Reminders/` | Break reminders scheduler |
 | `Activity/` | The local activity log in `ironpet.db` (`ActivityEvent`, `ActivityLog`), the digest built from it (`ActivityDigest`), away detection and the welcome back summary (`AwayTracker`, `WelcomeBack`) |
@@ -92,7 +92,7 @@ Installed-app and e2e checks change the user's machine (see Ground rules in `SKI
 | `Signals/` | `github`; `sentry` (opt-in, needs Sentry MCP) |
 | MCP gating, `MCPAuthSharing` | `mcp` (opt-in, needs Langfuse MCP) |
 | `SetupWindow`, `SettingsWindow`, `IronPetPanel`, `Config` | `setup`, `settings` (take over the keyboard) |
-| `Voice/` | `voice`, `voice-key` (opt-in, need a local mlx-audio server); `speech` for spoken replies (opt-in, uses a stand-in speech server) |
+| `Voice/` | `voice`, `voice-key` (opt-in, need a local mlx-audio server); `speech` for spoken replies (opt-in, uses a stand-in speech server); `voice-mode` for voice mode (opt-in, one front-desk turn on the chat's agent) |
 | `Meeting/` | `meeting`, `meeting-system` (opt-in) |
 | `Tasks/`, task tools, `IronPet tasks` | `tasks` |
 | `Activity/`, digest bubbles | `welcome-back` |
