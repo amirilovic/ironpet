@@ -13,6 +13,10 @@ final class PetController: NSObject {
     private(set) var view: PetView
     private let store: SessionStore
     private let signals: SignalStore
+    /// The alerts the window shows. Falls back to one over `signals`.
+    var alerts: AlertsAPI?
+    private lazy var fallbackAlerts = AlertsAPI(store: signals)
+    private var alertList: AlertsAPI { alerts ?? fallbackAlerts }
     private let windowModel = IronPetWindowModel()
     private var builtWindow: IronPetPanel?
     /// Built on first use, so it gets the stores the app hands over after `init`.
@@ -247,7 +251,7 @@ final class PetController: NSObject {
     /// already open.
     func showWindow(_ section: IronPetSection?) {
         lastActivity = Date()
-        windowModel.section = section ?? IronPetSection.needingAttention(store: store, signals: signals, tasks: taskList)
+        windowModel.section = section ?? IronPetSection.needingAttention(store: store, alerts: alertList, tasks: taskList)
         settings?.refresh()
         NSApp.activate()
         window.show(near: panel.frame)
@@ -293,7 +297,7 @@ final class PetController: NSObject {
             },
             onBriefOpen: { [weak self] target in self?.openBrief(target) })
         let window = IronPetPanel(model: windowModel, session: chat, content: IronPetWindowView(
-            model: windowModel, store: store, signals: signals, tasks: taskList, chat: chat, meetings: meetings,
+            model: windowModel, store: store, alerts: alertList, tasks: taskList, chat: chat, meetings: meetings,
             settings: settings, brief: brief, actions: actions))
         window.onVisibilityChange = { [weak self] visible in
             guard let self else { return }

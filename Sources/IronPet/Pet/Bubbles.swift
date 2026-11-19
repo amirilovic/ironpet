@@ -123,7 +123,7 @@ final class BubblePanel {
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.hidesOnDeactivate = false
-        host = FirstMouseHostingView(rootView: BubbleStackView(store: store))
+        host = FirstMouseHostingView(rootView: BubbleStackView(api: BubblesAPI(store: store)))
         panel.contentView = host
         store.$bubbles
             .receive(on: RunLoop.main)
@@ -173,32 +173,34 @@ private final class FirstMouseHostingView<Content: View>: NSHostingView<Content>
 }
 
 struct BubbleStackView: View {
-    @ObservedObject var store: BubbleStore
+    @ObservedObject var api: BubblesAPI
     static let padding: CGFloat = 14
     static let tailFromBottom: CGFloat = padding + 20
 
     var body: some View {
-        VStack(alignment: store.petOnLeft ? .leading : .trailing, spacing: 8) {
-            ForEach(store.bubbles) { bubble in
+        VStack(alignment: api.petOnLeft ? .leading : .trailing, spacing: 8) {
+            ForEach(api.bubbles) { bubble in
                 BubbleView(bubble: bubble,
-                           tail: bubble.id == store.bubbles.last?.id ? (store.petOnLeft ? .leading : .trailing) : nil,
-                           dismiss: { store.dismiss(bubble.id) })
-                    .transition(.asymmetric(insertion: .scale(scale: 0.85, anchor: store.petOnLeft ? .bottomLeading : .bottomTrailing)
+                           tail: bubble.id == api.bubbles.last?.id ? (api.petOnLeft ? .leading : .trailing) : nil,
+                           api: api)
+                    .transition(.asymmetric(insertion: .scale(scale: 0.85, anchor: api.petOnLeft ? .bottomLeading : .bottomTrailing)
                                                 .combined(with: .opacity),
                                             removal: .opacity))
             }
         }
         .padding(Self.padding)
-        .animation(.spring(duration: 0.3, bounce: 0.25), value: store.bubbles.map(\.id))
-        .onHover { store.setHovering($0) }
+        .animation(.spring(duration: 0.3, bounce: 0.25), value: api.bubbles.map(\.id))
+        .onHover { api.setHovering($0) }
     }
 }
 
 private struct BubbleView: View {
     let bubble: Bubble
     let tail: HorizontalEdge?
-    let dismiss: () -> Void
+    let api: BubblesAPI
     @State private var hovering = false
+
+    private func dismiss() { try? api.dismiss(bubble.id) }
 
     var body: some View {
         Group {
@@ -215,9 +217,8 @@ private struct BubbleView: View {
         .shadow(color: .black.opacity(0.28), radius: 8, y: 3)
         .contentShape(Rectangle())
         .onTapGesture {
-            guard let tap = bubble.onTap else { return }
-            tap()
-            dismiss()
+            guard bubble.onTap != nil else { return }
+            try? api.press(PressBubbleRequest(bubble: bubble.id))
         }
         .onHover { hovering = $0 }
     }
@@ -281,8 +282,7 @@ private struct BubbleView: View {
 
     private func lineButton(_ line: Bubble.Line) -> some View {
         Button {
-            line.run()
-            dismiss()
+            try? api.press(PressBubbleRequest(bubble: bubble.id, line: line.id.uuidString))
         } label: {
             HStack(spacing: 7) {
                 Image(systemName: line.symbol)
@@ -308,7 +308,7 @@ private struct BubbleView: View {
     }
 
     @ViewBuilder private func button(_ action: Bubble.Action) -> some View {
-        let run = { action.run(); dismiss() }
+        let run: () -> Void = { try? api.press(PressBubbleRequest(bubble: bubble.id, action: action.id.uuidString)) }
         switch action.style {
         case .primary: Button(action.title, action: run).buttonStyle(.borderedProminent)
         case .destructive: Button(action.title, role: .destructive, action: run).buttonStyle(.bordered)

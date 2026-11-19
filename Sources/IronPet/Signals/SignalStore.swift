@@ -3,7 +3,7 @@ import Foundation
 /// An open item that deserves a look: CI that failed, a review waiting on you, a production error. Automations create
 /// them with `alert` actions. The alerts list shows them until they are dismissed or the automation resolves them,
 /// and the most urgent one sets Ghost's mood and badge.
-struct Signal: Identifiable, Equatable {
+struct Signal: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let subtitle: String

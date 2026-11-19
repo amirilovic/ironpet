@@ -245,8 +245,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tasks = TaskStore(database: database)
         TaskStore.shared = tasks
         let service = AutomationService(store: store, engine: engine, database: database)
-        api = IronPetAPI(stores: .init(tasks: tasks, automations: service), events: events)
+        api = IronPetAPI(stores: .init(tasks: tasks, automations: service, signals: signals, bubbles: announcer.bubbles), events: events)
         pet.tasks = api.tasks
+        pet.alerts = api.alerts
+        api.alerts.askHandler = { [weak self] prompt in self?.ask(prompt) }
         setUpDueReminders(tasks)
         setUpWelcomeBack(log, tasks: tasks)
         pet.settings = settingsModel

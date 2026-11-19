@@ -17,11 +17,15 @@ final class IronPetAPI {
     struct Stores {
         var tasks: TaskStore
         var automations: AutomationService
+        var signals: SignalStore
+        var bubbles: BubbleStore
     }
 
     let events: APIEventBus
     let tasks: TasksAPI
     let automations: AutomationsAPI
+    let alerts: AlertsAPI
+    let bubbles: BubblesAPI
 
     init(stores: Stores, events: APIEventBus? = nil) {
         let events = events ?? APIEventBus()
@@ -30,5 +34,9 @@ final class IronPetAPI {
         stores.automations.store.events = events
         tasks = TasksAPI(store: stores.tasks)
         automations = AutomationsAPI(service: stores.automations)
+        stores.signals.events = events
+        stores.bubbles.events = events
+        alerts = AlertsAPI(store: stores.signals)
+        bubbles = BubblesAPI(store: stores.bubbles)
     }
 }

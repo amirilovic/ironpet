@@ -87,37 +87,37 @@ struct AgentsSection: View {
 
 /// The Alerts section: what automations reported, newest first.
 struct AlertsSection: View {
-    @ObservedObject var signals: SignalStore
+    @ObservedObject var alerts: AlertsAPI
     let onAsk: (String) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            alerts
+            list
         }
         .pageHeader(IronPetSection.alerts.title) {
-            if !signals.signals.isEmpty {
-                Button("Clear all") { signals.dismissAll() }
+            if !alerts.alerts.isEmpty {
+                Button("Clear all") { alerts.dismissAll() }
                     .buttonStyle(.borderless)
                     .font(.caption)
             }
         }
     }
 
-    @ViewBuilder private var alerts: some View {
-        if signals.signals.isEmpty {
+    @ViewBuilder private var list: some View {
+        if alerts.alerts.isEmpty {
             EmptyState(symbol: "bell.slash", title: "No alerts",
                        detail: "Alerts from your automations show up here, such as CI, reviews and errors.")
         } else {
             ScrollView {
                 VStack(spacing: 2) {
-                    ForEach(signals.signals) { signal in
+                    ForEach(alerts.alerts) { signal in
                         SignalRow(signal: signal,
                                   onOpen: {
                                       if let url = signal.url { NSWorkspace.shared.open(url) }
-                                      signals.dismiss(signal.id)
+                                      try? alerts.dismiss(signal.id)
                                   },
                                   onAsk: signal.ask.map { prompt in { onAsk(prompt) } },
-                                  onDismiss: { signals.dismiss(signal.id) })
+                                  onDismiss: { try? alerts.dismiss(signal.id) })
                     }
                 }
                 .padding(6)

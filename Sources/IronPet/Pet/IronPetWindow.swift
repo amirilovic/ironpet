@@ -66,10 +66,10 @@ enum IronPetSection: String, CaseIterable, Identifiable {
 
     /// Agents that need the user win; otherwise alerts when there are some and no agent is working, then tasks that
     /// wait on the user or on Add / Skip.
-    @MainActor static func needingAttention(store: SessionStore, signals: SignalStore, tasks: TasksAPI) -> IronPetSection {
+    @MainActor static func needingAttention(store: SessionStore, alerts: AlertsAPI, tasks: TasksAPI) -> IronPetSection {
         if store.ordered.contains(where: { $0.status == .needsInput || $0.status == .failed }) { return .agents }
         let idle = store.ordered.allSatisfy { $0.status != .running }
-        if !signals.signals.isEmpty, idle { return .alerts }
+        if !alerts.alerts.isEmpty, idle { return .alerts }
         if idle, !tasks.suggestions.isEmpty || tasks.all.contains(where: \.needsUser) { return .tasks }
         return .agents
     }
@@ -499,7 +499,7 @@ final class IronPetPanel: NSPanel {
 struct IronPetWindowView: View {
     @ObservedObject var model: IronPetWindowModel
     @ObservedObject var store: SessionStore
-    @ObservedObject var signals: SignalStore
+    @ObservedObject var alerts: AlertsAPI
     @ObservedObject var tasks: TasksAPI
     /// Nil in previews and tests that do not show it; its row is hidden then.
     var chat: ChatSession?
@@ -662,7 +662,7 @@ struct IronPetWindowView: View {
     private func count(_ section: IronPetSection) -> Int {
         switch section {
         case .agents: return store.ordered.count
-        case .alerts: return signals.signals.count
+        case .alerts: return alerts.alerts.count
         case .tasks: return tasks.activeCount + tasks.suggestions.count
         default: return 0
         }
@@ -677,7 +677,7 @@ struct IronPetWindowView: View {
                 switch model.section {
                 case .chat: EmptyView()
                 case .agents: AgentsSection(store: store, onJump: actions.onJump)
-                case .alerts: AlertsSection(signals: signals, onAsk: actions.onAsk)
+                case .alerts: AlertsSection(alerts: alerts, onAsk: actions.onAsk)
                 case .tasks:
                     TaskListView(tasks: tasks, onTellGhost: actions.onTellGhost, onOpenThread: actions.onOpenThread,
                                  onOpenSession: actions.onOpenSession, focus: $model.focusTask)
