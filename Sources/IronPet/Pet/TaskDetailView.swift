@@ -57,16 +57,10 @@ struct TaskDetail: Equatable {
     }
 }
 
-/// Everything stored about a task, shown under its row. Notes render as markdown in selectable text, and links open only on a click.
+/// Everything stored about a suggestion, shown under its row. Notes render as markdown in selectable text, and links open only on a click.
 struct TaskDetailView: View {
     let detail: TaskDetail
     let onOpen: (TaskLink) -> Void
-    /// Set for a task, nil for a suggestion: adds `key=value` (overwriting the key) and removes a key. Throws a message for an invalid key.
-    var onAddLabel: ((String, String) -> String?)? = nil
-    var onRemoveLabel: ((String) -> Void)? = nil
-    @State private var newKey = ""
-    @State private var newValue = ""
-    @State private var labelError: String?
 
     var body: some View {
         ScrollView {
@@ -80,7 +74,6 @@ struct TaskDetailView: View {
                     }
                 }
                 .font(.caption)
-                if onAddLabel != nil || !detail.labels.isEmpty { labelsSection }
                 if !detail.notes.isEmpty {
                     MarkdownView(text: detail.notes, size: 12)
                 }
@@ -116,65 +109,6 @@ struct TaskDetailView: View {
         }
         .frame(maxHeight: 260)
         .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-extension TaskDetailView {
-    @ViewBuilder fileprivate var labelsSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Labels").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            FlowLabels(labels: detail.labels, onRemove: onRemoveLabel)
-            if let onAddLabel {
-                HStack(spacing: 4) {
-                    TextField("key", text: $newKey).frame(width: 80)
-                        .accessibilityLabel("Label key")
-                    Text("=").foregroundStyle(.secondary).accessibilityHidden(true)
-                    TextField("value", text: $newValue).frame(width: 100)
-                        .accessibilityLabel("Label value")
-                        .onSubmit(add)
-                    Button("Add", action: add)
-                        .disabled(newKey.isEmpty || newValue.isEmpty)
-                        .accessibilityLabel("Add label")
-                }
-                .textFieldStyle(.roundedBorder)
-                .controlSize(.small)
-                if let labelError { Text(labelError).font(.caption).foregroundStyle(.red) }
-            }
-        }
-        .font(.caption)
-    }
-
-    fileprivate func add() {
-        guard let onAddLabel else { return }
-        labelError = onAddLabel(newKey, newValue)
-        if labelError == nil { newKey = ""; newValue = "" }
-    }
-}
-
-/// The labels of a task as removable chips, in key order.
-struct FlowLabels: View {
-    let labels: [String: String]
-    var onRemove: ((String) -> Void)?
-
-    var body: some View {
-        let sorted = labels.sorted { $0.key < $1.key }
-        ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 4) {
-            ForEach(sorted, id: \.key) { key, value in
-                HStack(spacing: 3) {
-                    Text("\(key)=\(value)").textSelection(.enabled)
-                    if let onRemove {
-                        Button { onRemove(key) } label: { Image(systemName: "xmark.circle.fill") }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Remove label \(key)")
-                            .help("Remove \(key)")
-                    }
-                }
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(Capsule().fill(Color.primary.opacity(0.08)))
-            }
-        }
-        }
     }
 }
 

@@ -18,6 +18,7 @@ struct TaskListView: View {
     @State private var highlighted: String?
     /// The label the list is filtered by, as `key=value`. Nil shows every task.
     @State private var labelFilter: String?
+    @State private var nav = TaskNavigation()
 
     enum Content: Equatable { case unavailable, empty, list }
 
@@ -25,6 +26,21 @@ struct TaskListView: View {
     static func content(unavailable: Bool, isEmpty: Bool) -> Content { !isEmpty ? .list : unavailable ? .unavailable : .empty }
 
     var body: some View {
+        // The list stays in the hierarchy under the detail page so its scroll position survives opening a task.
+        ZStack {
+            listPage
+                .opacity(nav.openTask == nil ? 1 : 0)
+                .allowsHitTesting(nav.openTask == nil)
+                .accessibilityHidden(nav.openTask != nil)
+            if let id = nav.openTask {
+                TaskDetailPage(tasks: tasks, id: id, onBack: { nav.close() }, onOpen: open(_:))
+                    .background(Color(nsColor: .windowBackgroundColor).opacity(0.001))
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private var listPage: some View {
         VStack(spacing: 0) {
             if let reason = tasks.unavailable {
                 DatabaseBanner(reason: reason)
@@ -161,14 +177,7 @@ struct TaskListView: View {
                 onDone: { _ = try? tasks.close(task.id, by: "user") },
                 onDelete: { try? tasks.delete(task.id, by: "user") },
                 onOpen: open(_:),
-                history: { tasks.history(task.id) },
-                onAddLabel: { key, value in
-                    do {
-                        _ = try tasks.update(task.id, addLabels: try TaskValidator.labels([key: value]), by: "user")
-                        return nil
-                    } catch { return (error as? TaskError)?.message ?? error.localizedDescription }
-                },
-                onRemoveLabel: { key in _ = try? tasks.update(task.id, removeLabels: [key], by: "user") })
+                onShow: { nav.open(task.id) })
             .background {
                 if highlighted == task.id { RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.18)) }
             }
@@ -179,6 +188,7 @@ struct TaskListView: View {
     private func reveal(_ id: String?, _ proxy: ScrollViewProxy) {
         guard let id, let task = tasks.task(id) else { return }
         focus.wrappedValue = nil
+        nav.close()
         if task.status == .done { showDone = true }
         highlighted = id
         DispatchQueue.main.async {
@@ -217,19 +227,12 @@ struct TaskListView: View {
     }
 
     private func open(_ link: TaskLink) {
-        switch link.kind {
-        case .url:
-            // Validated on the way in; checked again because the database is a file anyone can edit.
-            guard let url = URL(string: link.ref), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
-            NSWorkspace.shared.open(url)
-        case .file:
-            // Reveal rather than open: an agent wrote the path, and opening could launch an app or a script.
-            let url = URL(fileURLWithPath: (link.ref as NSString).expandingTildeInPath)
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-        case .thread:
-            onOpenThread(link.ref)
-        case .session:
-            onOpenSession(link.ref)
+        switch TaskLinkRow(link: link).action {
+        case .openURL(let url): NSWorkspace.shared.open(url)
+        case .revealFile(let url): NSWorkspace.shared.activateFileViewerSelecting([url])
+        case .openThread(let ref): onOpenThread(ref)
+        case .openSession(let ref): onOpenSession(ref)
+        case .none: break
         }
     }
 }
@@ -241,16 +244,12 @@ private struct TaskRow: View {
     let onDone: () -> Void
     let onDelete: () -> Void
     let onOpen: (TaskLink) -> Void
-    let history: () -> [TaskEvent]
-    let onAddLabel: (String, String) -> String?
-    let onRemoveLabel: (String) -> Void
+    let onShow: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
-    @State private var expanded = false
-    @State private var events: [TaskEvent] = []
-    @FocusState private var focused: Bool
 
     private static let maxLinkButtons = 3
+    private static let maxChips = 3
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -262,12 +261,6 @@ private struct TaskRow: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 details
-                if expanded {
-                    TaskDetailView(detail: TaskDetail(task: task, history: events), onOpen: onOpen,
-                                   onAddLabel: onAddLabel, onRemoveLabel: onRemoveLabel)
-                        .padding(.top, 4)
-                        .onTapGesture {}
-                }
             }
             Spacer(minLength: 4)
             if !task.links.isEmpty {
@@ -283,24 +276,12 @@ private struct TaskRow: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture { toggle() }
-        .focusable(expanded)
-        .focused($focused)
-        .focusEffectDisabled()
-        .onExitCommand { if expanded { toggle() } }
+        .onTapGesture(perform: onShow)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         .contextMenu { menu }
         .accessibilityElement(children: .contain)
-        .accessibilityAction(named: expanded ? "Hide details" : "Show details", toggle)
+        .accessibilityAction(named: "Show details", onShow)
         .accessibilityAction(named: "Delete", onDelete)
-        .onChange(of: task.updated) { if expanded { events = history() } }
-    }
-
-    private func toggle() {
-        // Read the history once per open, not on every redraw (hovering redraws the row).
-        if !expanded { events = history() }
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { expanded.toggle() }
-        focused = expanded
     }
 
     private var details: some View {
@@ -315,16 +296,18 @@ private struct TaskRow: View {
                 Text("·").accessibilityHidden(true)
                 Label(waiting, systemImage: "person.badge.clock").labelStyle(DueLabelStyle())
             }
-            if !task.labels.isEmpty {
-                Text("·").accessibilityHidden(true)
-                Label(TaskStore.describe(task.labels), systemImage: "tag").labelStyle(DueLabelStyle())
-            }
             if let due = task.dueLabel(now: now) {
                 Text("·").accessibilityHidden(true)
                 Label(due, systemImage: overdue ? "exclamationmark.circle.fill" : "calendar")
                     .labelStyle(DueLabelStyle())
                     .foregroundStyle(overdue ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
             }
+            ForEach(Array(task.labels.sorted { $0.key < $1.key }.prefix(Self.maxChips)), id: \.key) { key, value in
+                Text("\(key)=\(value)")
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.primary.opacity(0.08)))
+            }
+            if task.labels.count > Self.maxChips { Text("+\(task.labels.count - Self.maxChips)") }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
