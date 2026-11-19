@@ -326,3 +326,13 @@ enum TaskValidator {
         }
     }
 }
+
+/// Relative times for task rows. A time up to a minute ahead of the clock, or less than a second behind it, reads "just now"
+/// instead of "in 0 sec.", because a task is stamped by one clock read and drawn by a later one.
+enum TaskTime {
+    static func relative(_ date: Date, now: Date = Date()) -> String {
+        let delta = date.timeIntervalSince(now)
+        if delta > -1, delta < 60 { return "just now" }
+        return date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))
+    }
+}

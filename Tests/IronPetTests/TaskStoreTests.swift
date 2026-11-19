@@ -33,6 +33,17 @@ final class TaskStoreTests: XCTestCase {
         return store
     }
 
+    func testLabelEditsPublishTheNewUpdatedTime() throws {
+        let id = try store.create(title: "Ship", source: .user, by: "user").id
+        advance(30)
+        _ = try store.update(id, addLabels: ["team": "core"], by: "user")
+        XCTAssertEqual(store.task(id)?.updated, clock)
+        advance(30)
+        _ = try store.update(id, removeLabels: ["team"], by: "user")
+        XCTAssertEqual(store.task(id)?.updated, clock)
+        XCTAssertEqual(store.task(id)?.labels, [:])
+    }
+
     private func advance(_ seconds: TimeInterval) { clock = clock.addingTimeInterval(seconds) }
 
     private func day(_ text: String) -> Date {

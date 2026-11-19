@@ -310,7 +310,7 @@ private struct TaskRow: View {
             Image(systemName: task.source.symbol)
                 .font(.system(size: 10))
                 .accessibilityLabel("From \(task.source.rawValue)")
-            Text((task.closed ?? task.updated).formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
+            Text(TaskTime.relative(task.closed ?? task.updated, now: now))
             if let waiting = task.waitingLabel {
                 Text("·").accessibilityHidden(true)
                 Label(waiting, systemImage: "person.badge.clock").labelStyle(DueLabelStyle())
@@ -381,7 +381,7 @@ private struct SuggestionRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 5) {
                     Image(systemName: suggestion.source.symbol).font(.system(size: 10)).accessibilityHidden(true)
-                    Text("\(suggestion.originLabel), \(suggestion.created.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))")
+                    Text("\(suggestion.originLabel), \(TaskTime.relative(suggestion.created))")
                     if let waiting = suggestion.waitingLabel {
                         Text("·").accessibilityHidden(true)
                         Label(waiting, systemImage: "person.badge.clock").labelStyle(DueLabelStyle())
