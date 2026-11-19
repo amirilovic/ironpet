@@ -164,7 +164,7 @@ struct MemorySettingsBody: View {
     private var learningSection: some View {
         Section {
             Toggle("Learn from chats", isOn: Binding(get: { config.reflect }, set: { on in store.update { $0.memory.reflect = on } }))
-                .help("A chat goes to its own agent, a meeting summary to the summary agent and an automation's answer to the agent that ran it. The agent only answers: no tools, a scratch folder, every permission refused. Summaries and automation answers can teach about people and projects, never about you. Notes with keys or passwords are never saved.")
+                .help("A chat goes to its own agent, a meeting summary to the summary agent and an automation's answer to the agent that ran it. The agent only answers: no tools, a scratch folder, every permission refused. Summaries and automation answers can only add notes about people. Notes with keys or passwords are never saved.")
             Picker("Agent", selection: Binding(get: { config.reflectAgent ?? "" }, set: setAgent)) {
                 Text("Same as the chat (recommended)").tag("")
                 ForEach(agents) { agent in Text(agent.name).tag(agent.id) }
@@ -332,7 +332,7 @@ Text("When a chat goes quiet, \(petName) sends its new messages to the agent tha
         } header: {
             Text("Data")
         } footer: {
-            Text("Everything stays on this Mac, in ~/.ironpet/memory and ironpet.db.")
+            Text("Stored on this Mac in ~/.ironpet/memory and ironpet.db. Each new chat's agent gets the notes.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

@@ -86,15 +86,24 @@ final class MemoryReflector {
 
     /// A turn ended in this thread. It is read once it has been quiet for `quietMinutes`.
     func turnEnded(thread: String) {
-        guard automatic, config().reflect else { return }
+        guard automatic else { return }
+        guard config().reflect else { return markRead(thread) }
         due[thread] = now().addingTimeInterval(Double(config().quietMinutes) * 60)
     }
 
     /// The user started a new chat or opened another thread: this one is read now.
     func left(thread: String) {
-        guard automatic, config().reflect else { return }
+        guard automatic else { return }
         due[thread] = nil
+        guard config().reflect else { return markRead(thread) }
         enqueue(.thread(thread))
+    }
+
+    /// Moves the thread's cursor past what it holds now, so what was said while learning was off, or to an agent the user did not
+    /// pick, is never read later.
+    private func markRead(_ thread: String) {
+        guard let last = threads(thread)?.items.last else { return }
+        index.setCursor(thread, item: last.id.uuidString, at: now())
     }
 
     /// `agent` is the summary agent that wrote it.
@@ -268,6 +277,7 @@ final class MemoryReflector {
         var outcome = Outcome(job: job)
         let config = config()
         guard config.reflect, let input = input(for: job), let found = config.reader(for: input.agent) else {
+            if config.reflect, let input = input(for: job), let cursor = input.cursor { index.setCursor(cursor.key, item: cursor.item, at: now()) }
             outcome.skipped = true
             return outcome
         }

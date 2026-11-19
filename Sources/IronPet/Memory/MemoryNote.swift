@@ -22,9 +22,7 @@ struct MemoryNote: Equatable, Hashable {
 
     var line: String { date.map { "- \(text) <!-- \($0) \(source) -->" } ?? "- \(text)" }
 
-    /// A chat, a background job, the user or an agent in a chat. Meeting summaries and automation runs carry text other people wrote.
-    var isFromOutside: Bool { Self.isOutside(source) }
-
+    /// Meeting summaries and automation runs carry text other people wrote; chats, background jobs, the user and agents in a chat don't.
     static func isOutside(_ source: String) -> Bool { source.hasPrefix("meeting:") || source.hasPrefix("automation:") }
 
     static func parse(_ line: String) -> MemoryNote? {

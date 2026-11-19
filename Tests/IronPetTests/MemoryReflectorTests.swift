@@ -200,9 +200,11 @@ final class MemoryReflectorTests: XCTestCase {
         XCTAssertTrue(prompts.isEmpty, "the chat used Cursor, the automation Codex and the summary Cursor; the picked agent is Claude Code")
         XCTAssertEqual(reflector.lastOutcome?.skipped, true)
         config.reflectAgent = "cursor"
+        threads["c1"]?.items.append(.init(kind: .user("I moved to fish")))
         reflector.left(thread: "c1")
         await waitIdle()
         XCTAssertEqual(readers, [.init(agent: "cursor", model: nil)], "with Cursor picked, its chats are read")
+        XCTAssertFalse(prompts[0].contains("I use zsh"), "what was skipped stays unread")
     }
 
     func testAFailedTidyIsNotRetriedUntilTheFileChanges() async throws {
@@ -281,6 +283,19 @@ final class MemoryReflectorTests: XCTestCase {
         XCTAssertTrue(texts.contains("New C"), "3 + 2 fits")
         XCTAssertEqual(texts.filter { $0.hasPrefix("Old fact") }.count, 3)
         XCTAssertTrue(reflector.lastOutcome?.dropped.contains { $0.contains("already replaced") } == true)
+    }
+
+    func testWhatIsSaidWhileLearningIsOffIsNeverRead() async {
+        config.reflect = false
+        chat("t1", [.init(kind: .user("My bank PIN hint is the cat")), .init(kind: .assistant("OK"))])
+        reflector.turnEnded(thread: "t1")
+        config.reflect = true
+        threads["t1"]?.items.append(.init(kind: .user("I prefer dark mode")))
+        reflector.left(thread: "t1")
+        await waitIdle()
+        XCTAssertEqual(prompts.count, 1)
+        XCTAssertFalse(prompts[0].contains("bank PIN"))
+        XCTAssertTrue(prompts[0].contains("I prefer dark mode"))
     }
 
     func testFirstLaunchMarksEarlierChatsAsReadBeforeAnyTrigger() async {

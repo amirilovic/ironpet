@@ -36,6 +36,8 @@ struct MeetingReplacement {
     var mode: RegenerationMode
     var previousSummary: String?
     var summary: String
+    /// The summary agent that wrote it, read before the run, since the setting may change while it runs.
+    var agent: String? = nil
 }
 
 /// Reads a meeting folder's audio chunks and the facts the transcript header needs.
@@ -189,12 +191,13 @@ final class MeetingRegenerator: ObservableObject {
             text = existing
         }
         progress = RegenerationProgress(stage: .summarising)
-        let answer = try await summarize(text, meetingConfig(), folder).trimmingCharacters(in: .whitespacesAndNewlines)
+        let config = meetingConfig()
+        let answer = try await summarize(text, config, folder).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty else { throw RegenerationError(message: "The agent returned no text, so nothing was replaced.") }
         var summary = answer + "\n"
         if let previous { summary = ActionItems.carryChecked(from: previous, into: summary) }
         try Self.replace(in: folder, transcript: transcript, summary: summary)
-        return MeetingReplacement(folder: folder, mode: mode, previousSummary: previous, summary: summary)
+        return MeetingReplacement(folder: folder, mode: mode, previousSummary: previous, summary: summary, agent: config.summaryAgent)
     }
 
     /// Transcribes the chunks in meeting order, and when speaker recognition is on, names the voices on the Them track.

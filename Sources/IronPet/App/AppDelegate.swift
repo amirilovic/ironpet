@@ -146,7 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         meeting.onOpenInChat = { [weak self] files in self?.openMeetingInChat(files) }
         meetings.onDeleted = { folder in FileMemoryStore.shared.index?.removeMeeting(folder) }
         meetings.regenerator.onReplaced = { [weak self] replaced in
-            self?.memorySawMeeting(replaced.folder, agent: nil)
+            self?.memorySawMeeting(replaced.folder, agent: replaced.agent)
             self?.meetings.reload()
             // Only items the old summary did not have: the user may have skipped the others.
             self?.offerTasks(ActionItems.newSuggestions(old: replaced.previousSummary, new: replaced.summary), meeting: replaced.folder)
