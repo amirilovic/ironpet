@@ -71,8 +71,6 @@ final class AutomationService {
     var sendToChat: ((_ automationID: String, _ message: String) -> Bool)?
     /// True while a message from this automation is queued or running in the chat.
     var chatRunPending: (_ automationID: String) -> Bool = { _ in false }
-    /// True when `~/.ironpet/HEARTBEAT.md` has at least one entry. A `/heartbeat` prompt is skipped without one.
-    var checklistHasEntries: () -> Bool = { true }
     /// Builds a `digest` action's brief or recap from data on this Mac. Nil when the stores are not ready. `slot` is the
     /// daily slot being delivered, so a recap caught up after midnight covers the slot's day; nil for Run now.
     var digest: (_ kind: Brief.Kind, _ automation: Automation, _ slot: Date?) -> Brief? = { _, _, _ in nil }
@@ -312,11 +310,6 @@ final class AutomationService {
             if a.trigger.type != "stream" { pending[a.id] = fire }
             record(a.id, "waiting", "waiting for approval")
             askApproval(a)
-            return false
-        }
-        if a.action.type == "prompt", a.action.prompt?.trimmingCharacters(in: .whitespacesAndNewlines) == AutomationDefaults.heartbeatPrompt,
-           !checklistHasEntries() {
-            record(a.id, "skipped", "skipped: empty checklist")
             return false
         }
         let values = templateValues(a, item: fire.item, count: fire.count)

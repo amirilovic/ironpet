@@ -239,10 +239,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Builds the automation service: the file, the clock and the places an automation can show or run something.
     private func setUpAutomations() {
-        HeartbeatChecklist.ensureExists()
         let store = AutomationStore(defaults: { [config] in
             AutomationMigration.defaults(from: config.config, sentryConfigured: AutomationDefaults.sentryConfigured)
         }, builtIns: AutomationDefaults.builtIns)
+        HeartbeatRemoval.runOnce(store: store)
         let engine = AutomationEngine(env: .init(
             now: { [weak self] in Date().addingTimeInterval(self?.testClockOffset ?? 0) },
             isAgentWorking: { [weak self] in
@@ -345,7 +345,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.memorySawAutomation(id, answer: answer, agent: self.chat.agent.id)
         }
-        service.checklistHasEntries = { HeartbeatChecklist.hasEntries() }
         chat.quietReply = { [weak store] id in store?.automations.first { $0.id == id }?.action.quiet }
         setUpBrief(service, tasks: tasks)
         service.sendToChat = { [weak self] id, message in self?.chat.submitFromAutomation(message, automation: id) ?? false }

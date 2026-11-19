@@ -334,29 +334,10 @@ final class SkillInstallerTests: XCTestCase {
         XCTAssertEqual(found, real, "the skill names exactly the screen tools the endpoint has")
     }
 
-    // S5
-    func testHeartbeatSkillInstallsAndUpdatesAndTheInstallerNeverWritesTheChecklist() throws {
-        let skill = try XCTUnwrap(BundledSkills.named("heartbeat"))
-        for phrase in ["~/.ironpet/HEARTBEAT.md", "automations_history", "ironpet-tasks", "HEARTBEAT_OK", "never this skill"] {
-            XCTAssertTrue(skill.content.contains(phrase), phrase)
-        }
-        try mkdir(".claude")
-        try SkillManager(home: home).install(names: ["heartbeat"])
-        XCTAssertEqual(skillFile(".agents/skills/heartbeat"), skill.content)
-        XCTAssertEqual(linkDestination(".claude/skills/heartbeat"), "../../.agents/skills/heartbeat")
-        try "---\nname: heartbeat\ndescription: old\n---\nold\n"
-            .write(to: home.appendingPathComponent(".agents/skills/heartbeat/SKILL.md"), atomically: true, encoding: .utf8)
-        XCTAssertEqual(SkillManager(home: home).updateInstalled(), ["heartbeat"])
-        XCTAssertEqual(skillFile(".claude/skills/heartbeat"), skill.content)
-        _ = try? installer.install()
-        let found = FileManager.default.enumerator(atPath: home.path)?.compactMap { $0 as? String }.filter { $0.hasSuffix("HEARTBEAT.md") } ?? []
-        XCTAssertTrue(found.isEmpty, "the skill installer wrote \(found)")
-    }
-
-    // S6
-    func testTheSystemPromptPointsToTheChecklist() {
+    func testTheSystemPromptTellsTheAgentToCreateAnAutomationForRegularChecks() {
         let prompt = MemoryPreamble.taskInstructions
-        XCTAssertTrue(prompt.contains("add it to ~/.ironpet/HEARTBEAT.md. The heartbeat skill explains the format."))
+        XCTAssertFalse(prompt.localizedCaseInsensitiveContains("heartbeat"))
+        XCTAssertTrue(prompt.contains("create an automation with the ironpet-automations skill"))
         XCTAssertTrue(prompt.contains("The ironpet-tasks skill has the rules for tasks and for when you may close one."))
     }
 }
