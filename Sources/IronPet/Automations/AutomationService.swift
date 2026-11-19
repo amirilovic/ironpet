@@ -666,8 +666,8 @@ final class AutomationService {
             switch op {
             case "list": return .success(store.automations.map(summary))
             case "get": return .success(detail(try find(args)))
-            case "create": return .success(detail(try create(args, by: by)))
-            case "update": return .success(detail(try update(args, by: by)))
+            case "create": return .success(withApprovalNote(try create(args, by: by)))
+            case "update": return .success(withApprovalNote(try update(args, by: by)))
             case "delete":
                 let a = try find(args)
                 try store.replace(store.automations.filter { $0.id != a.id })
@@ -788,6 +788,15 @@ final class AutomationService {
         if a.trigger.type == "stream" {
             out["stream"] = engine.streams.status(a.id).rawValue
             if let last = engine.streams.lastEvent(a.id) { out["lastEvent"] = AutomationClock.format(last) }
+        }
+        return out
+    }
+
+    /// The `detail` of a stored automation, plus a `note` for the agent when the user still has to approve it.
+    func withApprovalNote(_ a: Automation) -> [String: Any] {
+        var out = detail(a)
+        if needsApproval(a) {
+            out["note"] = "This change waits for the user's Approve in IronPet before it runs. Tell the user to approve it."
         }
         return out
     }

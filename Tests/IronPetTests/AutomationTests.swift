@@ -557,6 +557,23 @@ final class AutomationApprovalTests: AutomationTestCase {
         XCTAssertTrue(rig.service.needsApproval(rig.store.automations[0]))
     }
 
+    func testCreateAndUpdateResponsesCarryANoteOnlyWhileApprovalIsPending() async {
+        let rig = makeRig()
+        let args: [String: Any] = ["id": "sh", "name": "Shell", "trigger": ["type": "interval", "minutes": 5, "clock": "wall"],
+                                   "action": ["type": "shell", "command": "echo hi"]]
+        guard case .success(let created) = await rig.service.call("create", args, by: "agent:mcp") else { return XCTFail("create failed") }
+        XCTAssertNotNil((created as? [String: Any])?["note"] as? String)
+        rig.service.approve("sh")
+        guard case .success(let same) = await rig.service.call("update", ["id": "sh", "changes": ["name": "Renamed"]], by: "agent:mcp") else { return XCTFail("update failed") }
+        XCTAssertNil((same as? [String: Any])?["note"], "an applied update has no note")
+        guard case .success(let changed) = await rig.service.call("update", ["id": "sh", "changes": ["action": ["command": "echo changed"]]], by: "agent:mcp") else { return XCTFail("update failed") }
+        XCTAssertNotNil((changed as? [String: Any])?["note"] as? String)
+        rig.service.autoApproveEnabled = { true }
+        rig.service.reviewApprovals()
+        guard case .success(let auto) = await rig.service.call("update", ["id": "sh", "changes": ["name": "Again"]], by: "agent:mcp") else { return XCTFail("update failed") }
+        XCTAssertNil((auto as? [String: Any])?["note"])
+    }
+
     func testAutoApproveApprovesAnAgentCreateAndItRunsOnTheNextFire() async {
         let rig = makeRig()
         rig.service.autoApproveEnabled = { true }

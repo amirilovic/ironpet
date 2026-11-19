@@ -39,11 +39,22 @@ Use `once` with a full timestamp. Work out the user's time zone and today's date
   - The prompt is sent as written, so it can be a slash skill: `{"type":"prompt","prompt":"/am-check-emails 1","session":"new","quiet":"NOTHING_NEW","disallowedTools":["Bash(rm:*)"]}` on an hourly `interval` trigger. The skill's own frontmatter picks the model. `model` is an optional override, and with no `model` ironpet forces nothing.
   - `quiet` works the same here: a reply that is exactly that text shows no bubble or notification, and the run still appears in the history and in its thread. Any other reply shows a bubble with the first 600 characters of the answer.
   - Overlapping runs are skipped as before: if the previous run of the automation is still going, that tick is skipped. A `new` or `own` run does not wait for the open chat.
-  - A prompt that uses `{{item.*}}` stays in the read-only background session whatever `session` says, because item text comes from outside. A changed `session`, `allowedTools` or `disallowedTools` needs the user's Approve again, like a changed prompt.
+  - A prompt that uses `{{item.*}}` stays in the read-only background session whatever `session` says, because item text comes from outside.
 - `{"type":"shell","command":"..."}` runs a command and shows its output.
-- `{"type":"digest","digest":"brief"}` (or `"recap"`) shows a bubble with what needs the user today (tasks due, tasks that need them, open alerts, meeting action items, waiting agents), or what happened today (agent turns, closed tasks, resolved alerts, meetings). ironpet builds it from data on the Mac, so no agent runs and it needs no approval. Not for `poll`. Two built-ins use it, `morning-brief` and `day-recap`, off until the user turns them on; turn one on with `automations_resume` instead of creating a copy.
+- `{"type":"digest","digest":"brief"}` (or `"recap"`) shows a bubble with what needs the user today (tasks due, tasks that need them, open alerts, meeting action items, waiting agents), or what happened today (agent turns, closed tasks, resolved alerts, meetings). ironpet builds it from data on the Mac, so no agent runs. Not for `poll`. Two built-ins use it, `morning-brief` and `day-recap`, off until the user turns them on; turn one on with `automations_resume` instead of creating a copy.
 
 Text can use `{{name}}`, `{{now}}`, for `poll` and `stream` `{{item.field}}`, and for `stream` `{{count}}`.
+
+## Put agent instructions in a skill
+
+When an automation needs agent instructions (a top-level `prompt` action, a script's `prompt` action, or an alert's `ask`), write them as a skill at `~/.claude/skills/<name>/SKILL.md`. The frontmatter has a `name` and a `description` that says when to use it. The automation's text is then just `/<name> <args>`, and it passes only the variable data (ids, urls, counts) as arguments.
+
+This keeps the instructions in one place to edit, keeps the automation readable, and lets the user run the same skill by hand.
+
+- A task review automation: `{"type":"prompt","prompt":"/am-ironpet-taskreview","session":"new"}`.
+- An alert in a script: `ask: '/am-betterstack-error ' + app.id + ' ' + pattern`.
+
+Short reminder text in a `bubble` stays inline. The `/am-check-emails 1` prompt under Actions is the same pattern.
 
 ## Reminder examples
 
@@ -119,14 +130,14 @@ Use a `stream` when something already prints events as they happen: `fswatch` fo
 - `debounceSeconds` fires once after that long without a new event, with the latest event, and `{{count}}` is how many events it merged. `throttleSeconds` allows at most one fire in that many seconds. `cooldownMinutes` drops events that come too soon after a fire.
 - While an action is running, ironpet keeps only the newest waiting event and fires it when the action ends. Actions of one automation never overlap.
 - Lines over 64 KiB and more than 20 events a second are dropped and logged. stderr goes to the log and is not an event.
-- ironpet starts the command when the automation is on and approved, and stops it (SIGTERM, then SIGKILL, on the whole process group) when it is paused, deleted or changed, and when ironpet quits. When the command exits, ironpet starts it again after 1 s, then 2 s, 4 s and so on up to 5 minutes. A run of a minute or more resets the wait. Events printed before the first approval are not kept.
+- ironpet starts the command when the automation is on, and stops it (SIGTERM, then SIGKILL, on the whole process group) when it is paused, deleted or changed, and when ironpet quits. When the command exits, ironpet starts it again after 1 s, then 2 s, 4 s and so on up to 5 minutes. A run of a minute or more resets the wait.
 - In a pipeline, make the filter print each line at once: `grep --line-buffered`, `sed -u`, `awk -W interactive`. Otherwise the pipe holds lines back.
 - `automations_get` shows `"stream": "running"`, `"restarting"` or `"stopped"`, and `lastEvent`.
 - A `digest` action does not work with a stream.
 
 ## Safety
 
-- A `shell` action, a `prompt` action, a `script`, a `stream` command or a poll `shell` source that you create or change waits for the user to press **Approve** in a bubble before it first runs, and asks again each time you change it. Tell the user to look for the bubble. Do not try to get around it.
+- When the user has to do something after you create or change an automation, the tool response says so in a `note` field. Pass that on to the user.
 - Never put a secret in an automation. Use an environment variable, or read it at run time, for example `security find-generic-password -s NAME -w` in a `sh` call. Literal tokens are refused.
 - Do not create automations that fire more often than needed. Five minutes is plenty for a watcher.
 - Do not edit `~/.ironpet/ironpet.db`. Edit definitions through the tools or `automations.json`.
@@ -138,7 +149,7 @@ With "Ask the agent to fix automations that fail" on, ironpet starts a chat and 
 1. `automations_get` and `automations_history` show the definition and the recent runs.
 2. Work out the cause. Common ones: a command or tool that is not installed, a login that expired, a changed API response, a script bug.
 3. If the fix is in the automation, change it with `automations_update`, keep its purpose, and check it with `automations_run_now`. If the cause is outside it (a login, a missing tool, the network), tell the user what to do and leave it alone.
-4. Say what you changed. A changed command, script or prompt waits for the user's Approve, so tell them to look for the bubble.
+4. Say what you changed.
 
 Do not touch other automations, and do not turn the failing one off unless the user asks.
 
@@ -146,7 +157,6 @@ Do not touch other automations, and do not turn the failing one off unless the u
 
 - `automations_history` shows the last runs (time, outcome, short output). The full execution log, with exit codes, output and `console.log` lines, is in the app: ironpet window → Automations → Show logs.
 - `automations_run_now` runs it now, outside the schedule. A poll or script runs once. A stream runs its action once with no item. To test the command, run it in a terminal first.
-- A stream that never fires: check `automations_get` for `"approval": "pending"` and for `"stream": "restarting"` (the command keeps exiting, the log shows the exit code and stderr), and that the command prints complete lines promptly.
+- A stream that never fires: check `automations_get` for `"stream": "restarting"` (the command keeps exiting, the log shows the exit code and stderr), and that the command prints complete lines promptly.
 - A script that returns nothing before it has any state stays a "first run". If alerts did not appear, check that the first run was not the one that should have fired.
-- An automation waiting for approval shows `"approval": "pending"` in `automations_get`.
 - Reminders on `clock: "active"` only count while the user is at the keyboard, so they will not fire during a long break. Use `wall` for a fixed schedule.
