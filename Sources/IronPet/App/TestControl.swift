@@ -366,7 +366,7 @@ final class TestControl {
             guard let remote else { return Self.encode(["ok": false, "error": "no remote API"]) }
             return Self.encode(["ok": true, "running": remote.server?.isRunning ?? false, "port": remote.server?.port ?? 0,
                                 "address": remote.server?.secureAddress ?? "", "served_fingerprint": remote.server?.servedFingerprint ?? "",
-                                "addresses": remote.addresses.map(\.label),
+                                "addresses": remote.addresses.map(\.label), "status": String(describing: remote.status),
                                 "devices": remote.service.devices.map { ["id": $0.id, "name": $0.name] }])
         case ("GET", "/test/screen"):
             return screenSnapshot()

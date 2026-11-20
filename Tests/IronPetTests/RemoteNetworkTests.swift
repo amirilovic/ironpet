@@ -1,3 +1,5 @@
+import CryptoKit
+import Security
 import XCTest
 @testable import IronPet
 
@@ -86,10 +88,35 @@ final class RemoteNetworkTests: XCTestCase {
         let first = RemoteIdentity(storage: storage)
         let hash = first.fingerprint
         XCTAssertEqual(RemoteIdentity(storage: storage).fingerprint, hash, "a second launch loads the saved certificate")
-        XCTAssertNoThrow(try first.tlsConfiguration())
         first.rotate()
         XCTAssertNotEqual(first.fingerprint, hash)
         XCTAssertEqual(RemoteIdentity(storage: storage).fingerprint, first.fingerprint)
+    }
+
+    func testTheHandWrittenCertificateParsesAndCarriesTheKey() throws {
+        let key = P256.Signing.PrivateKey()
+        let der = SelfSignedCertificate.der(key: key, commonName: "ironpet", now: Date())
+        let certificate = try XCTUnwrap(SecCertificateCreateWithData(nil, der as CFData), "Security parses the DER")
+        XCTAssertEqual(SecCertificateCopySubjectSummary(certificate) as String?, "ironpet")
+        let publicKey = try XCTUnwrap(SecCertificateCopyKey(certificate))
+        let raw = try XCTUnwrap(SecKeyCopyExternalRepresentation(publicKey, nil) as Data?)
+        XCTAssertEqual(raw, key.publicKey.x963Representation, "the certificate holds the key it is signed with")
+        var trust: SecTrust?
+        XCTAssertEqual(SecTrustCreateWithCertificates(certificate, SecPolicyCreateBasicX509(), &trust), errSecSuccess)
+        XCTAssertNotNil(trust)
+    }
+
+    func testTheTLSKeychainMakesAnIdentityAndCleansUp() throws {
+        let identity = RemoteIdentity(storage: MemoryKeyStorage())
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("ironpet-kc-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let keychain = try RemoteTLSKeychain(identity.material, folder: folder)
+        var certificate: SecCertificate?
+        XCTAssertEqual(SecIdentityCopyCertificate(keychain.identity, &certificate), errSecSuccess)
+        XCTAssertEqual(RemoteHash.hex(SecCertificateCopyData(try XCTUnwrap(certificate)) as Data), identity.fingerprint)
+        keychain.close()
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), [], "the keychain file is gone after close")
     }
 
     func testAnOlderEd25519KeyFileIsReplaced() {
@@ -244,6 +271,32 @@ final class RemoteSecureListenerTests: XCTestCase {
         await h.controller.settled()
         XCTAssertNil(h.controller.server?.secureAddress)
         XCTAssertEqual(h.controller.status, .listening(port: port))
+        await h.controller.server?.stop()
+    }
+
+    func testTheListenerMovesWhileAConnectionIsStillOpen() async throws {
+        let h = RemoteServerHarness(interfaces: [loopback])
+        let port = RemoteServerHarness.freePort()
+        h.api.settings.update { $0.remote.enabled = true; $0.remote.port = port; $0.remote.address = "https://front.example.com" }
+        await h.controller.settled()
+        // A client that keeps its connection open, as a phone's event socket or a front does.
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        XCTAssertEqual(connected, 0)
+        let request = "GET /v1/tasks HTTP/1.1\r\nHost: x\r\n\r\n"
+        _ = request.withCString { send(fd, $0, strlen($0), 0) }
+        var buffer = [UInt8](repeating: 0, count: 512)
+        XCTAssertGreaterThan(recv(fd, &buffer, buffer.count, 0), 0)
+
+        h.api.settings.update { $0.remote.address = "" }
+        await h.controller.settled()
+        XCTAssertEqual(h.controller.status, .listening(port: port), "a closing connection does not block the new listener")
+        XCTAssertEqual(h.controller.server?.secureAddress, loopback.ip)
         await h.controller.server?.stop()
     }
 
