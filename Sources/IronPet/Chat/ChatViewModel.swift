@@ -291,6 +291,11 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: Sending and stopping
 
+    /// True when sending would do something: the draft has non-whitespace text or an attachment. Matches the guard in `sendNow`.
+    var canSend: Bool {
+        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
+    }
+
     /// Sends the draft. The input clears at once; if the chat has no folder yet the draft comes back so nothing is lost.
     func send() { read { await $0.sendNow() } }
 

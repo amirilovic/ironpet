@@ -898,7 +898,7 @@ struct ChatView: View {
 
     // MARK: Composer
 
-    /// Laid out like Telegram: a round attach button, the field in its own glass capsule, round mic and send buttons.
+    /// Laid out like Telegram: a round attach button, the field in its own glass capsule, a round mic button, and a send button inside the capsule while there is something to send.
     private var composer: some View {
         VStack(spacing: 8) {
             // The composer is a bar over the transcript, so the popup floats over the history like Telegram's.
@@ -935,8 +935,6 @@ struct ChatView: View {
                     if session.isRunning {
                         sendButton("stop.fill", color: .red, help: "Stop (Esc)", action: session.stop)
                     }
-                    sendButton("arrow.up", color: .accentColor, help: session.isRunning ? "Queue (Enter)" : "Send (Enter)", action: session.send)
-                        .disabled(session.input.trimmingCharacters(in: .whitespaces).isEmpty && session.attachments.isEmpty)
                 }
             }
         }
@@ -954,10 +952,35 @@ struct ChatView: View {
         }
         .padding(4)
         .frame(minHeight: GlassCircleButtonStyle.size)
+        .overlay(alignment: .bottomTrailing) {
+            if !voiceActive, session.canSend {
+                inlineSendButton
+                    .padding(4)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: session.canSend)
         .chromeGlass(in: RoundedRectangle(cornerRadius: GlassCircleButtonStyle.size / 2, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { if !voiceActive { inputFocused = true } }
         .animation(.easeOut(duration: 0.12), value: inputFocused)
+    }
+
+    /// Width the inline send button takes at the field's trailing edge, so text wraps before it.
+    private static let inlineSendWidth: CGFloat = 28
+
+    private var inlineSendButton: some View {
+        Button(action: session.send) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: Self.inlineSendWidth - 4, height: Self.inlineSendWidth - 4)
+                .tintedCircle(.accentColor)
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .help(session.isRunning ? "Queue (Enter)" : "Send (Enter)")
+        .accessibilityLabel("Send")
     }
 
     private var composerInput: some View {
@@ -1029,7 +1052,8 @@ struct ChatView: View {
                     .onChange(of: session.input) { old, new in session.inputChanged(from: old, to: new) }
                     // The system focus ring is a rectangle; inside the rounded field it showed as a line at each end.
                     .focusEffectDisabled()
-                    .padding(.horizontal, 10)
+                    .padding(.leading, 10)
+                    .padding(.trailing, session.canSend ? Self.inlineSendWidth + 4 : 10)
                     .padding(.vertical, 5)
             }
         }
