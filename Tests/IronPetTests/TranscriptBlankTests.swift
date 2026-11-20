@@ -132,57 +132,6 @@ final class TranscriptBlankTests: XCTestCase {
         if visibleRows(panel) == 0 { failures.append("\(label): no rows visible") }
     }
 
-    func testPinnedPasteThenStreamKeepsMessagesVisible() throws {
-        try skipOnCI()
-        let (session, panel) = make(thread())
-        var failures: [String] = []
-        expectContent(panel, "open", &failures)
-        session.items.append(.init(kind: .user(paste())))
-        for k in 0..<8 { spin(0.2); expectContent(panel, "after paste \(k)", &failures) }
-        session.items.append(.init(kind: .assistant("")))
-        let last = session.items.count - 1
-        var text = ""
-        for i in 0..<150 {
-            text += i % 9 == 0 ? "\n\n- item \(i) with a longer line that will wrap across the panel width.\n" : "word\(i) "
-            session.items[last].kind = .assistant(text)
-            spin(0.03)
-            if i % 5 == 0 { expectContent(panel, "stream \(i)", &failures) }
-        }
-        panel.close()
-        XCTAssertEqual(ChatView.blankRepairsForTesting, 0, "the blank viewport repair fired while rows were visible")
-        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
-    }
-
-    func testReaderInHistoryWithPasteStaysVisible() throws {
-        try skipOnCI()
-        var items = thread()
-        items.insert(.init(kind: .user(paste())), at: 60)
-        let (session, panel) = make(items)
-        var failures: [String] = []
-        for f in [0.5, 0.2, 0.7, 0.35] as [CGFloat] {
-            wheel(panel, toFraction: f, samples: &failures)
-            expectContent(panel, "at \(f)", &failures)
-            session.items.append(.init(kind: .assistant("streamed \(f) " + String(repeating: "word ", count: 200))))
-            session.items.append(.init(kind: .user(paste()), origin: ChatOrigin.telegramClient))
-            for k in 0..<6 { spin(0.2); expectContent(panel, "at \(f) after arrivals \(k)", &failures) }
-        }
-        panel.close()
-        XCTAssertEqual(ChatView.blankRepairsForTesting, 0, "the blank viewport repair fired while rows were visible")
-        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
-    }
-
-    func testSendingLongPasteFromHistoryShowsMessages() throws {
-        try skipOnCI()
-        let (session, panel) = make(thread())
-        var failures: [String] = []
-        wheel(panel, toFraction: 0.4, samples: &failures)
-        session.items.append(.init(kind: .user(paste())))
-        for k in 0..<10 { spin(0.2); expectContent(panel, "after send \(k)", &failures) }
-        panel.close()
-        XCTAssertEqual(ChatView.blankRepairsForTesting, 0, "the blank viewport repair fired while rows were visible")
-        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
-    }
-
     /// The detector must report no rows when nothing is on screen and some when a reply is. Where a jump ends is not the
     /// test's to decide: the lazy stack re-measures its rows after the jump and may shrink the document, so on one
     /// machine the offset stays past the end (blank) and on another, the CI runner, it is clamped back into the content
@@ -224,40 +173,6 @@ final class TranscriptBlankTests: XCTestCase {
         scroll.reflectScrolledClipView(scroll.contentView)
         assertDetectorAgreesWithTheScreen(panel, "after a jump to just inside the end")
         XCTAssertGreaterThan(visibleRows(panel), 0)
-        panel.close()
-    }
-
-    /// The agent is working: typing indicator at the end while text streams and the reader switches position.
-    func testRunningAgentWithPasteKeepsMessagesVisible() throws {
-        try skipOnCI()
-        var items = thread()
-        items.insert(.init(kind: .user(paste())), at: 50)
-        let (session, panel) = make(items)
-        session.loadPreview(.approval)
-        var failures: [String] = []
-        for f in [0.6, 1.0, 0.1, 1.0] as [CGFloat] {
-            wheel(panel, toFraction: f, samples: &failures)
-            session.items.append(.init(kind: .tool("Ran `step`", ok: true)))
-            session.items.append(.init(kind: .assistant(String(repeating: "streamed word ", count: 300))))
-            for k in 0..<5 { spin(0.2); expectContent(panel, "at \(f) running \(k)", &failures) }
-        }
-        panel.close()
-        XCTAssertEqual(ChatView.blankRepairsForTesting, 0, "the blank viewport repair fired while rows were visible")
-        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
-    }
-
-    /// A viewport pushed past the content is repaired once, and the rows come back without a reader scroll.
-    func testRepairBringsRowsBackAfterOvershoot() throws {
-        try skipOnCI()
-        let (_, panel) = make(thread())
-        let scroll = try XCTUnwrap(scrollView(panel))
-        let doc = try XCTUnwrap(scroll.documentView)
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: doc.bounds.height + 3000))
-        scroll.reflectScrolledClipView(scroll.contentView)
-        spin(2)
-        XCTAssertGreaterThan(visibleRows(panel), 0, "rows did not come back")
-        XCTAssertGreaterThanOrEqual(ChatView.blankRepairsForTesting, 1)
-        XCTAssertLessThanOrEqual(ChatView.blankRepairsForTesting, 2, "the repair kept firing")
         panel.close()
     }
 

@@ -74,6 +74,10 @@ final class VoiceConversation: ObservableObject {
     /// The microphone heard speech start and has not cut it yet; job updates wait.
     private var userSpeaking = false
     private let idleLevels = LevelBuffer()
+    /// When the utterance being answered was cut, for the timing marks.
+    private var turnStart: ContinuousClock.Instant?
+    /// The reply being said sentence by sentence, so an interruption can drop the rest.
+    private var replySpeech: ReplySpeaker?
 
     init(frontDesk: FrontDeskTalking) {
         self.frontDesk = frontDesk
@@ -94,6 +98,15 @@ final class VoiceConversation: ObservableObject {
     /// The voice-mode shortcut: starts a conversation, or ends the one in progress.
     func toggle() {
         isActive ? end() : start()
+    }
+
+    /// The voice-mode shortcut during a conversation: while the pet thinks or speaks, it stops and listens; otherwise
+    /// it ends the conversation as `toggle` does.
+    func pressTalk() {
+        guard state == .thinking || state == .speaking else { return toggle() }
+        VoiceTiming.log("talk key: interrupted")
+        interrupt()
+        armSilence()
     }
 
     func start() {
@@ -143,6 +156,8 @@ final class VoiceConversation: ObservableObject {
         silence?.cancel()
         quietWatch?.cancel()
         if state == .thinking { frontDesk.cancel() }
+        replySpeech?.cancel()
+        replySpeech = nil
         speaker?.stop()
         speaker = nil
         mic?.stop()
@@ -221,7 +236,9 @@ final class VoiceConversation: ObservableObject {
         generation += 1
         work?.cancel()
         work = nil
-        if state == .thinking { frontDesk.cancel() }
+        if state == .thinking || replySpeech != nil { frontDesk.cancel() }
+        replySpeech?.cancel()
+        replySpeech = nil
         speaker?.stop()
         mic?.setPlayback(false)
         state = .listening
@@ -230,6 +247,8 @@ final class VoiceConversation: ObservableObject {
     private func heardAudio(_ wav: Data) {
         if state == .transcribing { return queuedAudio.append(wav) }
         guard state == .listening else { return }
+        turnStart = ContinuousClock.now
+        VoiceTiming.log("utterance cut", since: turnStart)
         state = .transcribing
         let current = generation
         work = Task {
@@ -238,6 +257,7 @@ final class VoiceConversation: ObservableObject {
             while !audio.isEmpty {
                 do {
                     let text = try await transcribe(audio.removeFirst())
+                    VoiceTiming.log("transcribed", since: turnStart)
                     if !text.isEmpty { parts.append(text) }
                 } catch is CancellationError {
                     return
@@ -268,6 +288,7 @@ final class VoiceConversation: ObservableObject {
             return
         }
         state = .thinking
+        VoiceTiming.log("reply requested", since: turnStart)
         let filler = Task { [weak self, fillerDelay] in
             try? await Task.sleep(for: .seconds(fillerDelay))
             guard let self, !Task.isCancelled, state == .thinking, current == generation else { return }
@@ -275,25 +296,52 @@ final class VoiceConversation: ObservableObject {
             try? await speaker?.say(Self.fillers.randomElement() ?? "One sec.")
             mic?.setPlayback(false)
         }
-        do {
-            let answer = try await frontDesk.reply(to: text)
+        // Each sentence is said as soon as the reply has written it, so the pet starts talking before the turn ends.
+        let speech = ReplySpeaker { [weak self] sentence in try await self?.speaker?.say(sentence) }
+        speech.onFirstSentence = { [weak self] in
+            guard let self, current == generation else { return }
+            VoiceTiming.log("first sentence", since: turnStart)
             filler.cancel()
-            await filler.value
-            guard current == generation else { return }
+            state = .speaking
+            mic?.setPlayback(true)
+        }
+        speech.onFailure = { [weak self] error in
+            self?.onFailure("The voice server could not speak: \(error.localizedDescription)")
+        }
+        replySpeech = speech
+        do {
+            let answer = try await frontDesk.reply(to: text) { chunk in speech.add(chunk) }
+            filler.cancel()
+            VoiceTiming.log("reply received", since: turnStart)
+            guard current == generation else { return speech.cancel() }
             reply = answer
-            await speak(answer.isEmpty ? "Done." : answer, generation: current)
+            await speech.finish(ifNothingSpoken: answer.isEmpty ? "Done." : answer)
+            guard current == generation else { return }
+            finishSpeaking()
         } catch {
             filler.cancel()
+            speech.cancel()
+            replySpeech = nil
             await filler.value
             guard current == generation, !(error is CancellationError) else { return }
             await speak("Sorry, that didn't work. \(error.localizedDescription)", generation: current)
         }
     }
 
+    /// The reply has been said in full: the pet listens again, after any job update that came in meanwhile.
+    private func finishSpeaking() {
+        replySpeech = nil
+        mic?.setPlayback(false)
+        VoiceTiming.log("speech finished", since: turnStart)
+        releaseHeldJobs()
+        listenAgain()
+    }
+
     private func speak(_ text: String, generation current: Int) async {
         guard current == generation else { return }
         state = .speaking
         mic?.setPlayback(true)
+        VoiceTiming.log("speech started", since: turnStart)
         do {
             try await speaker?.say(text)
         } catch is CancellationError {

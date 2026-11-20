@@ -794,11 +794,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 failed.insert(text)
             }
         }
-        // Start or end a voice conversation. Only registered with voice mode on.
+        // Start a voice conversation, or while one runs, interrupt the pet and listen, or end it. Only registered with voice mode on.
         if let text = VoiceModeController.hotkey(in: config.config) {
             if let shortcut = Shortcut(text) {
                 let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, id: 10) { [weak self] in
-                    MainActor.assumeIsolated { self?.voiceMode.toggle() }
+                    MainActor.assumeIsolated { self?.voiceMode.pressTalk() }
                 }
                 if hotKey.isRegistered { hotKeys.append(hotKey) } else { failed.insert(text) }
             } else {
