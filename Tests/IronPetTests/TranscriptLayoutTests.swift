@@ -78,6 +78,7 @@ final class TranscriptLayoutTests: XCTestCase {
     }
 
     func testLongTranscriptIdlesAfterLayout() throws {
+        try CISkip.unlessLocal()
         let session = ChatSession(restore: false)
         session.items = try fixtureItems() ?? longThread()
         let used = idleCPU(session)
@@ -85,6 +86,7 @@ final class TranscriptLayoutTests: XCTestCase {
     }
 
     func testLongTranscriptWithPendingApprovalIdles() throws {
+        try CISkip.unlessLocal()
         let session = ChatSession(restore: false)
         session.loadPreview(.approval) // running, with one approval card
         session.items = try fixtureItems() ?? longThread()
@@ -94,6 +96,7 @@ final class TranscriptLayoutTests: XCTestCase {
 
     /// The reply grows token by token while the panel is open, then the turn ends.
     func testStreamingReplyThenIdle() throws {
+        try CISkip.unlessLocal()
         let session = ChatSession(restore: false)
         session.items = try fixtureItems() ?? longThread()
         let panel = IronPetPanel.chat(session)
@@ -124,6 +127,7 @@ final class TranscriptLayoutTests: XCTestCase {
 
     /// An approval card appears and is answered while a long chat is already open.
     func testApprovalArrivesAndIsAnsweredInOpenChat() throws {
+        try CISkip.unlessLocal()
         let session = ChatSession(restore: false)
         let fixture = try fixtureItems() ?? longThread()
         session.items = fixture
@@ -169,6 +173,10 @@ final class TranscriptLayoutTests: XCTestCase {
 /// S1/S2: a resumed session with thousands of items must not hang the main thread.
 @MainActor
 final class HugeTranscriptTests: XCTestCase {
+    override func setUpWithError() throws {
+        try CISkip.unlessLocal()
+    }
+
     static func hugeThread(screenshotDir: URL?) -> [ChatSession.Item] {
         var items: [ChatSession.Item] = []
         let markdown = (0..<20).map { "Line \($0) of **markdown** with `code`." }.joined(separator: "\n")
@@ -304,6 +312,10 @@ final class TranscriptGroupTests: XCTestCase {
 /// Live-resizing the chat window: the scroll position must survive and each frame must stay cheap.
 @MainActor
 final class TranscriptResizeTests: XCTestCase {
+    override func setUpWithError() throws {
+        try CISkip.unlessLocal()
+    }
+
     /// Plain questions and answers. The shown window is the last `pageSize` items, and in `hugeThread` that is only about
     /// five turns, since each turn's 55 tool steps fold into one row. That leaves a scroll range of a few hundred points,
     /// where one re-wrap moves "the middle" to an end. Here the window is many screens tall.

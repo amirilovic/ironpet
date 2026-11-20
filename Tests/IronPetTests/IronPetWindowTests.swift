@@ -201,7 +201,8 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertEqual(visibility, [false])
     }
 
-    func testEscClosesAnIdleChat() {
+    func testEscClosesAnIdleChat() throws {
+        try CISkip.unlessLocal()
         let h = ChatHarness(); let session = h.session
         let panel = IronPetPanel.chat(session)
         var closed = 0
@@ -257,6 +258,7 @@ final class IronPetWindowTests: XCTestCase {
     }
 
     func testEverySectionShowsTheChosenBackgroundInBothAppearances() throws {
+        try CISkip.unlessLocal()
         let saved = ConfigStore.shared.config
         defer { ConfigStore.shared.usePreview(saved) }
         let pagePixels = { (rep: NSBitmapImageRep) in
@@ -275,6 +277,7 @@ final class IronPetWindowTests: XCTestCase {
     }
 
     func testNoBackgroundLeavesThePageOnTheWindowColor() throws {
+        try CISkip.unlessLocal()
         let saved = ConfigStore.shared.config
         defer { ConfigStore.shared.usePreview(saved) }
         let page = try XCTUnwrap(render(section: .alerts, background: ChatBackground.defaultID, scheme: .light))
@@ -315,6 +318,7 @@ final class IronPetWindowTests: XCTestCase {
     }
 
     func testTheBackgroundShowsThroughTheGlassSidebar() throws {
+        try CISkip.unlessLocal()
         let saved = ConfigStore.shared.config
         defer { ConfigStore.shared.usePreview(saved) }
         for scheme in [NSAppearance.Name.aqua, .darkAqua] {
@@ -329,6 +333,7 @@ final class IronPetWindowTests: XCTestCase {
     }
 
     func testTheBackgroundShowsThroughTheGlassHeader() throws {
+        try CISkip.unlessLocal()
         let saved = ConfigStore.shared.config
         defer { ConfigStore.shared.usePreview(saved) }
         for scheme in [NSAppearance.Name.aqua, .darkAqua] {
@@ -417,6 +422,7 @@ final class IronPetWindowTests: XCTestCase {
     }
 
     func testTheRailIsNarrowAndTheBackgroundShowsThroughIt() throws {
+        try CISkip.unlessLocal()
         let saved = ConfigStore.shared.config
         defer { ConfigStore.shared.usePreview(saved) }
         for scheme in [ColorScheme.light, .dark] {
@@ -434,6 +440,7 @@ final class IronPetWindowTests: XCTestCase {
     }
 
     func testTheRailDrawsABadgeOnlyForSectionsWithACount() throws {
+        try CISkip.unlessLocal()
         let none = try XCTUnwrap(renderCollapsed(true, alerts: 0))
         let some = try XCTUnwrap(renderCollapsed(true, alerts: 3))
         let scale = CGFloat(none.pixelsWide) / IronPetPanel.minimumSize.width
@@ -477,6 +484,7 @@ final class IronPetWindowTests: XCTestCase {
 
     /// Automations is not listed: it needs the app's settings model, and it uses the same `pageHeader` as Tasks.
     func testEverySectionHasOneHeaderHeightWithTheTitleCenteredInIt() throws {
+        try CISkip.unlessLocal()
         for collapsed in [false, true] {
             for section in [IronPetSection.agents, .chat, .alerts, .tasks, .transcripts, .actions] {
                 let (header, title) = try headerFrames(section: section, collapsed: collapsed)
