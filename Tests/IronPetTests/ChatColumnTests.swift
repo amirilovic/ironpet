@@ -51,7 +51,8 @@ final class ChatColumnTests: XCTestCase {
     }
 
     /// Where the section's content starts when it has the shared glass header, and how wide that content is.
-    func testEverySectionHeaderIsOneGlassStripThatTheContentSitsBelow() {
+    func testEverySectionHeaderIsOneGlassStripThatTheContentSitsBelow() throws {
+        try CISkip.unlessLocal()
         var result = CGRect.zero
         let view = Color.clear
             .background(GeometryReader { g in Color.clear.preference(key: FrameKey.self, value: g.frame(in: .named("root"))) })

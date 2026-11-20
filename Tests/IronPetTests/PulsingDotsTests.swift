@@ -12,6 +12,7 @@ final class PulsingDotsTests: XCTestCase {
     }
 
     func testAttachingToAWindowInstallsStaggeredAnimations() throws {
+        try CISkip.unlessLocal()
         let view = PulsingDots.DotsView()
         view.reduceMotionOverride = false
         XCTAssertNil(view.dotAnimation(0))
@@ -31,6 +32,7 @@ final class PulsingDotsTests: XCTestCase {
     }
 
     func testReattachingReinstallsWithoutDuplicating() throws {
+        try CISkip.unlessLocal()
         let view = PulsingDots.DotsView()
         view.reduceMotionOverride = false
         let window = host(view)

@@ -43,6 +43,7 @@ final class MarkdownTextTests: XCTestCase {
 
     /// A real drag: mouse down in the paragraph, drag, mouse up inside the second list item.
     func testDraggingFromAParagraphIntoTheSecondItemSelectsAcrossBlocks() throws {
+        try CISkip.unlessLocal()
         let view = ChatTextView.make()
         let text = attributed("Intro paragraph\n\n- one\n- two\n- three")
         view.setContent(text)

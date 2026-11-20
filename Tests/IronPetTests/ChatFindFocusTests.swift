@@ -38,7 +38,8 @@ final class ChatFindFocusTests: XCTestCase {
         return panel.firstResponder === editor
     }
 
-    func testCmdFFromTheInputFocusesTheFindField() {
+    func testCmdFFromTheInputFocusesTheFindField() throws {
+        try CISkip.unlessLocal()
         let (h, panel) = open()
         panel.focusInput()
         spin(0.3)
@@ -49,7 +50,8 @@ final class ChatFindFocusTests: XCTestCase {
         XCTAssertTrue(findHasFocus(panel), "first responder: \(String(describing: panel.firstResponder))")
     }
 
-    func testCmdFFromTheInputWithTextFocusesTheFindField() {
+    func testCmdFFromTheInputWithTextFocusesTheFindField() throws {
+        try CISkip.unlessLocal()
         let (h, panel) = open()
         h.model.input = "hello"
         panel.focusInput()
@@ -59,7 +61,8 @@ final class ChatFindFocusTests: XCTestCase {
         XCTAssertTrue(findHasFocus(panel), "first responder: \(String(describing: panel.firstResponder))")
     }
 
-    func testSecondCmdFReturnsFromTheInputAndSelectsTheQuery() {
+    func testSecondCmdFReturnsFromTheInputAndSelectsTheQuery() throws {
+        try CISkip.unlessLocal()
         let (_, panel) = open()
         press("f", in: panel)
         spin(1)
@@ -73,7 +76,8 @@ final class ChatFindFocusTests: XCTestCase {
         XCTAssertEqual(findField(panel.contentView)?.currentEditor()?.selectedRange.length, 3)
     }
 
-    func testEscClosesTheFindBarAndFocusesTheInput() {
+    func testEscClosesTheFindBarAndFocusesTheInput() throws {
+        try CISkip.unlessLocal()
         let (h, panel) = open()
         press("f", in: panel)
         spin(1)

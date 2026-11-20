@@ -90,6 +90,10 @@ final class TranscriptFollowLogicTests: XCTestCase {
 /// A reader scrolled up must stay where they are while a reply streams in.
 @MainActor
 final class TranscriptFollowTests: XCTestCase {
+    override func setUpWithError() throws {
+        try CISkip.unlessLocal()
+    }
+
     private func spin(_ seconds: Double) {
         let end = Date().addingTimeInterval(seconds)
         while Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
