@@ -243,7 +243,7 @@ Open **Settings** (<kbd>⌘,</kbd> or right-click Ghost → Settings…) to rena
   "tasks": { "meetingSuggestions": true, "dueReminders": true, "keepDoneDays": 30 },
   "jobs": { "maxRunning": 3 },
   "welcomeBack": { "enabled": true },
-  "window": { "autoHide": false },
+  "window": { "autoHide": false, "appearance": "system" },
   "integrations": { "shareMCPSignIns": false },
   "voice": { "enabled": false, "baseUrl": "http://localhost:8000/v1", "model": "mlx-community/parakeet-tdt-0.6b-v3" },
   "speech": { "enabled": false, "model": "mlx-community/Kokoro-82M-bf16", "voice": "am_puck" },

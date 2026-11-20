@@ -375,10 +375,23 @@ extension ConfigTests {
         XCTAssertEqual(config.pet.name, "Boo")
         try config.save(to: file)
         let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
-        XCTAssertEqual(saved["window"] as? [String: Bool], ["autoHide": false])
+        let window = try XCTUnwrap(saved["window"] as? [String: Any])
+        XCTAssertEqual(window["autoHide"] as? Bool, false)
+        XCTAssertEqual(window["appearance"] as? String, "system")
         XCTAssertEqual((saved["pet"] as? [String: Any])?["name"] as? String, "Boo")
         config.window.autoHide = true
         try config.save(to: file)
         XCTAssertTrue(Config.load(from: file).config.window.autoHide)
+    }
+
+    func testAnUnknownAppearanceFallsBackToSystem() throws {
+        try """
+        { "window": { "appearance": "neon" } }
+        """.write(to: file, atomically: true, encoding: .utf8)
+        XCTAssertEqual(Config.load(from: file).config.window.appearance, "system")
+        try """
+        { "window": { "appearance": "dark" } }
+        """.write(to: file, atomically: true, encoding: .utf8)
+        XCTAssertEqual(Config.load(from: file).config.window.appearance, "dark")
     }
 }
