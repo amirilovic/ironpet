@@ -4,13 +4,19 @@
   swift build && python3 scripts/remote_check.py [shots-dir]
 
 Pairs like a phone does (code, POST /v1/pair, Allow on the bubble through the test endpoint, poll), then lists tasks, accepts a
-suggestion, opens the event socket and revokes the device. It never touches ~/.ironpet or the installed app.
+suggestion, opens the event socket and revokes the device. That part runs against the loopback listener, as a `tailscale serve`
+front would reach it. Then it moves the listener to this Mac's Wi-Fi address and checks the HTTPS side: which sockets the app
+listens on (never a wildcard address), that the certificate's SHA-256 is the `f` of the pairing link, and, when this Mac can reach
+its own address, that pairing and `GET /v1/tasks` work over TLS with that certificate pinned and that another pin is refused.
+It never touches ~/.ironpet or the installed app.
 """
 import base64
 import hashlib
 import json
 import os
+import re
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -53,6 +59,40 @@ def wait(predicate, timeout=15):
             return value
         time.sleep(0.3)
     return None
+
+
+def listeners(pid):
+    """The local addresses of the TCP sockets the app listens on, as lsof reports them."""
+    out = subprocess.run(["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"], capture_output=True, text=True).stdout
+    return sorted(line[1:] for line in out.splitlines() if line.startswith("n"))
+
+
+def lan_address():
+    for iface in ("en0", "en1"):
+        out = subprocess.run(["ipconfig", "getifaddr", iface], capture_output=True, text=True).stdout.strip()
+        if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", out):
+            return out
+    return None
+
+
+def tls_request(ip, method, path, body=None, token=None, headers=None, pin=None):
+    """One HTTPS request that accepts the server only when the SHA-256 of its certificate is `pin`. Returns (status, json)."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((ip, PORT), timeout=5) as raw, context.wrap_socket(raw) as tls:
+        if hashlib.sha256(tls.getpeercert(binary_form=True)).hexdigest() != pin:
+            raise ssl.SSLError("certificate does not match the pin")
+        payload = json.dumps(body).encode() if body is not None else b""
+        head = {"Host": ip, "Content-Type": "application/json", "Content-Length": str(len(payload)), "Connection": "close", **(headers or {})}
+        if token:
+            head["Authorization"] = f"Bearer {token}"
+        tls.sendall((f"{method} {path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in head.items()) + "\r\n").encode() + payload)
+        data = b""
+        while chunk := tls.recv(65536):
+            data += chunk
+    status = int(data.split(b" ", 2)[1])
+    return status, json.loads(data.split(b"\r\n\r\n", 1)[1] or b"{}")
 
 
 def check(name, ok, detail=""):
@@ -101,7 +141,8 @@ def open_socket(token, since=None):
 
 
 os.makedirs(ROOT, exist_ok=True)
-json.dump({"remote": {"enabled": True, "port": PORT, "baseUrl": "https://mac.example.ts.net"}}, open(f"{ROOT}/config.json", "w"))
+FRONT = "https://mac.example.ts.net"
+json.dump({"remote": {"enabled": True, "port": PORT, "address": FRONT}}, open(f"{ROOT}/config.json", "w"))
 app = subprocess.Popen([BIN, "--test-mode"], env={**os.environ, "IRONPET_ROOT": ROOT})
 try:
     wait(lambda: os.path.exists(f"{ROOT}/port") and os.path.exists(f"{ROOT}/token"), 30)
@@ -109,7 +150,8 @@ try:
     code = control("POST", "/test/remote/code")
     status, pair = remote("POST", "/v1/pair", {"code": code["code"], "device_name": "Check phone"})
     check("pair answers 202", status == 202, str(status))
-    check("fingerprint matches the key", hashlib.sha256(base64.b64decode(pair.get("public_key", ""))).hexdigest() == code["fingerprint"])
+    check("the front link has no certificate pin", code["link"] == f"ironpet://pair?u={FRONT}&c={code['code']}", code["link"])
+    check("only loopback listens before an address is chosen", listeners(app.pid) and all(a.startswith("127.0.0.1:") for a in listeners(app.pid)), str(listeners(app.pid)))
     status, poll = remote("GET", f"/v1/pair/{pair['pairing_id']}", headers={"X-Pairing-Secret": pair["secret"]})
     check("poll is pending before Allow", poll.get("status") == "pending")
     pressed = control("POST", "/test/automations/bubble", {"id": f"remote-pairing:{pair['pairing_id']}", "button": "Allow"})
@@ -148,6 +190,38 @@ try:
     status, _ = remote("DELETE", "/v1/devices/me", token=token)
     check("revoke", status == 200)
     check("revoked token gets 401", remote("GET", "/v1/tasks", token=token)[0] == 401)
+
+    # The Wi-Fi address: HTTPS on it, plain HTTP on loopback, and nothing on a wildcard address.
+    ip = lan_address()
+    if ip is None:
+        print("NOTE no en0 address on this Mac, the HTTPS part was skipped", flush=True)
+    else:
+        json.dump({"remote": {"enabled": True, "port": PORT, "address": ip}}, open(f"{ROOT}/config.json", "w"))
+        moved = wait(lambda: control("GET", "/test/remote").get("address") == ip)
+        check("the listener moves to the chosen address", bool(moved))
+        code = control("POST", "/test/remote/code")
+        check("the link pins the certificate", code["link"] == f"ironpet://pair?u=https://{ip}:{PORT}&c={code['code']}&f={code['fingerprint']}", code["link"])
+        check("the served certificate is the one in the link", control("GET", "/test/remote").get("served_fingerprint") == code["fingerprint"])
+        found = listeners(app.pid)
+        check("nothing listens on a wildcard address", not any(a.startswith(("*:", "0.0.0.0:")) for a in found), str(found))
+        check("the remote port listens on loopback and the chosen address", {f"127.0.0.1:{PORT}", f"{ip}:{PORT}"} <= set(found), str(found))
+        port_file = open(f"{ROOT}/port").read().strip()
+        check("the hook server is loopback only", f"127.0.0.1:{port_file}" in found and not any(a.endswith(f":{port_file}") and not a.startswith("127.0.0.1") for a in found), str(found))
+        try:
+            status, pair = tls_request(ip, "POST", "/v1/pair", {"code": code["code"], "device_name": "TLS phone"}, pin=code["fingerprint"])
+        except OSError as e:
+            print(f"NOTE this Mac cannot connect to its own address {ip} ({e}); the TLS round trip is covered by RemoteSecureListenerTests on loopback", flush=True)
+        else:
+            check("pair over TLS with the pin", status == 202, str(status))
+            control("POST", "/test/automations/bubble", {"id": f"remote-pairing:{pair['pairing_id']}", "button": "Allow"})
+            _, poll = tls_request(ip, "GET", f"/v1/pair/{pair['pairing_id']}", headers={"X-Pairing-Secret": pair["secret"]}, pin=code["fingerprint"])
+            status, tasks = tls_request(ip, "GET", "/v1/tasks", token=poll.get("token"), pin=code["fingerprint"])
+            check("GET /v1/tasks over TLS", status == 200 and "tasks" in tasks, str(status))
+            try:
+                tls_request(ip, "GET", "/v1/tasks", pin="0" * 64)
+                check("another pin is refused", False)
+            except ssl.SSLError:
+                check("another pin is refused", True)
 finally:
     app.terminate()
     try:

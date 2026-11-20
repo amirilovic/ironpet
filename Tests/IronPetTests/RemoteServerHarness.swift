@@ -1,5 +1,6 @@
 import CryptoKit
 import Darwin
+import Security
 import XCTest
 @testable import IronPet
 
@@ -17,6 +18,24 @@ struct RemoteReply {
     var json: [String: Any] { (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:] }
 }
 
+/// Accepts a server only when the SHA-256 of its leaf certificate (DER) is `fingerprint`, the way the phone treats the `f` of the QR code.
+/// Host name, dates and the chain are not checked, so a self-signed certificate passes with the right hash and nothing passes with another.
+final class PinningDelegate: NSObject, URLSessionDelegate {
+    let fingerprint: String
+    init(fingerprint: String) { self.fingerprint = fingerprint }
+
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust, let trust = challenge.protectionSpace.serverTrust,
+              let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate], let leaf = chain.first,
+              RemoteHash.hex(SecCertificateCopyData(leaf) as Data) == fingerprint else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+}
+
 /// The remote API over in-memory stores on an ephemeral port, with a fake clock and a real Announcer, so a test pairs the way a phone does.
 @MainActor
 final class RemoteServerHarness {
@@ -28,13 +47,15 @@ final class RemoteServerHarness {
     let database: Database
     let session: URLSession
 
-    init(eventCapacity: Int = 500) {
+    /// `interfaces` is what the controller sees as the Mac's addresses. Empty by default, so a controller test binds loopback only.
+    init(eventCapacity: Int = 500, interfaces: [InterfaceAddress] = []) {
         events = APIEventBus(capacity: eventCapacity)
         database = APITestSupport.memoryDatabase()
         api = APITestSupport.makeAPI(events: events, bubbles: bubbles)
         let clock = clock
         controller = RemoteController(api: api, settings: api.settings, database: database, bubbles: bubbles, activity: nil,
-                                      storage: MemoryKeyStorage(), now: { clock.now })
+                                      storage: MemoryKeyStorage(), now: { clock.now },
+                                      interfaces: { interfaces }, magicDNS: { nil })
         let configuration = URLSessionConfiguration.ephemeral
         configuration.connectionProxyDictionary = [:]
         configuration.timeoutIntervalForRequest = 10
@@ -47,7 +68,49 @@ final class RemoteServerHarness {
     func start() async throws { try await controller.server!.start(port: 0) }
     func stop() async { await controller.server!.stop() }
 
+    /// Loopback plain HTTP and HTTPS on `address`, on one free port.
+    func startSecure(_ address: String) async throws { try await controller.server!.start(port: 0, secureAddress: address) }
+
+    /// The test Mac as the controller sees it: one address, 127.0.0.1, which gets the HTTPS listener alone. Sandboxes and VMs often cannot
+    /// connect to the machine's own LAN address, so the TLS tests use the loopback address and a test of the bind checks the real one.
+    static let loopbackInterface = InterfaceAddress(name: "lo0", ip: "127.0.0.1")
+
+    /// An address of this Mac that is not loopback. Nil on a machine with no network.
+    static func localAddress() -> InterfaceAddress? {
+        let all = RemoteNetwork.interfaces()
+        return all.first { $0.name.hasPrefix("en") } ?? all.first
+    }
+
+    /// When set, `request` goes over HTTPS to 127.0.0.1 and accepts only this certificate hash.
+    var pinned: String?
+
+    /// A request over HTTPS that accepts only the certificate with `fingerprint`.
+    func secureRequest(_ method: String, address: String, port: Int, _ path: String, fingerprint: String, token: String? = nil,
+                       body: [String: Any]? = nil, headers: [String: String] = [:]) async throws -> RemoteReply {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.connectionProxyDictionary = [:]
+        configuration.timeoutIntervalForRequest = 10
+        let pinned = URLSession(configuration: configuration, delegate: PinningDelegate(fingerprint: fingerprint), delegateQueue: nil)
+        defer { pinned.invalidateAndCancel() }
+        var request = URLRequest(url: URL(string: "https://\(address):\(port)\(path)")!)
+        request.httpMethod = method
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
+        if let body {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await pinned.data(for: request)
+        let http = response as! HTTPURLResponse
+        var fields: [String: String] = [:]
+        for (key, value) in http.allHeaderFields { fields["\(key)".lowercased()] = "\(value)" }
+        return RemoteReply(status: http.statusCode, data: data, headers: fields)
+    }
+
     func request(_ method: String, _ path: String, token: String? = nil, body: [String: Any]? = nil, headers: [String: String] = [:]) async throws -> RemoteReply {
+        if let pinned {
+            return try await secureRequest(method, address: "127.0.0.1", port: port, path, fingerprint: pinned, token: token, body: body, headers: headers)
+        }
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
         request.httpMethod = method
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
