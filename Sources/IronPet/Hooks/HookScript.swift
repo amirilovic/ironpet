@@ -30,6 +30,10 @@ enum HookScript {
         -H "X-Ironpet-Cwd: ${CURSOR_PROJECT_DIR:-$PWD}" \
         -H "X-Ironpet-Term-Program: ${TERM_PROGRAM:-}" \
         -H "X-Ironpet-Iterm-Session: ${ITERM_SESSION_ID:-}" \
+        -H "X-Ironpet-Cmux-Workspace: ${CMUX_WORKSPACE_ID:-}" \
+        -H "X-Ironpet-Cmux-Surface: ${CMUX_SURFACE_ID:-}" \
+        -H "X-Ironpet-T3-Thread: ${T3CODE_THREAD_ID:-}" \
+        -H "X-Ironpet-Herdr-Terminal: ${HC_TERMINAL_ID:-}" \
         -H "X-Ironpet-Pid: $PPID" \
         --data-binary @- "http://127.0.0.1:$(cat "$DIR/port")/event" >/dev/null 2>&1
     fi

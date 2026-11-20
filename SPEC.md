@@ -25,6 +25,13 @@ A personal macOS desktop pet that floats above all windows, watches coding agent
 - `done` and `failed` stay until acknowledged (clicked, jumped to, or a new prompt starts).
 - Speech bubble (and optionally a macOS notification) on entering `needsInput`, `failed`, `done`.
 - Jump to source: iTerm tab when the hook saw `ITERM_SESSION_ID`, otherwise the Cursor window for the workspace (`open -a Cursor <root>`). Exact Cursor chat/terminal tab is out of scope.
+- Open in the app that ran the session, on the exact tab or thread when the hook saw an id. The hook forwards only `CMUX_WORKSPACE_ID`, `CMUX_SURFACE_ID`, `T3CODE_THREAD_ID` and `HC_TERMINAL_ID` (never the whole environment); `SessionStore` keeps them on the session origin, in memory like the rest of the session. The session row, the done and needs-input bubbles and notifications all call `SourceJumper.jump`, which resolves the app with `Editors.resolve`. Built-in openers:
+  - cmux (`com.cmuxterm.app`): `cmux://workspace/{cmux_workspace}/surface/{cmux_surface}`. Needs cmux 0.64.18 or later.
+  - T3 Code (`com.t3tools.t3code`): `t3code://threads/{t3_env}/{t3_thread}`, where `t3_env` is read from `~/.t3/userdata/environment-id`.
+  - herdr (`dev.herdr.app`): runs `herdr-app do agent.focus --terminal <id>` as an argument list without a shell, then activates the app. The program is a bare name looked up on `PATH`, in the usual install folders and in the app bundle. The headless `dev.herdr.core` owner counts as `dev.herdr.app`.
+  - Claude desktop (`com.anthropic.claudefordesktop`): `claude://code/needs-input?session={session}` for Claude Code sessions.
+  - Codex (`com.openai.codex`, inside ChatGPT.app): `codex://threads/{session}` for Codex sessions.
+  Session values are percent-encoded. A template with a placeholder the session cannot fill, or a scheme no app handles, only activates the app. The cmux, T3 Code, Claude and Codex link formats come from the apps' source and bundles, not documentation. Whether Claude's `session=` takes the hook's session id and whether a Codex thread id equals its session id is unverified. A session that already ended opens from the activity log, which keeps only the app, workspace and iTerm tab, so those openers only activate the app.
 
 ### Event mapping
 

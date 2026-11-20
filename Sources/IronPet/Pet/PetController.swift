@@ -190,7 +190,7 @@ final class PetController: NSObject {
             if let iterm {
                 SourceJumper.open(OpenTarget(name: "iTerm", bundleID: Editors.itermID), folder: workspace, itermSession: iterm)
             } else if let bundleID {
-                SourceJumper.open(OpenTarget(name: "", bundleID: bundleID), folder: workspace)
+                SourceJumper.open(OpenTarget(name: "", bundleID: Editors.canonicalOwner(bundleID)), folder: workspace)
             } else if let workspace {
                 NSWorkspace.shared.open(URL(fileURLWithPath: workspace))
             }

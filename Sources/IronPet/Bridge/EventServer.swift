@@ -85,12 +85,16 @@ final class EventServer {
             return respond(connection, status: "400 Bad Request")
         }
         let payload = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] ?? [:]
-        let origin = SessionOrigin(
+        var origin = SessionOrigin(
             workspace: request.header("x-ironpet-cwd").flatMap { $0.isEmpty ? nil : $0 },
             termProgram: request.header("x-ironpet-term-program"),
             itermSessionID: request.header("x-ironpet-iterm-session"),
             pid: request.header("x-ironpet-pid").flatMap { Int32($0) }
         )
+        origin.cmuxWorkspaceID = AppIDs.clean(request.header("x-ironpet-cmux-workspace"))
+        origin.cmuxSurfaceID = AppIDs.clean(request.header("x-ironpet-cmux-surface"))
+        origin.t3ThreadID = AppIDs.clean(request.header("x-ironpet-t3-thread"))
+        origin.herdrTerminalID = AppIDs.clean(request.header("x-ironpet-herdr-terminal"))
         onEvent(HookEvent(source: source, name: name, payload: payload, origin: origin))
         respond(connection, status: "204 No Content")
     }

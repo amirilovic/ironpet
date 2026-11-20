@@ -54,6 +54,41 @@ struct SessionOrigin: Codable {
     var pid: Int32?
     /// Bundle id of the app that started the agent, resolved from `pid` when the first event arrived.
     var ownerBundleID: String?
+    /// Ids the hosting app put in the agent's environment, used to open the exact tab or thread. Only these
+    /// variables are kept; see `AppIDs`.
+    var cmuxWorkspaceID: String?
+    var cmuxSurfaceID: String?
+    var t3ThreadID: String?
+    var herdrTerminalID: String?
+}
+
+/// The only environment variables the hook forwards besides the terminal ones. Everything else stays out.
+enum AppIDs {
+    /// Environment variable and the header the hook script sends it in.
+    static let headers: [(env: String, header: String)] = [
+        ("CMUX_WORKSPACE_ID", "x-ironpet-cmux-workspace"),
+        ("CMUX_SURFACE_ID", "x-ironpet-cmux-surface"),
+        ("T3CODE_THREAD_ID", "x-ironpet-t3-thread"),
+        ("HC_TERMINAL_ID", "x-ironpet-herdr-terminal"),
+    ]
+
+    /// An id is kept when it is non-empty, short and has no control characters. Other characters are fine: the
+    /// openers percent-encode ids in URLs and pass them as one argument to commands.
+    static func clean(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty, raw.count <= 200,
+              !raw.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+        return raw
+    }
+
+    /// Reads the four ids from an environment, ignoring every other variable.
+    static func capture(env: [String: String]) -> SessionOrigin {
+        var origin = SessionOrigin()
+        origin.cmuxWorkspaceID = clean(env["CMUX_WORKSPACE_ID"])
+        origin.cmuxSurfaceID = clean(env["CMUX_SURFACE_ID"])
+        origin.t3ThreadID = clean(env["T3CODE_THREAD_ID"])
+        origin.herdrTerminalID = clean(env["HC_TERMINAL_ID"])
+        return origin
+    }
 }
 
 struct AgentSession: Identifiable, Codable {
@@ -111,6 +146,14 @@ struct AgentSession: Identifiable, Codable {
             sentence = String(line[..<end.upperBound]).trimmingCharacters(in: .whitespaces)
         }
         return sentence.count > 140 ? String(sentence.prefix(137)) + "…" : sentence
+    }
+
+    /// The agent's own session id, without the `<source>:` prefix of the store key.
+    var agentSessionID: String? {
+        let prefix = source.rawValue + ":"
+        guard id.hasPrefix(prefix) else { return nil }
+        let rest = String(id.dropFirst(prefix.count))
+        return rest.isEmpty ? nil : rest
     }
 
     var isInIterm: Bool { origin.itermSessionID?.isEmpty == false }
