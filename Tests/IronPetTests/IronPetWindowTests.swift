@@ -87,7 +87,8 @@ final class IronPetWindowTests: XCTestCase {
                          characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: 0)!
     }
 
-    func testCommandDigitsDoNothingWhileTheWindowIsNotKey() {
+    func testCommandDigitsDoNothingWhileTheWindowIsNotKey() throws {
+        try CISkip.unlessLocal()
         let model = IronPetWindowModel()
         let panel = IronPetPanel(model: model, session: nil, content: EmptyView())
         XCTAssertFalse(panel.isKeyWindow)
@@ -107,7 +108,8 @@ final class IronPetWindowTests: XCTestCase {
         IronPetPanel(model: IronPetWindowModel(), session: nil, content: EmptyView())
     }
 
-    func testOwnSheetsAndOtherWindowsKeepTheWindowOpen() {
+    func testOwnSheetsAndOtherWindowsKeepTheWindowOpen() throws {
+        try CISkip.unlessLocal()
         let panel = panel()
         let sheet = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
         panel.beginSheet(sheet)
@@ -188,7 +190,8 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertEqual(visibility, [false, true])
     }
 
-    func testTheCloseButtonHidesTheWindowLikeTheOldXDid() {
+    func testTheCloseButtonHidesTheWindowLikeTheOldXDid() throws {
+        try CISkip.unlessLocal()
         let panel = panel()
         var closed = 0
         var visibility: [Bool] = []
@@ -368,7 +371,8 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertFalse(IronPetWindowModel(defaults: defaults).sidebarCollapsed)
     }
 
-    func testCollapsingSurvivesClosingAndReopeningTheWindow() {
+    func testCollapsingSurvivesClosingAndReopeningTheWindow() throws {
+        try CISkip.unlessLocal()
         let defaults = freshDefaults()
         let model = IronPetWindowModel(defaults: defaults)
         let panel = IronPetPanel(model: model, session: nil, content: EmptyView())
@@ -378,7 +382,8 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertTrue(model.sidebarCollapsed)
     }
 
-    func testControlCommandSTogglesAndCommandDigitsWorkInBothStates() {
+    func testControlCommandSTogglesAndCommandDigitsWorkInBothStates() throws {
+        try CISkip.unlessLocal()
         let model = IronPetWindowModel(defaults: freshDefaults())
         let panel = IronPetPanel(model: model, session: nil, content: EmptyView())
         for collapsed in [false, true] {
@@ -393,7 +398,8 @@ final class IronPetWindowTests: XCTestCase {
         XCTAssertFalse(model.sidebarCollapsed)
     }
 
-    func testControlCommandSDoesNothingWhileTheWindowIsNotKey() {
+    func testControlCommandSDoesNothingWhileTheWindowIsNotKey() throws {
+        try CISkip.unlessLocal()
         let model = IronPetWindowModel(defaults: freshDefaults())
         let panel = IronPetPanel(model: model, session: nil, content: EmptyView())
         XCTAssertFalse(panel.performKeyEquivalent(with: keyEvent("s", flags: [.command, .control])))
@@ -498,6 +504,7 @@ final class IronPetWindowTests: XCTestCase {
 
     /// The traffic lights sit in the middle of the header band, and the sidebar is wide enough to hold them.
     func testTheTrafficLightsAreCenteredInTheHeaderBandAndFitTheSidebar() throws {
+        try CISkip.unlessLocal()
         for collapsed in [false, true] {
             let model = IronPetWindowModel(defaults: freshDefaults())
             model.sidebarCollapsed = collapsed
@@ -624,6 +631,7 @@ final class IronPetWindowTests: XCTestCase {
 
     /// A drag that starts on the edge reaches the handle, in the real window, and collapses or expands the sidebar.
     func testDraggingTheEdgeInTheRealWindowCollapsesAndExpandsTheSidebar() throws {
+        try CISkip.unlessLocal()
         let model = IronPetWindowModel(defaults: freshDefaults())
         let view = IronPetWindowView(model: model, agents: AgentsAPI(store: sessions(.done)), alerts: AlertsAPI(store: signals(0)), tasks: TasksAPI(store: tasks()), chat: nil,
                                      meetings: nil, actions: .none)
@@ -721,7 +729,8 @@ final class WindowAutoHideTests: XCTestCase {
         XCTAssertFalse(panel.isVisible)
     }
 
-    func testOwnSheetsDragsAndCapturesKeepItOpen() {
+    func testOwnSheetsDragsAndCapturesKeepItOpen() throws {
+        try CISkip.unlessLocal()
         enabled = true
         let (h, panel) = open()
         defer { panel.close() }

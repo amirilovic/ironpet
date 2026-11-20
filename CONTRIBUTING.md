@@ -19,6 +19,8 @@ The [README](README.md) covers features and configuration, [SPEC.md](SPEC.md) th
 ```bash
 swift build               # debug build
 swift test                # unit tests: config parsing, shortcuts, hook install/uninstall
+# UI tests (windows, rendered views, scroll layout) skip when CI is set, so they run here, not on CI:
+# run them locally before merging chat, window or settings changes.
 ./scripts/install.sh      # release build, install, restart
 ./scripts/screenshots.sh  # render the README screenshots from sample data
 ```

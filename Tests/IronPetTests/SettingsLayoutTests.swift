@@ -12,12 +12,14 @@ final class SettingsLayoutTests: XCTestCase {
         }
     }
 
-    @MainActor func testHeaderIsAsTallAsTheTitleBar() {
+    @MainActor func testHeaderIsAsTallAsTheTitleBar() throws {
+        try CISkip.unlessLocal()
         let host = NSHostingView(rootView: SettingsHeader(title: "Voice"))
         XCTAssertEqual(host.fittingSize.height, SettingsHeader.height)
     }
 
-    @MainActor func testWindowHidesTitleAndExtendsContentUnderTitleBar() {
+    @MainActor func testWindowHidesTitleAndExtendsContentUnderTitleBar() throws {
+        try CISkip.unlessLocal()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
         SettingsWindow.configure(window)
         XCTAssertEqual(window.titleVisibility, .hidden)
