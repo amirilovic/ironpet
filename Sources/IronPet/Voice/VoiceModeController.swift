@@ -79,11 +79,20 @@ final class VoiceModeController {
     }
 
     func toggle() {
-        if !conversation.isActive {
-            let front = NSWorkspace.shared.frontmostApplication
-            previousApp = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
-        }
+        rememberFrontApp()
         conversation.toggle()
+    }
+
+    /// The voice-mode shortcut: starts a conversation, interrupts the pet while it speaks, or ends the conversation.
+    func pressTalk() {
+        rememberFrontApp()
+        conversation.pressTalk()
+    }
+
+    private func rememberFrontApp() {
+        guard !conversation.isActive else { return }
+        let front = NSWorkspace.shared.frontmostApplication
+        previousApp = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
     }
 
     private func started(_ mode: VoiceConversation.Mode) {

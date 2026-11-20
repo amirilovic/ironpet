@@ -50,7 +50,7 @@ private final class FakeSpeaker: ConversationSpeaker {
 @MainActor
 private final class FakeFrontDesk: FrontDeskTalking {
     var asked: [String] = []
-    var answer = "All quiet. Two jobs are running."
+    var answer = "All quiet and two jobs are running."
     var error: JobError?
     var hold = false
     private(set) var prepared = 0
@@ -61,10 +61,20 @@ private final class FakeFrontDesk: FrontDeskTalking {
 
     func prepare() { prepared += 1 }
 
-    func reply(to text: String) async throws -> String {
+    /// The reply's pieces, streamed in order; nil streams the whole answer at once.
+    var chunks: [String]?
+    /// Waits after the pieces are streamed, until `release()`.
+    var holdAfterChunks = false
+
+    func reply(to text: String, onText: @escaping (String) -> Void) async throws -> String {
         asked.append(text)
         if hold { try await withCheckedThrowingContinuation { gate = $0 } }
         if let error { throw error }
+        for piece in chunks ?? [answer] {
+            onText(piece)
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        if holdAfterChunks { try await withCheckedThrowingContinuation { gate = $0 } }
         return answer
     }
 
@@ -133,9 +143,9 @@ final class VoiceConversationTests: XCTestCase {
         mic.say("what's going on")
         await until { conversation.state == .listening && !speaker.said.isEmpty }
         XCTAssertEqual(desk.asked, ["what's going on"])
-        XCTAssertEqual(speaker.said, ["All quiet. Two jobs are running."])
+        XCTAssertEqual(speaker.said, ["All quiet and two jobs are running."])
         XCTAssertEqual(conversation.heard, "what's going on")
-        XCTAssertEqual(conversation.reply, "All quiet. Two jobs are running.")
+        XCTAssertEqual(conversation.reply, "All quiet and two jobs are running.")
         // The pet's voice raised the bar for barge-in, and lowered it again.
         XCTAssertEqual(mic.playback, [true, false])
     }
@@ -155,6 +165,59 @@ final class VoiceConversationTests: XCTestCase {
         XCTAssertEqual(speaker.said.last, desk.answer)
         // Cutting the pet off lowers the barge-in bar at once, not after the next reply.
         XCTAssertEqual(mic.playback, [true, false, true, false])
+    }
+
+    func testTheTalkKeyInterruptsThePetWhileItSpeaksAndEndsTheConversationWhenListening() async {
+        let conversation = await started()
+        speaker.hold = true
+        mic.say("tell me about my day")
+        await until { speaker.isSpeaking }
+
+        conversation.pressTalk()
+        await until { conversation.state == .listening }
+        XCTAssertTrue(conversation.isActive)
+        XCTAssertGreaterThanOrEqual(speaker.stops, 1)
+        XCTAssertEqual(events, ["started microphone"])
+
+        conversation.pressTalk()
+        XCTAssertFalse(conversation.isActive)
+        XCTAssertEqual(events, ["started microphone", "ended"])
+    }
+
+    func testEachSentenceIsSaidAsTheReplyWritesIt() async {
+        let conversation = await started()
+        desk.chunks = ["Two jobs are done. ", "The review is still", " waiting for you."]
+        desk.answer = desk.chunks!.joined()
+        desk.holdAfterChunks = true
+        mic.say("status")
+        await until { speaker.said.count == 1 && conversation.state == .speaking }
+        XCTAssertEqual(speaker.said, ["Two jobs are done."])
+        XCTAssertEqual(conversation.state, .speaking)
+        XCTAssertEqual(conversation.mood, .idle)
+
+        await until { desk.isWaiting }
+        desk.release()
+        await until { conversation.state == .listening && speaker.said.count == 2 }
+        XCTAssertEqual(speaker.said, ["Two jobs are done.", "The review is still waiting for you."])
+        XCTAssertEqual(conversation.reply, desk.answer)
+        XCTAssertEqual(mic.playback, [true, false])
+    }
+
+    func testTalkingOverAStreamedReplyDropsTheRestOfIt() async {
+        let conversation = await started()
+        desk.chunks = ["First point is clear. ", "Second point is still coming."]
+        desk.answer = desk.chunks!.joined()
+        desk.holdAfterChunks = true
+        mic.say("tell me")
+        await until { speaker.said.count == 1 }
+
+        // The agent keeps sending text for a moment after the user talks over it; none of it may be said.
+        mic.say("is the lint fixed")
+        desk.holdAfterChunks = false
+        desk.chunks = ["The lint is fixed."]
+        desk.answer = "The lint is fixed."
+        await until { desk.asked.count == 2 && conversation.state == .listening && speaker.said.count == 2 }
+        XCTAssertEqual(speaker.said, ["First point is clear.", "The lint is fixed."])
     }
 
     func testHeldJobsCountDownOnceThePetHasAnswered() async {
@@ -332,5 +395,32 @@ final class VoiceConversationTests: XCTestCase {
         XCTAssertEqual(VoiceModeController.update(for: job), "Fix the login test needs your OK to run rm -rf build. Click Allow in its bubble.")
         job.state = .running
         XCTAssertNil(VoiceModeController.update(for: job))
+    }
+}
+
+@MainActor
+final class SpeechTextStreamingTests: XCTestCase {
+    func testOnlyCompleteSentencesAreReleased() {
+        let partial = SpeechText.completeSentences("Two jobs are done. The review is", final: false)
+        XCTAssertEqual(partial.sentences, ["Two jobs are done."])
+        XCTAssertEqual(partial.rest, "The review is")
+    }
+
+    func testAFinishedSentenceWithATrailingSpaceIsReleased() {
+        let streamed = SpeechText.completeSentences("Two jobs are done. ", final: false)
+        XCTAssertEqual(streamed.sentences, ["Two jobs are done."])
+        XCTAssertEqual(streamed.rest, "")
+    }
+
+    func testTheLastSentenceIsReleasedWhenTheReplyEnds() {
+        let end = SpeechText.completeSentences("The review is still waiting", final: true)
+        XCTAssertEqual(end.sentences, ["The review is still waiting"])
+        XCTAssertEqual(end.rest, "")
+    }
+
+    func testCompletedLinesAreReleasedWithTheirMarkupCleaned() {
+        let lines = SpeechText.completeSentences("**Done** with the lint.\n- Review is waiting", final: false)
+        XCTAssertEqual(lines.sentences, ["Done with the lint."])
+        XCTAssertEqual(lines.rest, "- Review is waiting")
     }
 }

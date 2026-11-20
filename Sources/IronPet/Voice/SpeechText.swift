@@ -35,6 +35,28 @@ enum SpeechText {
         return chunks
     }
 
+    /// A reply still being written: the sentences that are complete in `buffer`, and the text left over that may still
+    /// grow. With `final`, nothing is left over. Each sentence is cleaned as `chunks(of:)` cleans prose.
+    static func completeSentences(_ buffer: String, final: Bool) -> (sentences: [String], rest: String) {
+        var lines = buffer.components(separatedBy: "\n")
+        let tail = lines.removeLast()
+        var done = lines.flatMap { prose(of: $0) }
+        let parts = sentences(in: tail)
+        // The last sentence of the tail may still be growing, unless the text ends with its punctuation.
+        let endsSentence = tail.trimmingCharacters(in: .whitespaces).last.map { ".!?".contains($0) } ?? false
+        if final || endsSentence {
+            done += parts.flatMap { prose(of: $0) }
+            return (done, "")
+        }
+        done += parts.dropLast().flatMap { prose(of: $0) }
+        return (done, parts.last ?? "")
+    }
+
+    /// Cleaned prose of a piece of text, one entry per sentence.
+    private static func prose(of text: String) -> [String] {
+        spokenBlocks(of: text).flatMap { sentences(in: $0) }
+    }
+
     /// Headings, paragraphs, quotes and list items, with inline markup removed. Code, tables and rules are skipped:
     /// read aloud they are noise.
     static func spokenBlocks(of markdown: String) -> [String] {

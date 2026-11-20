@@ -5,14 +5,21 @@ import Foundation
 protocol FrontDeskTalking: AnyObject {
     /// Starts the agent ahead of the first question.
     func prepare()
-    /// The reply to one thing the user said, as text to read aloud. Throws `JobError` with a message to say, or
-    /// `CancellationError` after `cancel()`.
-    func reply(to text: String) async throws -> String
+    /// The reply to one thing the user said, as text to read aloud. `onText` gets each piece of the reply as it
+    /// arrives. Throws `JobError` with a message to say, or `CancellationError` after `cancel()`.
+    func reply(to text: String, onText: @escaping (String) -> Void) async throws -> String
     /// Stops the reply in progress.
     func cancel()
     /// The conversation ended: the thread is kept and handed to memory's reflection pass, and the next conversation
     /// starts a new agent session.
     func finish()
+}
+
+extension FrontDeskTalking {
+    /// A reply whose text is not streamed.
+    func reply(to text: String) async throws -> String {
+        try await reply(to: text, onText: { _ in })
+    }
 }
 
 /// The part of an agent process the front desk needs, beyond a job's.
@@ -75,7 +82,7 @@ final class FrontDesk: FrontDeskTalking {
         warming = Task { await backend.prepare(workspace) }
     }
 
-    func reply(to text: String) async throws -> String {
+    func reply(to text: String, onText: @escaping (String) -> Void) async throws -> String {
         idleTimer?.cancel()
         replies += 1
         let number = replies
@@ -83,7 +90,10 @@ final class FrontDesk: FrontDeskTalking {
         warming = nil
         try Task.checkCancellation()
         guard cancelledThrough < number else { throw CancellationError() }
-        if let stubReply { return stubReply }
+        if let stubReply {
+            onText(stubReply)
+            return stubReply
+        }
         guard let (agent, model) = currentAgent() else { throw JobError(message: "No agent is set up for the chat.") }
         let backend = agentProcess(for: agent)
         try? FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
@@ -105,6 +115,7 @@ final class FrontDesk: FrontDeskTalking {
                 save(agent: agent)
             case .assistant(let chunk):
                 answer += chunk
+                onText(chunk)
             case .finished(let error):
                 failure = error
             case .needsSignIn:
