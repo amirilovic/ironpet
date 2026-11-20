@@ -47,6 +47,8 @@ enum Editors {
         OpenTarget(name: "Windsurf", bundleID: "com.exafunction.windsurf", urlTemplate: "windsurf://file/{cwd}"),
         OpenTarget(name: "Xcode", bundleID: "com.apple.dt.Xcode"),
         OpenTarget(name: "Finder", bundleID: finderID),
+        // Orca registers `orca://`, but no URL format for a session is known. Only activate the app.
+        OpenTarget(name: "Orca", bundleID: "com.stablyai.orca", folderFallback: false),
         // Deep links for these come from each app's source or bundle, not from documentation.
         OpenTarget(name: "cmux", bundleID: cmuxID,
                    urlTemplate: "cmux://workspace/{cmux_workspace}/surface/{cmux_surface}", folderFallback: false),

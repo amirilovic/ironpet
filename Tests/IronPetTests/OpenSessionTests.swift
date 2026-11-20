@@ -144,6 +144,14 @@ final class OpenSessionTests: XCTestCase {
         XCTAssertEqual(t.bundleID, Editors.codexID)
     }
 
+    func testOrcaIsListedAndOnlyActivates() {
+        let r = Recorder()
+        open("com.stablyai.orca", session(), r)
+        XCTAssertTrue(r.urls.isEmpty)
+        XCTAssertEqual(r.activated, ["com.stablyai.orca"])
+        XCTAssertEqual(Editors.available(custom: [], isInstalled: { $0 == "com.stablyai.orca" }).map(\.name), ["Orca"])
+    }
+
     func testBuiltInsAreOnlyOfferedWhenInstalled() {
         let names = Editors.available(custom: [], isInstalled: { $0 == Editors.cmuxID }).map(\.name)
         XCTAssertEqual(names, ["cmux"])
