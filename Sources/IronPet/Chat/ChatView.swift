@@ -1694,7 +1694,11 @@ enum TranscriptGroup {
 
 /// Decoded attachment images, so a re-render of the transcript does not read and decode every file again.
 enum ThumbnailCache {
-    private static let cache = NSCache<NSString, NSImage>()
+    /// A plain map rather than `NSCache`, which the system may empty at any time, so a file is decoded once until the map
+    /// is full (then it starts again). At most `capacity` images of at most 640 px are kept.
+    private static let capacity = 64
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var images: [String: NSImage] = [:]
     /// How many times a file was actually decoded; tests read it.
     nonisolated(unsafe) static var decodeCount = 0
 
@@ -1713,10 +1717,16 @@ enum ThumbnailCache {
     }
 
     static func image(at path: String) -> NSImage? {
-        if let cached = cache.object(forKey: path as NSString) { return cached }
+        lock.lock()
+        let cached = images[path]
+        lock.unlock()
+        if let cached { return cached }
         guard let image = decode(path) else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
         decodeCount += 1
-        cache.setObject(image, forKey: path as NSString)
+        if images.count >= capacity { images.removeAll() }
+        images[path] = image
         return image
     }
 }
