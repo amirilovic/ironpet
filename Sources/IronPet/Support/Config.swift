@@ -301,6 +301,11 @@ struct Config: Codable, Equatable {
         /// Hide the window when another app becomes active, and bring it back when ironpet is activated again.
         /// Off by default: the window then stays as it is today.
         var autoHide = false
+        /// `"system"` (follow macOS), `"light"` or `"dark"`. Applied to the whole app, so the pet, its bubbles and the windows follow.
+        var appearance = Window.systemAppearance
+
+        static let systemAppearance = "system"
+        static let appearances = [systemAppearance, "light", "dark"]
     }
 
     var pet = Pet()
@@ -375,6 +380,7 @@ struct Config: Codable, Equatable {
         if c.chat.background == ChatBackground.customID, c.chat.customImage == nil { c.chat.background = ChatBackground.defaultID }
         c.chat.pasteAttachmentChars = min(Chat.pasteCharsRange.upperBound, max(Chat.pasteCharsRange.lowerBound, c.chat.pasteAttachmentChars))
         c.chat.pasteAttachmentLines = min(Chat.pasteLinesRange.upperBound, max(Chat.pasteLinesRange.lowerBound, c.chat.pasteAttachmentLines))
+        if !Window.appearances.contains(c.window.appearance) { c.window.appearance = Window.systemAppearance }
         c.openIn = c.openIn.trimmingCharacters(in: .whitespacesAndNewlines)
         if c.openIn.isEmpty { c.openIn = Config().openIn }
         c.editors = c.editors.filter { !$0.name.isEmpty && !$0.bundleId.isEmpty }

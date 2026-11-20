@@ -94,6 +94,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
         config.events = events
+        // Light or dark from Settings → General, applied app-wide. "System" clears the override and follows macOS.
+        config.$config
+            .map(\.window.appearance)
+            .removeDuplicates()
+            .sink { name in
+                NSApp.appearance = name == "light" ? NSAppearance(named: .aqua)
+                    : name == "dark" ? NSAppearance(named: .darkAqua) : nil
+            }
+            .store(in: &cancellables)
         store.events = events
         signals.events = events
         announcer.bubbles.events = events

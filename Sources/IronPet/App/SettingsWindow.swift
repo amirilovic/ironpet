@@ -274,6 +274,12 @@ private struct GeneralSettings: View {
                 ShortcutRow(title: "Ask about a region", path: \.captureRegion, model: model)
             }
             Section("App") {
+                Picker("Appearance", selection: Binding(
+                    get: { store.config.window.appearance }, set: { value in store.update { $0.window.appearance = value } })) {
+                    Text("System").tag(Config.Window.systemAppearance)
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
+                }
                 Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
                 Toggle("Also show macOS notifications", isOn: Binding(get: { model.alsoSystemNotifications },
                                                                       set: { model.alsoSystemNotifications = $0 }))
