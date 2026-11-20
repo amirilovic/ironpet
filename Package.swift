@@ -17,6 +17,9 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", exact: "1.9.1"),
         .package(url: "https://github.com/apple/swift-crypto.git", exact: "4.5.2"),
         .package(url: "https://github.com/apple/swift-system.git", exact: "1.8.1"),
+        // The remote API serves HTTPS through Network.framework, the system's TLS, which Hummingbird already links on macOS. Named here
+        // so ironpet can import it; it was already resolved as a dependency of Hummingbird and adds nothing to the binary.
+        .package(url: "https://github.com/apple/swift-nio-transport-services.git", exact: "1.28.0"),
         .package(url: "https://github.com/apple/swift-metrics.git", exact: "2.11.0"),
         .package(url: "https://github.com/apple/swift-distributed-tracing.git", exact: "1.5.0"),
         .package(url: "https://github.com/apple/swift-async-algorithms.git", exact: "1.0.4"),
@@ -26,7 +29,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "IronPetObjC", path: "Sources/IronPetObjC"),
-        .executableTarget(name: "IronPet", dependencies: ["IronPetObjC", .product(name: "JMESPath", package: "jmespath.swift"), .product(name: "QuickJS", package: "QuickJS-Swift"), .product(name: "FluidAudio", package: "FluidAudio"), .product(name: "Hummingbird", package: "hummingbird"), .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket")], path: "Sources/IronPet"),
+        .executableTarget(name: "IronPet", dependencies: ["IronPetObjC", .product(name: "JMESPath", package: "jmespath.swift"), .product(name: "QuickJS", package: "QuickJS-Swift"), .product(name: "FluidAudio", package: "FluidAudio"), .product(name: "Hummingbird", package: "hummingbird"), .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"), .product(name: "NIOTransportServices", package: "swift-nio-transport-services")], path: "Sources/IronPet"),
         .testTarget(name: "IronPetTests", dependencies: ["IronPet"], path: "Tests/IronPetTests", resources: [.copy("Fixtures")]),
     ]
 )

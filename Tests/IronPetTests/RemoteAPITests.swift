@@ -247,14 +247,12 @@ final class RemoteAPITests: XCTestCase {
     }
 
     // S9
-    func testPairResponseIsSignedByTheKeyInTheLink() async throws {
-        let link = h.service.newPairingCode()
-        let reply = try await h.request("POST", "/v1/pair", body: ["code": link.code, "device_name": "Phone"])
-        let key = try XCTUnwrap(Data(base64Encoded: reply.json["public_key"] as! String))
-        XCTAssertEqual(RemoteHash.hex(key), link.fingerprint)
-        let signature = try XCTUnwrap(Data(base64Encoded: reply.json["signature"] as! String))
-        let message = RemoteService.signedMessage(pairingID: reply.json["pairing_id"] as! String, secret: reply.json["secret"] as! String, code: link.code)
-        XCTAssertTrue(try Curve25519.Signing.PublicKey(rawRepresentation: key).isValidSignature(signature, for: message))
+    func testPairingCodeCarriesTheCertificateHash() async throws {
+        let code = h.service.newPairingCode()
+        XCTAssertEqual(code.fingerprint, RemoteHash.hex(h.service.identity.certificateDER))
+        let reply = try await h.request("POST", "/v1/pair", body: ["code": code.code, "device_name": "Phone"])
+        XCTAssertEqual(reply.status, 202)
+        XCTAssertNil(reply.json["signature"], "the pinned certificate replaced the Ed25519 signature")
     }
 
     func testRevokeAllRotatesTheKeyAndKillsTokens() async throws {
@@ -297,9 +295,19 @@ final class RemoteConfigTests: XCTestCase {
             XCTAssertEqual(config.sanitized().remote.port, 47380, "\(bad)")
         }
         config.remote.port = 47500
-        config.remote.baseUrl = " https://mac.ts.net/ "
+        config.remote.address = " https://mac.ts.net/ "
         XCTAssertEqual(config.sanitized().remote.port, 47500)
-        XCTAssertEqual(config.sanitized().remote.baseUrl, "https://mac.ts.net")
+        XCTAssertEqual(config.sanitized().remote.address, "https://mac.ts.net")
+    }
+
+    func testAnOlderBaseUrlMovesToTheAddress() {
+        var config = Config()
+        config.remote.baseUrl = " https://mac.ts.net/ "
+        let moved = config.sanitized().remote
+        XCTAssertEqual(moved.address, "https://mac.ts.net")
+        XCTAssertEqual(moved.baseUrl, "")
+        config.remote.address = "100.96.0.2"
+        XCTAssertEqual(config.sanitized().remote.address, "100.96.0.2", "an address already chosen wins")
     }
 }
 

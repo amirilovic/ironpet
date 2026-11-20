@@ -218,13 +218,18 @@ struct Config: Codable, Equatable {
         var allowedUsers: [User] = []
     }
 
-    /// The remote API a paired phone reaches through the user's own TLS front, such as `tailscale serve`. Off by default: turning it on
-    /// opens a listener on 127.0.0.1 that answers only requests with a device token (see SECURITY.md).
+    /// The remote API a paired phone reaches over the Wi-Fi or the tailnet. Off by default: turning it on opens an HTTPS listener on the chosen
+    /// network address and a plain one on 127.0.0.1, and both answer only requests with a device token (see SECURITY.md).
     struct Remote: Codable, Equatable {
         var enabled = false
-        /// Loopback port. Outside the hook server's 47321-47340 range, which has no per-device tokens.
+        /// Port of both listeners. Outside the hook server's 47321-47340 range, which has no per-device tokens.
         var port = Remote.defaultPort
-        /// Where the paired device reaches this Mac, such as `https://mac.tailnet.ts.net`. It goes into the pairing link.
+        /// Where the paired device reaches this Mac. Empty picks the first address of the Network list, Tailscale first. Otherwise one
+        /// address of that list, a custom IPv4 address, or the URL of the user's own front such as `https://mac.tailnet.ts.net`.
+        var address = ""
+        /// The Mac's name in the Allow bubble and the device list. Empty uses the name from System Settings.
+        var machineName = ""
+        /// Replaced by `address`. A value left in an older config.json moves to `address` when the config loads, and this is cleared.
         var baseUrl = ""
 
         static let defaultPort = 47380
@@ -399,7 +404,11 @@ struct Config: Codable, Equatable {
         c.memory.quietMinutes = min(Memory.quietRange.upperBound, max(Memory.quietRange.lowerBound, c.memory.quietMinutes))
         if !Remote.portRange.contains(c.remote.port) || Remote.reservedPorts.contains(c.remote.port) { c.remote.port = Remote.defaultPort }
         c.remote.baseUrl = c.remote.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        while c.remote.baseUrl.hasSuffix("/") { c.remote.baseUrl.removeLast() }
+        if c.remote.address.trimmingCharacters(in: .whitespaces).isEmpty { c.remote.address = c.remote.baseUrl }
+        c.remote.baseUrl = ""
+        c.remote.address = c.remote.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        while c.remote.address.hasSuffix("/") { c.remote.address.removeLast() }
+        c.remote.machineName = String(c.remote.machineName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(60))
         return c
     }
 

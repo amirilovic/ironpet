@@ -3,7 +3,7 @@ import Foundation
 /// A pairing code on screen: what goes into the QR code.
 struct RemotePairingCode: Equatable {
     var code: String
-    /// SHA-256 of the Mac's Ed25519 public key, in hex.
+    /// SHA-256 of the Mac's TLS certificate, in hex.
     var fingerprint: String
     var expires: Date
 }
@@ -20,8 +20,6 @@ struct RemotePairAccepted: Equatable {
     var pairingID: String
     var secret: String
     var expiresIn: Int
-    var publicKey: Data
-    var signature: Data
 }
 
 enum RemotePairResult: Equatable {
@@ -139,11 +137,6 @@ final class RemoteService: @unchecked Sendable {
     /// Stops every code that is still unused.
     func closePairing() { store.closeCodes() }
 
-    /// What the Mac signs, so a phone that scanned the QR code can check the answer: the pairing id, the secret and the hash of its own code.
-    static func signedMessage(pairingID: String, secret: String, code: String) -> Data {
-        Data("ironpet-pair-v1\n\(pairingID)\n\(secret)\n\(RemoteHash.hex(code))".utf8)
-    }
-
     func pair(code: String, deviceName: String, publicKey: String?) -> RemotePairResult {
         let at = now()
         lock.lock()
@@ -171,10 +164,8 @@ final class RemoteService: @unchecked Sendable {
         lock.lock()
         pending[id] = request
         lock.unlock()
-        let signature = identity.sign(Self.signedMessage(pairingID: id, secret: secret, code: code))
         onPairingRequest?(RemotePairingRequest(id: id, deviceName: name, created: at))
-        return .accepted(RemotePairAccepted(pairingID: id, secret: secret, expiresIn: Int(Self.codeLifetime),
-                                            publicKey: identity.publicKey, signature: signature))
+        return .accepted(RemotePairAccepted(pairingID: id, secret: secret, expiresIn: Int(Self.codeLifetime)))
     }
 
     /// The name goes into a bubble, so it is one line of printable text and at most 60 characters.
@@ -306,7 +297,7 @@ final class RemoteService: @unchecked Sendable {
         return true
     }
 
-    /// Removes every device and makes a new Ed25519 key, so tokens and fingerprints handed out so far stop working.
+    /// Removes every device and makes a new certificate, so tokens and fingerprints handed out so far stop working.
     func revokeAllAndRotate() {
         let count = store.devices().count
         store.removeAll()
@@ -318,7 +309,7 @@ final class RemoteService: @unchecked Sendable {
         buckets = [:]
         touched = [:]
         lock.unlock()
-        activity?(ActivityEvent(at: now(), kind: ActivityEvent.Kind("remote.revoked_all"), ref: "all", title: "Revoked \(count) device\(count == 1 ? "" : "s") and made a new key"))
+        activity?(ActivityEvent(at: now(), kind: ActivityEvent.Kind("remote.revoked_all"), ref: "all", title: "Revoked \(count) device\(count == 1 ? "" : "s") and made a new certificate"))
         onDevicesChanged?()
     }
 

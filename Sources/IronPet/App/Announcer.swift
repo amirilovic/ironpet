@@ -80,13 +80,12 @@ final class Announcer {
 
     /// The bubble for a phone that sent a valid pairing code. Allow gives it a token that reads and changes tasks on this Mac, so the
     /// bubble says so and expires with the code.
-    static func remotePairingBubble(_ request: RemotePairingRequest, allow: @escaping () -> Void, deny: @escaping () -> Void) -> Bubble {
-        let pet = ConfigStore.shared.config.pet.name
-        return Bubble(id: remotePairingID(request.id), symbol: "iphone", tint: .blue,
-                      title: "Allow \(request.deviceName) to control \(pet)?",
-                      body: "This device asked to pair with the remote API. Only allow it if you just scanned the pairing code yourself.",
-                      actions: [.init(title: "Allow", style: .primary, run: allow), .init(title: "Deny", style: .destructive, run: deny)],
-                      expires: request.created.addingTimeInterval(RemoteService.codeLifetime))
+    static func remotePairingBubble(_ request: RemotePairingRequest, machine: String, allow: @escaping () -> Void, deny: @escaping () -> Void) -> Bubble {
+        Bubble(id: remotePairingID(request.id), symbol: "iphone", tint: .blue,
+               title: "Allow \(request.deviceName) to connect to \(machine)?",
+               body: "This device asked to pair with the remote API. Only allow it if you just scanned the pairing code yourself.",
+               actions: [.init(title: "Allow", style: .primary, run: allow), .init(title: "Deny", style: .destructive, run: deny)],
+               expires: request.created.addingTimeInterval(RemoteService.codeLifetime))
     }
 
     /// Too many requests without a valid token. One bubble per lockout, replaced if it comes again.

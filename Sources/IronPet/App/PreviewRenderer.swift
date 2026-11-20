@@ -216,7 +216,7 @@ enum PreviewRenderer {
         // Settings → Devices with a QR code on screen and two paired devices.
         if let database = try? Database(path: nil, migrations: AppMigrations.all) {
             var remoteOn = patterned
-            remoteOn.remote = .init(enabled: true, port: Config.Remote.defaultPort, baseUrl: "https://mac.tailnet.ts.net")
+            remoteOn.remote = .init(enabled: true, port: Config.Remote.defaultPort, address: "", machineName: "Studio Mac")
             ConfigStore.shared.usePreview(remoteOn)
             let service = RemoteService(store: RemoteStore(database: database), identity: RemoteIdentity(storage: MemoryKeyStorage()))
             for (name, ago) in [("Aleksandar's iPhone", 86_400.0 * 3), ("iPad", 3600.0)] {
@@ -224,7 +224,8 @@ enum PreviewRenderer {
                                           origin: "100.101.102.103", publicKey: nil)
                 try? service.store.add(device, tokenHash: RemoteHash.hex(device.id))
             }
-            let controller = RemoteController(preview: service, settings: SettingsAPI.live, bubbles: BubbleStore(), status: .listening(port: Config.Remote.defaultPort))
+            let controller = RemoteController(preview: service, settings: SettingsAPI.live, bubbles: BubbleStore(), status: .listening(port: Config.Remote.defaultPort),
+                                            interfaces: [.init(name: "en0", ip: "192.168.68.51"), .init(name: "utun5", ip: "100.96.0.2"), .init(name: "bridge100", ip: "192.168.64.1")])
             controller.startPairing()
             settingsModel.remote = controller
             for (suffix, scheme) in [("", ColorScheme.dark), ("-light", .light)] {

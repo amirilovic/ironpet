@@ -1,9 +1,11 @@
 import Foundation
 import HTTPTypes
 import Hummingbird
+import HummingbirdCore
 import HummingbirdWebSocket
 import Logging
 import NIOCore
+import NIOTransportServices
 
 /// What each request carries through the router: the device the token named, once the gate has checked it.
 struct RemoteContext: RequestContext, WebSocketRequestContext {
@@ -83,9 +85,12 @@ extension HTTPField.Name {
     static let pairingSecret = HTTPField.Name("X-Pairing-Secret")!
 }
 
-/// The remote API: Hummingbird on 127.0.0.1, one port for REST and the event socket. It trusts nothing about the connection. Every route
-/// but pairing needs a device token, and every route calls `IronPetAPI` like any other client. TLS is the job of the user's own front
-/// (`tailscale serve`), which forwards to this port.
+/// The remote API: Hummingbird with one port for REST and the event socket. It trusts nothing about the connection. Every route but
+/// pairing needs a device token, and every route calls `IronPetAPI` like any other client.
+///
+/// Two listeners share the port number. One is plain HTTP on 127.0.0.1, for tests and for a front such as `tailscale serve`. The other is
+/// HTTPS on the one network address the user chose, with the self-signed certificate of `RemoteIdentity`. Both run on Network.framework
+/// (Hummingbird on `NIOTSEventLoopGroup`), whose TLS the HTTPS one uses, so the app bundles no TLS library. Nothing binds 0.0.0.0.
 @MainActor
 final class RemoteServer {
     nonisolated static let maxBody = 1 << 20
@@ -93,22 +98,101 @@ final class RemoteServer {
 
     let service: RemoteService
     private let api: IronPetAPI
-    private var task: Task<Void, Never>?
-    /// The port the listener is bound to, while it runs.
+    private var tasks: [Task<Void, Never>] = []
+    /// The port the listeners are bound to, while they run.
     private(set) var port: Int?
+    /// The address the HTTPS listener is bound to, while it runs.
+    private(set) var secureAddress: String?
+    /// Hash of the certificate the HTTPS listener presents. It differs from the identity's after a rotation, until the server restarts.
+    private(set) var servedFingerprint: String?
+    /// The keychain that holds the HTTPS listener's identity, deleted when the listener stops.
+    private var keychain: RemoteTLSKeychain?
 
     init(api: IronPetAPI, service: RemoteService) {
         self.api = api
         self.service = service
     }
 
-    var isRunning: Bool { task != nil }
+    var isRunning: Bool { !tasks.isEmpty }
 
-    /// Starts listening on `port` (0 picks a free one, for tests). Throws when the port is taken.
-    func start(port requested: Int) async throws {
-        guard task == nil else { return }
+    /// Starts listening on `port` (0 picks a free one, for tests), on 127.0.0.1 and, when `secureAddress` is set, on that address with TLS.
+    /// With 127.0.0.1 itself as the secure address, only the HTTPS listener runs there, since two listeners cannot share the address.
+    /// Throws when the port or the address is not available. Nothing keeps running after a throw.
+    ///
+    /// The HTTPS listener binds first, so a port of 0 is picked by it and the loopback listener takes the same number.
+    func start(port requested: Int, secureAddress address: String? = nil) async throws {
+        guard tasks.isEmpty else { return }
+        precondition(address != "0.0.0.0", "the remote API never listens on every interface")
+        var started: [Task<Void, Never>] = []
+        var bound = requested
+        var fingerprint: String?
+        var tlsKeychain: RemoteTLSKeychain?
+        do {
+            if let address {
+                // Network.framework would wait for a missing address instead of failing, so it is checked against the interfaces first.
+                guard address == "127.0.0.1" || RemoteNetwork.interfaces().contains(where: { $0.ip == address }) else {
+                    throw RemoteServerError.unavailable
+                }
+                let material = service.identity.material
+                let made = try RemoteTLSKeychain(material)
+                tlsKeychain = made
+                guard let options = TSTLSOptions.options(serverIdentity: .secIdentity(made.identity)) else { throw RemoteTLSKeychain.Failure.identity(0) }
+                fingerprint = RemoteHash.hex(material.der)
+                let secure = try await listen(host: address, port: requested, tls: options)
+                started.append(secure.task)
+                bound = secure.port
+            }
+            if address != "127.0.0.1" {
+                let local = try await listen(host: "127.0.0.1", port: bound, tls: nil)
+                started.append(local.task)
+                bound = local.port
+            }
+        } catch {
+            for task in started { task.cancel() }
+            for task in started { await task.value }
+            tlsKeychain?.close()
+            throw error
+        }
+        port = bound
+        secureAddress = address
+        servedFingerprint = fingerprint
+        keychain = tlsKeychain
+        tasks = started
+    }
+
+    /// Closes the listeners and every event socket. Tokens stay valid.
+    func stop() async {
+        guard !tasks.isEmpty else { return }
+        let running = tasks
+        tasks = []
+        port = nil
+        secureAddress = nil
+        servedFingerprint = nil
+        service.closeAllSockets()
+        for task in running { task.cancel() }
+        for task in running { await task.value }
+        keychain?.close()
+        keychain = nil
+    }
+
+    enum RemoteServerError: Error, LocalizedError {
+        case stopped
+        case unavailable
+        var errorDescription: String? {
+            switch self {
+            case .stopped: return "the remote API stopped before it was listening"
+            case .unavailable: return "the address is not available on this Mac"
+            }
+        }
+    }
+
+    /// How long a listener may take to bind. Network.framework does not fail on an address the Mac does not have: it waits for it to appear.
+    nonisolated static let bindTimeout: Duration = .seconds(5)
+
+    /// Runs one listener and returns once it is bound.
+    private func listen(host: String, port requested: Int, tls: TSTLSOptions?) async throws -> (port: Int, task: Task<Void, Never>) {
         let (started, report) = AsyncStream<Result<Int, Error>>.makeStream()
-        let app = makeApplication(port: requested) { report.yield(.success($0)) }
+        let app = try makeApplication(host: host, port: requested, tls: tls) { report.yield(.success($0)) }
         let running = Task.detached {
             do {
                 try await app.runService()
@@ -118,13 +202,17 @@ final class RemoteServer {
             }
             report.finish()
         }
+        let timeout = Task.detached {
+            try? await Task.sleep(for: Self.bindTimeout)
+            if !Task.isCancelled { report.yield(.failure(RemoteServerError.unavailable)) }
+        }
+        defer { timeout.cancel() }
         for await result in started {
             switch result {
-            case .success(let bound):
-                port = bound
-                task = running
-                return
+            case .success(let bound): return (bound, running)
             case .failure(let error):
+                // Not awaited: a Network.framework listener that waits for its address ignores cancellation until it gets one. `start`
+                // checks the address first, so this happens only when it disappears in between.
                 running.cancel()
                 throw error
             }
@@ -132,40 +220,27 @@ final class RemoteServer {
         throw RemoteServerError.stopped
     }
 
-    /// Closes the listener and every event socket. Tokens stay valid.
-    func stop() async {
-        guard let running = task else { return }
-        task = nil
-        port = nil
-        service.closeAllSockets()
-        running.cancel()
-        await running.value
-    }
-
-    enum RemoteServerError: Error, LocalizedError {
-        case stopped
-        var errorDescription: String? { "the remote API stopped before it was listening" }
-    }
-
     // MARK: Application
 
-    private func makeApplication(port: Int, onRunning: @escaping @Sendable (Int) -> Void) -> some ApplicationProtocol {
+    private func makeApplication(host: String, port: Int, tls: TSTLSOptions?, onRunning: @escaping @Sendable (Int) -> Void) throws -> some ApplicationProtocol {
         let router = Router(context: RemoteContext.self)
         router.add(middleware: RemoteGate(service: service))
         addRoutes(to: router)
         let upgrades = Router(context: RemoteContext.self)
         addEventSocket(to: upgrades)
-        var configuration = ApplicationConfiguration(address: .hostname("127.0.0.1", port: port))
+        // TLS options apply only on a Network.framework event loop group.
+        var configuration = tls.map { ApplicationConfiguration(address: .hostname(host, port: port), tlsOptions: $0) }
+            ?? ApplicationConfiguration(address: .hostname(host, port: port))
         configuration.serverName = nil
         // The server's own logger stays silent: its messages carry request paths and error text, which the access log keeps out on purpose.
         let silent = Logger(label: "ironpet.remote", factory: { _ in SwiftLogNoOpLogHandler() })
-        return Application(
-            router: router,
-            server: .http1WebSocketUpgrade(webSocketRouter: upgrades,
-                                           configuration: .init(maxFrameSize: 1 << 14, autoPing: .enabled(timePeriod: .seconds(20)))),
-            configuration: configuration,
-            onServerRunning: { channel in onRunning(channel.localAddress?.port ?? port) },
-            logger: silent)
+        let server = HTTPServerBuilder.http1WebSocketUpgrade(webSocketRouter: upgrades,
+                                                             configuration: .init(maxFrameSize: 1 << 14, autoPing: .enabled(timePeriod: .seconds(20))))
+        // Both listeners run on Network.framework. With a plain socket on 127.0.0.1, Network.framework refused to bind the network address
+        // while a connection to the old loopback listener was still closing, which a restart after a rotation or an address change hits.
+        let group: EventLoopGroupProvider = .shared(NIOTSEventLoopGroup.singleton)
+        return Application(router: router, server: server, configuration: configuration, onServerRunning: { channel in onRunning(channel.localAddress?.port ?? port) },
+                           eventLoopGroupProvider: group, logger: silent)
     }
 
     // MARK: Routes
@@ -177,8 +252,7 @@ final class RemoteServer {
             let key = body["device_public_key"] as? String
             switch service.pair(code: body["code"] as? String ?? "", deviceName: body["device_name"] as? String ?? "", publicKey: key) {
             case .accepted(let accepted):
-                return Self.json(202, ["pairing_id": accepted.pairingID, "secret": accepted.secret, "expires_in": accepted.expiresIn,
-                                       "public_key": accepted.publicKey.base64EncodedString(), "signature": accepted.signature.base64EncodedString()])
+                return Self.json(202, ["pairing_id": accepted.pairingID, "secret": accepted.secret, "expires_in": accepted.expiresIn])
             case .invalid(let message): return Self.error(400, "invalid", message)
             case .unauthorized: return Self.error(401, "unauthorized", "unauthorized")
             case .limited(let seconds): return Self.limited(seconds)
